@@ -258,59 +258,29 @@ TMDB_API_KEY="TMDB" \
 
 <a id="license"></a>
 
-# 📄 License (MIT — Attribution • Fork-Only • Non-Commercial • Written Permission Required)
+# 📄 License
 
-This project is licensed under the MIT License **with mandatory attribution**,
-**fork-only redistribution**, **non-commercial usage restrictions**, and **written permission requirement for exceptions**.
+# MIT License
 
----
+Copyright (c) 2026 G-grbz
 
-## ✔ Allowed
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-You are permitted to:
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-* Use, copy, modify, and distribute this software **for non-commercial purposes only**.
-* Create derivative works.
-* Publish your changes **only as a GitHub fork** of the original repository.
-
----
-
-## 🚫 Not Allowed
-
-You are **not permitted** to:
-
-* Use this software or any modified version **for commercial purposes**.
-* Remove or alter copyright notices.
-* Remove attribution to the original author.
-* Re-upload, re-brand, or re-publish this project **as a new repository**.
-* Redistribute modified or unmodified copies **outside of a public GitHub fork**.
-* Bypass these restrictions **without obtaining written permission from the original author**.
-
----
-
-## ✔ Redistribution Rules (Important)
-
-If you redistribute this project (modified or unmodified):
-
-1. It **must** be done as a **public GitHub fork**.
-   → Direct copy → new repo açmak → yayınlamak **yasaktır**.
-
-2. You **must credit the original author:**
-   **“Based on work by G-grbz”**
-
-3. You **must include a link to the original repository:**
-   **[https://github.com/G-grbz/Jellyfin-MonWUI-Plugin](https://github.com/G-grbz/Jellyfin-MonWUI-Plugin)**
-
-4. You **must clearly indicate modifications:**
-   **“Modified by XYZ”**
-
-5. You **must obtain *written permission* from the original author (G-grbz) for:**
-
-   * Any commercial usage
-   * Any redistribution outside of a GitHub fork
-   * Any re-branding or re-publication under a new project name
-
-These conditions **cannot be removed, overridden, or ignored**.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ---
 
