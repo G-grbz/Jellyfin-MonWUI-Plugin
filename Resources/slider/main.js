@@ -6,7 +6,13 @@ import { ensureProgressBarExists, resetProgressBar } from "./modules/progressBar
 import { createSlide } from "./modules/slideCreator.js";
 import { changeSlide, createDotNavigation, primePeakFirstPaint, updatePeakClasses } from "./modules/navigation.js";
 import { attachMouseEvents } from "./modules/events.js";
-import { fetchItemDetails, getSessionInfo, getAuthHeader, waitForAuthReadyStrict, isAuthReadyStrict, withServer } from "./modules/api.js";
+import { fetchItemDetails as fetchItemDetailsNet, getSessionInfo, getAuthHeader, waitForAuthReadyStrict, isAuthReadyStrict, withServer } from "./modules/api.js";
+import {
+  cachedFetchJson,
+  cachedFetchText,
+  createCachedItemDetailsFetcher,
+  startLibraryDeltaWatcher
+} from "./modules/sliderCache.js";
 import { forceHomeSectionsTop, forceSkinHeaderPointerEvents } from "./modules/positionOverrides.js";
 import { setupPauseScreen } from "./modules/pauseModul.js";
 import { updateHeaderUserAvatar, initAvatarSystem } from "./modules/userAvatar.js";
@@ -679,6 +685,16 @@ function safeFetch(url, opts) {
   return fetch(finalUrl, opts);
 }
 
+async function fetchJsonViaSafeFetch(url, opts){
+  const res = await safeFetch(url, opts);
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  return await res.json();
+}
+async function fetchTextViaSafeFetch(url, opts){
+  const res = await safeFetch(url, opts);
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  return await res.text();
+}
 
 function looksLikeUrl(v) {
   return typeof v === "string" && (v.startsWith("http") || v.startsWith("/") || v.includes("/Items/"));
@@ -886,14 +902,18 @@ export async function slidesInit() {
     fullSliderReset();
 
     let userId = null, accessToken = null;
+    let fetchItemDetailsCached = window.__jmsFetchItemDetailsCached || null;
 
     function isQuotaErr(e){ return e && (e.name === 'QuotaExceededError' || e.code === 22); }
+
     function safeLocalGet(key, fallback="[]"){
       try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; }
     }
+
     function safeLocalRemove(key){
       try { localStorage.removeItem(key); } catch {}
     }
+
     function safeLocalSet(key, value){
       try { localStorage.setItem(key, value); return true; }
       catch(e){
@@ -914,6 +934,7 @@ export async function slidesInit() {
         return [];
       }
     }
+
     function saveShuffleHistory(userId, ids) {
       const key = `slider-shuffle-history-${userId}`;
       const limit = Math.max(10, parseInt(config.shuffleSeedLimit || "100", 10));
@@ -926,6 +947,7 @@ export async function slidesInit() {
       }
       safeLocalRemove(key);
     }
+
     function resetShuffleHistory(userId) {
       const key = `slider-shuffle-history-${userId}`;
       safeLocalRemove(key);
@@ -934,14 +956,89 @@ export async function slidesInit() {
     try {
       if (typeof isAuthReadyStrict === "function" && !isAuthReadyStrict()) {
         await waitAuthWarmupFallback(1000);
-      }
+    }
       const s = getSessionInfo();
       userId = s.userId;
       accessToken = s.accessToken;
     } catch (e) {
-   console.error("Oturum bilgisi okunamadı:", e);
-   return;
- }
+      console.error("Oturum bilgisi okunamadı:", e);
+      return;
+    }
+
+    if (!fetchItemDetailsCached) {
+      const bulkBatchSize = Number(config?.detailsBulkBatchSize) || 60;
+
+      const fetchMany = async (ids) => {
+        let tok = accessToken;
+        try { tok = getSessionInfo?.()?.accessToken || tok; } catch {}
+
+        const headers = {
+          "X-Emby-Authorization": getAuthHeader(),
+          "X-Emby-Token": tok,
+        };
+
+        const qs = new URLSearchParams();
+        qs.set("Ids", ids.join(","));
+        qs.set("EnableUserData", "true");
+        qs.set("EnableTotalRecordCount", "false");
+        qs.set(
+          "Fields",
+          [
+            "ImageTags",
+            "BackdropImageTags",
+            "UserData",
+            "PrimaryImageAspectRatio",
+            "RunTimeTicks",
+            "Overview",
+            "Genres",
+            "People",
+            "Studios",
+            "ProductionYear",
+            "ProductionLocations",
+            "Taglines",
+            "OriginalTitle",
+            "MediaStreams",
+            "Chapters",
+            "DateCreated",
+            "ProviderIds",
+            "ExternalUrls",
+            "TrailerUrls"
+          ].join(",")
+        );
+
+        const data = await fetchJsonViaSafeFetch(`/Users/${userId}/Items?${qs.toString()}`, { headers });
+        return data?.Items || data || [];
+      };
+
+      fetchItemDetailsCached = window.__jmsFetchItemDetailsCached =
+        createCachedItemDetailsFetcher({
+          fetchOne: fetchItemDetailsNet,
+          fetchMany,
+          batchSize: bulkBatchSize,
+          ttlMs: Number(config?.itemDetailsCacheTtlMs) || (24 * 60 * 60 * 1000),
+          allowStaleOnError: true,
+          maxConcurrent: Number(config?.detailsFetchConcurrency) || 6,
+        });
+    }
+
+    try {
+      window.__stopJmsLibraryWatcher?.();
+      window.__stopJmsLibraryWatcher = startLibraryDeltaWatcher({
+        userId,
+        fetchJson: fetchJsonViaSafeFetch,
+        getAuthHeaders: () => {
+          let tok = accessToken;
+          try { tok = getSessionInfo?.()?.accessToken || tok; } catch {}
+          return {
+            "X-Emby-Authorization": getAuthHeader(),
+            "X-Emby-Token": tok,
+          };
+        },
+        fetchItemDetailsCached,
+        intervalMs: Number(config?.libraryWatchIntervalMs) || 60_000,
+        limit: Number(config?.libraryWatchLimit) || 50,
+      });
+    } catch {}
 
     const cfgLimit =
       Number.isFinite(Number(config?.limit)) ? Number(config.limit) :
@@ -961,12 +1058,23 @@ export async function slidesInit() {
       if (config.useManualList && config.manualListIds) {
         listItems = config.manualListIds.split(",").map((id) => id.trim()).filter(Boolean);
       } else if (config.useListFile) {
-        const res = await safeFetch(window.myListUrl);
-        if (res.ok) {
-          const text = await res.text();
+        let text = null;
+        try {
+          text = await cachedFetchText({
+            keyParts: ["listfile", userId, window.myListUrl],
+            url: window.myListUrl,
+            fetchText: fetchTextViaSafeFetch,
+            ttlMs: Number(config?.listFileCacheTtlMs) || 60_000,
+            allowStaleOnError: true,
+          });
+        } catch (e) {
+          console.warn("list.txt alınamadı, fallback API devrede.", e);
+        }
+
+        if (text) {
           window.cachedListContent = text;
           if (text.length >= 10) {
-            listItems = text.split("\n").map((l) => l.trim()).filter(Boolean);
+            listItems = text.split("\n").map(l => l.trim()).filter(Boolean);
           } else {
             console.warn("list.txt çok küçük, fallback API devrede.");
           }
@@ -976,7 +1084,7 @@ export async function slidesInit() {
       }
 
       if (Array.isArray(listItems) && listItems.length) {
-        const details = await Promise.all(listItems.map((id) => fetchItemDetails(id)));
+        const details = await fetchItemDetailsCached.many(listItems);
         items = details.filter((x) => x);
       } else {
         const baseQS = (config.customQueryString || '').replace(/^[?&]+/, '');
@@ -1003,8 +1111,14 @@ export async function slidesInit() {
 
         if (playingLimit > 0) {
           try {
-            const res = await safeFetch(`/Users/${userId}/Items/Resume?Limit=${playingLimit * 2}`, { headers: authHeaders });
-            const data = await res.json();
+            const data = await cachedFetchJson({
+            keyParts: ["resume", userId, playingLimit * 2],
+            url: `/Users/${userId}/Items/Resume?Limit=${playingLimit * 2}`,
+            opts: { headers: authHeaders },
+            fetchJson: fetchJsonViaSafeFetch,
+            ttlMs: Number(config?.resumeCacheTtlMs) || 30_000,
+            allowStaleOnError: true,
+          });
             let fetchedItems = data.Items || [];
 
             if (config.excludeEpisodesFromPlaying) {
@@ -1018,8 +1132,14 @@ export async function slidesInit() {
         }
 
         const maxShufflingLimit = parseInt(config.maxShufflingLimit || "2000", 10);
-        const res = await safeFetch(`/Users/${userId}/Items?${queryString}&Limit=${maxShufflingLimit}`, { headers: authHeaders });
-        const data = await res.json();
+        const data = await cachedFetchJson({
+        keyParts: ["itemsPool", userId, queryString, maxShufflingLimit],
+        url: `/Users/${userId}/Items?${queryString}&Limit=${maxShufflingLimit}&EnableTotalRecordCount=false`,
+        opts: { headers: authHeaders },
+        fetchJson: fetchJsonViaSafeFetch,
+        ttlMs: Number(config?.itemsPoolCacheTtlMs) || 120_000,
+        allowStaleOnError: true,
+      });
         let allItems = data.Items || [];
         if (playingItems.length && allItems.length) {
           const playingIds = new Set(playingItems.map((it) => it && it.Id).filter(Boolean));
@@ -1184,7 +1304,7 @@ export async function slidesInit() {
           savedLimit
         );
 
-        const detailed = await Promise.all(selectedItems.map((i) => fetchItemDetails(i.Id)));
+        const detailed = await fetchItemDetailsCached.many(selectedItems.map(i => i.Id));
         items = detailed.filter((x) => x);
       }
     } catch (err) {
