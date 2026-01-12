@@ -1,4 +1,5 @@
 export const languageLabels = {
+  playTrailer: "Rejouer",
   badgeDelayResumeMs: "Délai avant l’affichage du badge d’âge après la reprise",
   ageBadgeDurationResumeMs: "Durée d’affichage du badge d’âge après la reprise",
   becauseYouWatchedSettings: "Recommandations basées sur votre historique",
