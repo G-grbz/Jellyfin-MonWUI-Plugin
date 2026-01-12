@@ -8,12 +8,13 @@ import { createTrailerIframe, ensureJmsDetailsOverlay } from "./utils.js";
 import { openDetailsModal } from "./detailsModal.js";
 
 import {
-  openDirRowsDB,
+  openPrcDB,
   makeScope,
-  upsertItem,
+  putItems,
   getMeta,
-  setMeta
-} from "./dirRowsDb.js";
+  setMeta,
+  purgePrcDb
+} from "./prcDb.js";
 
 const config = getConfig();
 const labels = getLanguageLabels?.() || {};
@@ -44,7 +45,7 @@ const __cooldownUntil= new WeakMap();
 const __openTokenMap = new WeakMap();
 const __boundPreview = new WeakMap();
 const GENRE_LAZY = true;
-const GENRE_BATCH_SIZE = Number(getConfig()?.genreRowsBatchSize) || (IS_MOBILE ? 1 : 2);
+const GENRE_BATCH_SIZE = Number(getConfig()?.genreRowsBatchSize) || (IS_MOBILE ? 1 : 1);
 const GENRE_ROOT_MARGIN = '500px 0px';
 const GENRE_FIRST_SCROLL_PX = Number(getConfig()?.genreRowsFirstBatchScrollPx) || 200;
 const PRC_LOCK_DOWN_SCROLL = (getConfig()?.prcLockDownScrollDuringLoad === true);
@@ -101,6 +102,34 @@ function __metaKeyBywLast(scope){ return `prc:byw:lastShown:${scope}`; }
 function __metaKeyBywScoped(scope, seedKey){ return `prc:byw:${seedKey}:${scope}`; }
 function __metaKeyBywLastScoped(scope, seedKey){ return `prc:byw:lastShown:${seedKey}:${scope}`; }
 
+const PRC_PURGE_KEY = (scope) => `prc:purge:last:${scope}`;
+
+async function maybePurgePrcDb(st) {
+  try {
+    const cfg = __prcCfg();
+    if (!st?.db || !st?.scope) return;
+
+    const last = await getMeta(st.db, PRC_PURGE_KEY(st.scope));
+    const lastTs = Number(last?.ts || 0);
+    if (lastTs && (Date.now() - lastTs) < 24 * 60 * 60 * 1000) return;
+
+    await purgePrcDb(st.db, st.scope, {
+      items: {
+        ttlMs: Math.max(cfg.genreTtlMs, cfg.personalTtlMs, cfg.bywTtlMs) * 6,
+        maxItems: Math.max(600, cfg.maxCacheIds * 20),
+        maxScan: 9000,
+      },
+      meta: {
+        ttlMs: 45 * 24 * 60 * 60 * 1000,
+        prefix: 'prc:',
+        maxScan: 4000,
+      }
+    });
+
+    await setMeta(st.db, PRC_PURGE_KEY(st.scope), { ts: Date.now() });
+  } catch {}
+}
+
 async function ensurePrcDb(userId, serverId) {
   const cfg = __prcCfg();
   if (!cfg.enabled) return null;
@@ -110,11 +139,12 @@ async function ensurePrcDb(userId, serverId) {
   if (PRC_DB_STATE.db && PRC_DB_STATE.scope === scope) return PRC_DB_STATE;
 
   try {
-    PRC_DB_STATE.db = await openDirRowsDB();
+    PRC_DB_STATE.db = await openPrcDB();
     PRC_DB_STATE.scope = scope;
     PRC_DB_STATE.userId = userId;
     PRC_DB_STATE.serverId = serverId;
     PRC_DB_STATE.failed = false;
+    try { await maybePurgePrcDb(PRC_DB_STATE); } catch {}
     return PRC_DB_STATE;
   } catch (e) {
     console.warn("PRC DB init failed:", e);
@@ -195,9 +225,7 @@ async function dbGetItemsByIds(db, scope, ids) {
 async function dbWriteThroughItems(db, scope, items) {
   if (!db || !scope || !items?.length) return;
   try {
-    for (const it of items) {
-      await upsertItem(db, scope, it);
-    }
+    await putItems(db, scope, items);
   } catch (e) {
     console.warn("PRC DB write-through failed:", e);
   }
@@ -384,11 +412,13 @@ function loadNextGenreViaArrow() {
   const start = GENRE_STATE.nextIndex;
   const end = Math.min(start + GENRE_BATCH_SIZE, GENRE_STATE.genres.length);
 
-  const jobs = [];
-  for (let i = start; i < end; i++) jobs.push(ensureGenreLoaded(i));
   GENRE_STATE.nextIndex = end;
 
-  Promise.all(jobs).finally(() => {
+  (async () => {
+    for (let i = start; i < end; i++) {
+      await ensureGenreLoaded(i);
+    }
+  })().finally(() => {
     GENRE_STATE.loading = false;
     setGenreArrowLoading(false);
     unlockDownScroll();
@@ -447,6 +477,45 @@ function setPrimaryCtaText(cardEl, text) {
   try { cardEl.dataset.prcResume = (text === 'Sürdür') ? '1' : '0'; } catch {}
 }
 
+function __idle(fn, timeout = 800) {
+  const ric = window.requestIdleCallback;
+  if (typeof ric === "function") return ric(fn, { timeout });
+  return setTimeout(fn, 0);
+}
+
+async function prunePlayedCardsInRow(rowEl, userId) {
+  try {
+    const cards = Array.from(rowEl?.querySelectorAll?.('.personal-recs-card') || []);
+    if (!cards.length) return;
+
+    const ids = cards.map(el => el?.dataset?.itemId).filter(Boolean);
+    if (!ids.length) return;
+
+    const alive = await filterOutPlayedIds(userId, ids);
+    const aliveSet = new Set((alive || []).filter(Boolean));
+
+    if (aliveSet.size === ids.length) return;
+
+    for (const el of cards) {
+      const id = el?.dataset?.itemId;
+      if (id && !aliveSet.has(id)) {
+        try { el.dispatchEvent(new Event('jms:cleanup')); } catch {}
+        try { el.remove(); } catch { try { el.parentElement?.removeChild(el); } catch {} }
+      }
+    }
+
+    try { triggerScrollerUpdate(rowEl); } catch {}
+  } catch {}
+}
+
+function schedulePrunePlayedAfterPaint(rowEl, userId, delayMs = 380) {
+  try {
+    setTimeout(() => {
+      __idle(() => { prunePlayedCardsInRow(rowEl, userId); }, 1200);
+    }, Math.max(0, delayMs|0));
+  } catch {}
+}
+
 async function applyResumeLabelsToCards(cardEls, userId) {
   const ids = cardEls
     .map(el => el?.dataset?.itemId)
@@ -473,6 +542,12 @@ async function applyResumeLabelsToCards(cardEls, userId) {
     const isResume = pos > 0;
     setPrimaryCtaText(el, isResume ? (config.languageLabels?.devamet || 'Sürdür') : (config.languageLabels?.izle || 'Oynat'));
   }
+}
+
+function scheduleResumeLabels(cardEls, userId) {
+  try {
+    setTimeout(() => __idle(() => applyResumeLabelsToCards(cardEls, userId), 900), 420);
+  } catch {}
 }
 
 let __personalRecsBusy = false;
@@ -735,13 +810,11 @@ function enforceOrder(homeSectionsHint) {
     insertAfter(parent, recs, studio);
   }
 
-  // "Because you watched" satırları: id'ler because-you-watched--0/1/... şeklinde
   const bywSections = Array.from(parent.querySelectorAll('[id^="because-you-watched--"]'))
     .filter(el => el && el.parentElement === parent)
     .sort((a,b) => (Number(a.id.split('--')[1]) || 0) - (Number(b.id.split('--')[1]) || 0));
 
   if (bywSections.length) {
-    // Genre konumunu BOZMADAN: BYW bloklarını genre'ın hemen üstüne koy
     if (genre && genre.parentElement === parent) {
       let ref = genre;
       for (let i = bywSections.length - 1; i >= 0; i--) {
@@ -750,7 +823,6 @@ function enforceOrder(homeSectionsHint) {
         ref = sec;
       }
     } else {
-      // Genre daha render olmadıysa: BYW'i güvenli bir anchor altına al (append'e düşmesin)
       const anchor =
         (cfg.enablePersonalRecommendations && recs && recs.parentElement === parent) ? recs :
         (studio && studio.parentElement === parent) ? studio :
@@ -1018,7 +1090,6 @@ export async function renderPersonalRecommendations() {
 
     const tasks = [];
 
-    // 1) Personal recs skeleton'ı ASAP bas
     if (config.enablePersonalRecommendations) {
       const section = ensurePersonalRecsContainer(indexPage);
       const row = section?.querySelector?.(".personal-recs-row") || null;
@@ -1034,6 +1105,7 @@ export async function renderPersonalRecommendations() {
             const { userId, serverId } = getSessionInfo();
             const recommendations = await fetchPersonalRecommendations(userId, EFFECTIVE_CARD_COUNT, MIN_RATING);
             renderRecommendationCards(row, recommendations, serverId);
+            schedulePrunePlayedAfterPaint(row, userId, 360);
           } catch (e) {
             console.error("Kişisel öneriler alınırken hata:", e);
           }
@@ -1041,7 +1113,6 @@ export async function renderPersonalRecommendations() {
       }
     }
 
-    // 2) BYW + Genre'ı personal ile paralel çalıştır
     if (ENABLE_BYW) {
       tasks.push((async () => {
         try { await renderBecauseYouWatchedAuto(indexPage); }
@@ -1081,7 +1152,6 @@ function ensureBecauseContainer(indexPage, key = "0") {
   const id = `because-you-watched--${key}`;
   let existing = document.getElementById(id);
   if (existing) {
-    // Genre varsa: BYW daima genre'ın ÜSTÜNDE kalsın (genre'ı taşımadan)
     const parent = (document.getElementById('studio-hubs')?.parentElement) || homeSections || getHomeSectionsContainer(currentIndexPage());
     const genreWrap = document.getElementById('genre-hubs');
     if (parent && genreWrap && genreWrap.parentElement === parent) {
@@ -1351,7 +1421,6 @@ async function renderBecauseYouWatchedAuto(indexPage) {
   }
   if (!seeds.length) return;
 
-  // önce tüm satırları skeleton ile bas, sonra API'leri paralel çek
   const ctxs = [];
   for (let i = 0; i < seeds.length; i++) {
     const seed = seeds[i];
@@ -1637,7 +1706,7 @@ async function fetchUnwatchedByGenres(userId, genres, targetCount = 20, minRatin
   }
 
   const genresParam = encodeURIComponent(genres.join("|"));
-  const fields = COMMON_FIELDS;
+  const fields = LIGHT_FIELDS;
   const requested = Math.max(targetCount * 2, 20);
   const sort = "Random,CommunityRating,DateCreated";
 
@@ -1659,7 +1728,7 @@ async function fetchUnwatchedByGenres(userId, genres, targetCount = 20, minRatin
 }
 
 async function getFallbackRecommendations(userId, limit = 20) {
-  const fields = COMMON_FIELDS;
+  const fields = LIGHT_FIELDS;
   const url =
     `/Users/${userId}/Items?` +
     `IncludeItemTypes=Movie,Series&Recursive=true&Filters=IsUnplayed&` +
@@ -1753,7 +1822,7 @@ function renderRecommendationCards(row, items, serverId) {
 
   try {
     const { userId } = getSessionInfo();
-    applyResumeLabelsToCards(aboveCards, userId);
+    scheduleResumeLabels(aboveCards, userId);
   } catch {}
 
   let idx = aboveFoldCount;
@@ -1786,7 +1855,7 @@ function renderRecommendationCards(row, items, serverId) {
     if (added) {
       try {
         const { userId } = getSessionInfo();
-        applyResumeLabelsToCards(justAddedCards, userId);
+        scheduleResumeLabels(justAddedCards, userId);
       } catch {}
     }
     if (rendered < EFFECTIVE_CARD_COUNT) {
@@ -1795,6 +1864,19 @@ function renderRecommendationCards(row, items, serverId) {
   }
   rIC(pump);
 }
+
+const LIGHT_FIELDS = [
+  "Type",
+  "PrimaryImageAspectRatio",
+  "ImageTags",
+  "BackdropImageTags",
+  "CommunityRating",
+  "Genres",
+  "OfficialRating",
+  "ProductionYear",
+  "CumulativeRunTimeTicks",
+  "RunTimeTicks"
+].join(",");
 
 const COMMON_FIELDS = [
   "Type",
@@ -2111,7 +2193,6 @@ export function setupScroller(row) {
   let _rafToken = null;
 
   const updateButtonsNow = () => {
-    // Sonsuz wrap: row kaydırılabiliyorsa butonlar hep aktif kalsın.
     const scrollable = canScroll();
     if (btnL) { btnL.setAttribute("aria-disabled", scrollable ? "false" : "true"); btnL.disabled = !scrollable; }
     if (btnR) { btnR.setAttribute("aria-disabled", scrollable ? "false" : "true"); btnR.disabled = !scrollable; }
@@ -2137,7 +2218,7 @@ export function setupScroller(row) {
     const dist  = targetLeft - start;
     if (Math.abs(dist) < 1) { row.scrollLeft = targetLeft; scheduleUpdate(); try { row.classList.remove('is-animating'); } catch {} return; }
 
-    const seq = ++_animSeq; // önceki animasyonları iptal et
+    const seq = ++_animSeq;
     try { row.classList.add('is-animating'); } catch {}
     let startTs = null;
     const easeInOutCubic = t =>
@@ -2151,7 +2232,6 @@ export function setupScroller(row) {
       if (p < 1) requestAnimationFrame(tick);
       else {
         scheduleUpdate();
-        // animasyon bitti
         if (seq === _animSeq) { try { row.classList.remove('is-animating'); } catch {} }
       }
     }
@@ -2164,16 +2244,12 @@ export function setupScroller(row) {
     const delta = (dir < 0 ? -1 : 1) * stepPx() * fast;
     const max = Math.max(0, row.scrollWidth - row.clientWidth);
     const left = row.scrollLeft;
-    // Wrap davranışı:
-    // sağda sona geldiyse -> başa
-    // solda baştaysa -> sona
     let target;
     if (dir > 0 && left >= max - 1) target = 0;
     else if (dir < 0 && left <= 1) target = max;
     else target = Math.max(0, Math.min(max, left + delta));
 
     const dist = Math.abs(target - left);
-    // Mesafeye göre süre: akıcı ama çok uzamasın.
     const duration = Math.max(180, Math.min(650, Math.round(dist / 3.2)));
     animateScrollTo(target, duration);
   }
@@ -2186,7 +2262,6 @@ export function setupScroller(row) {
   const onWheel = (e) => {
     const horizontalIntent = Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.shiftKey;
     if (!horizontalIntent) return;
-    // kullanıcı wheel ile müdahale ettiyse ongoing animasyonu iptal et
     _animSeq++;
     try { row.classList.remove('is-animating'); } catch {}
     const delta = e.deltaX !== 0 ? e.deltaX : e.deltaY;
@@ -2351,148 +2426,169 @@ function ensureGenreSectionElement(idx) {
     wrap.appendChild(section);
   }
 
-  rec = { genre, section, row, loaded: false, serverId, heroHost };
+  rec = {
+  genre, section, row,
+  loaded: false,
+  loading: false,
+  loadingPromise: null,
+  seq: 0,
+  serverId,
+  heroHost
+};
   GENRE_STATE.sections[idx] = rec;
   return rec;
 }
 
 async function ensureGenreLoaded(idx) {
   let rec = GENRE_STATE.sections[idx];
-  if (!rec) {
-    rec = ensureGenreSectionElement(idx);
-  }
-  if (!rec || rec.loaded) return;
-  rec.loaded = true;
+  if (!rec) rec = ensureGenreSectionElement(idx);
+  if (!rec) return;
 
-  const { genre, row, serverId, heroHost } = rec;
-  const { userId } = getSessionInfo();
-  try {
-    const items = await fetchItemsBySingleGenre(userId, genre, GENRE_ROW_CARD_COUNT * 3, MIN_RATING);
-    row.innerHTML = '';
-    setupScroller(row);
+  if (rec.loaded) return;
+  if (rec.loadingPromise) return rec.loadingPromise;
 
-    if (!items || !items.length) {
-      row.innerHTML = `<div class="no-recommendations">${labels.noRecommendations || "Uygun içerik yok"}</div>`;
-      if (heroHost) heroHost.innerHTML = "";
+  rec.loading = true;
+  const mySeq = ++rec.seq;
+
+  rec.loadingPromise = (async () => {
+    const { genre, row, serverId, heroHost } = rec;
+    const { userId } = getSessionInfo();
+    const rIC = window.requestIdleCallback
+    ? (fn) => window.requestIdleCallback(fn, { timeout: 650 })
+    : (fn) => setTimeout(fn, 0);
+
+  function pumpRemainder(list, startIndex) {
+    let j = startIndex;
+
+    (function pump() {
+      if (rec.seq !== mySeq) return;
+      if (!row || !row.isConnected) return;
+
+      const chunk = IS_MOBILE ? 2 : 10;
+      const f = document.createDocumentFragment();
+
+      let added = 0;
+      for (let k = 0; k < chunk && j < list.length; k++, j++) {
+        f.appendChild(createRecommendationCard(list[j], serverId, false));
+        added++;
+      }
+
+      if (added) row.appendChild(f);
       triggerScrollerUpdate(row);
+
+      if (j < list.length) rIC(pump);
+      else {
+        if (idx === 0 && !window.__jmsGenreFirstReady) {
+          window.__jmsGenreFirstReady = true;
+          try { document.dispatchEvent(new Event("jms:genre-first-ready")); } catch {}
+        }
+      }
+    })();
+  }
+
+    try {
+      const items = await fetchItemsBySingleGenre(userId, genre, GENRE_ROW_CARD_COUNT * 3, MIN_RATING);
+      if (rec.seq !== mySeq) return;
+
+      row.innerHTML = '';
+      setupScroller(row);
+
+      if (!items || !items.length) {
+        row.innerHTML = `<div class="no-recommendations">${labels.noRecommendations || "Uygun içerik yok"}</div>`;
+        if (heroHost) heroHost.innerHTML = "";
+        triggerScrollerUpdate(row);
+        return;
+      }
+
+      const pool = dedupeStrong(items).slice();
+      shuffle(pool);
+
+      let best = null;
+      let bestIndex = -1;
+      for (let i = 0; i < pool.length; i++) {
+        const it = pool[i];
+        const kLoose  = makePRCLooseKey(it);
+        const kStrict = makePRCKey(it);
+        if ((kLoose && __globalGenreHeroLoose.has(kLoose)) || (kStrict && __globalGenreHeroStrict.has(kStrict))) continue;
+        best = it; bestIndex = i;
+        if (kLoose)  __globalGenreHeroLoose.add(kLoose);
+        if (kStrict) __globalGenreHeroStrict.add(kStrict);
+        break;
+      }
+      if (!best && pool.length) {
+        best = pool[0]; bestIndex = 0;
+        const kLoose  = makePRCLooseKey(best);
+        const kStrict = makePRCKey(best);
+        if (kLoose)  __globalGenreHeroLoose.add(kLoose);
+        if (kStrict) __globalGenreHeroStrict.add(kStrict);
+      }
+
+      const remaining = (bestIndex >= 0) ? pool.filter((_, i) => i !== bestIndex) : pool.slice();
+
+      if (heroHost) {
+        heroHost.innerHTML = "";
+        if (best) {
+          const hero = createGenreHeroCard(best, serverId, genre, { aboveFold: idx === 0 });
+          heroHost.appendChild(hero);
+          try {
+            const backdropImg = hero.querySelector('.dir-row-hero-bg');
+            const RemoteTrailers = best.RemoteTrailers || best.RemoteTrailerItems || best.RemoteTrailerUrls || [];
+            createTrailerIframe({
+              config,
+              RemoteTrailers,
+              slide: hero,
+              backdropImg,
+              itemId: best.Id,
+              serverId,
+              detailsUrl: getDetailsUrl(best.Id, serverId),
+              detailsText: (config.languageLabels?.details || labels.details || "Ayrıntılar"),
+            });
+          } catch {}
+        }
+      }
+
+      if (!remaining.length) {
+        row.innerHTML = `<div class="no-recommendations">${labels.noRecommendations || "Uygun içerik yok"}</div>`;
+        triggerScrollerUpdate(row);
+        return;
+      }
+
+      const unique = remaining.slice(0, GENRE_ROW_CARD_COUNT);
+      const head = Math.min(unique.length, IS_MOBILE ? 4 : 6);
+
+      const f1 = document.createDocumentFragment();
+      for (let i = 0; i < head; i++) {
+        f1.appendChild(createRecommendationCard(unique[i], serverId, i < 2));
+      }
+      row.appendChild(f1);
+      triggerScrollerUpdate(row);
+
+      if (rec.seq === mySeq) rec.loaded = true;
       if (idx === 0 && !window.__jmsGenreFirstReady) {
         window.__jmsGenreFirstReady = true;
         try { document.dispatchEvent(new Event("jms:genre-first-ready")); } catch {}
       }
-      return;
-    }
 
-    const pool = dedupeStrong(items).slice();
-    shuffle(pool);
+      pumpRemainder(unique, head);
 
-    let best = null;
-    let bestIndex = -1;
-
-    for (let i = 0; i < pool.length; i++) {
-      const it = pool[i];
-      const kLoose  = makePRCLooseKey(it);
-      const kStrict = makePRCKey(it);
-
-      if ((kLoose && __globalGenreHeroLoose.has(kLoose)) || (kStrict && __globalGenreHeroStrict.has(kStrict))) {
-        continue;
-      }
-
-      best = it;
-      bestIndex = i;
-
-      if (kLoose)  __globalGenreHeroLoose.add(kLoose);
-      if (kStrict) __globalGenreHeroStrict.add(kStrict);
-      break;
-    }
-
-    if (!best && pool.length) {
-      best = pool[0];
-      bestIndex = 0;
-
-      const kLoose  = makePRCLooseKey(best);
-      const kStrict = makePRCKey(best);
-      if (kLoose)  __globalGenreHeroLoose.add(kLoose);
-      if (kStrict) __globalGenreHeroStrict.add(kStrict);
-    }
-
-    const remaining = (bestIndex >= 0)
-      ? pool.filter((_, i) => i !== bestIndex)
-      : pool.slice();
-
-    if (heroHost) {
-      heroHost.innerHTML = "";
-      if (best) {
-        const hero = createGenreHeroCard(best, serverId, genre, { aboveFold: idx === 0 });
-        heroHost.appendChild(hero);
-
-        try {
-          const backdropImg = hero.querySelector('.dir-row-hero-bg');
-          const RemoteTrailers =
-            best.RemoteTrailers ||
-            best.RemoteTrailerItems ||
-            best.RemoteTrailerUrls ||
-            [];
-
-          createTrailerIframe({
-            config,
-            RemoteTrailers,
-            slide: hero,
-            backdropImg,
-            itemId: best.Id,
-            serverId,
-            detailsUrl: getDetailsUrl(best.Id, serverId),
-            detailsText: (config.languageLabels?.details || labels.details || "Ayrıntılar"),
-          });
-        } catch (err) {
-          console.error("Hero için createTrailerIframe hata:", err);
-        }
+    } catch (err) {
+      if (rec.seq !== mySeq) return;
+      console.warn('Genre hub load failed:', rec?.genre, err);
+      try {
+        row.innerHTML = `<div class="no-recommendations">${labels.noRecommendations || "Uygun içerik yok"}</div>`;
+        if (heroHost) heroHost.innerHTML = "";
+        setupScroller(row);
+        triggerScrollerUpdate(row);
+      } catch {}
+    } finally {
+      if (rec.seq === mySeq) {
+        rec.loading = false;
+        rec.loadingPromise = null;
       }
     }
+  })();
 
-    if (!remaining.length) {
-      row.innerHTML = `<div class="no-recommendations">${labels.noRecommendations || "Uygun içerik yok"}</div>`;
-      triggerScrollerUpdate(row);
-      return;
-    }
-
-    const unique = remaining.slice(0, GENRE_ROW_CARD_COUNT);
-    const head = Math.min(unique.length, IS_MOBILE ? 4 : 6);
-    const f1 = document.createDocumentFragment();
-    for (let i = 0; i < head; i++) {
-      f1.appendChild(createRecommendationCard(unique[i], serverId, i < 2));
-    }
-    row.appendChild(f1);
-    triggerScrollerUpdate(row);
-
-    if (idx === 0 && !window.__jmsGenreFirstReady) {
-      window.__jmsGenreFirstReady = true;
-      try { document.dispatchEvent(new Event("jms:genre-first-ready")); } catch {}
-    }
-
-    let j = head;
-    const rIC = window.requestIdleCallback || ((fn)=>setTimeout(fn,0));
-    (function pump(){
-      if (j >= unique.length) { triggerScrollerUpdate(row); return; }
-      const chunk = IS_MOBILE ? 2 : 10;
-      const f = document.createDocumentFragment();
-      for (let k=0;k<chunk && j<unique.length;k++,j++) {
-        f.appendChild(createRecommendationCard(unique[j], serverId, false));
-      }
-      row.appendChild(f);
-      triggerScrollerUpdate(row);
-      rIC(pump);
-    })();
-  } catch (err) {
-    console.warn('Genre hub load failed:', genre, err);
-    row.innerHTML = `<div class="no-recommendations">${labels.noRecommendations || "Uygun içerik yok"}</div>`;
-    if (heroHost) heroHost.innerHTML = "";
-    setupScroller(row);
-    triggerScrollerUpdate(row);
-    if (idx === 0 && !window.__jmsGenreFirstReady) {
-      window.__jmsGenreFirstReady = true;
-      try { document.dispatchEvent(new Event("jms:genre-first-ready")); } catch {}
-    }
-  }
+  return rec.loadingPromise;
 }
 
 function triggerScrollerUpdate(row) {

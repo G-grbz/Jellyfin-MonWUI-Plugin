@@ -26,6 +26,11 @@ function attachGlobalMenuCloser() {
 attachGlobalMenuCloser();
 
 export function createButtons(slide, config, UserData, itemId, RemoteTrailers, updatePlayedStatus, updateFavoriteStatus, openTrailerModal, item) {
+    const trailers =
+      (Array.isArray(RemoteTrailers) && RemoteTrailers.length) ? RemoteTrailers :
+      (Array.isArray(item?.RemoteTrailers) && item.RemoteTrailers.length) ? item.RemoteTrailers :
+      (Array.isArray(item?.TrailerUrls) && item.TrailerUrls.length) ? item.TrailerUrls :
+      [];
     const mainContainer = document.createElement('div');
     mainContainer.className = 'main-button-container';
     applyContainerStyles(mainContainer, 'button');
@@ -163,8 +168,8 @@ export function createButtons(slide, config, UserData, itemId, RemoteTrailers, u
     buttonContainer.appendChild(watchBtnContainer);
 }
 
-  if (config.showTrailerButton && RemoteTrailers?.length > 0) {
-  const trailer = RemoteTrailers[0];
+  if (config.showTrailerButton && trailers.length > 0) {
+  const trailer = trailers[0];
 
   const trailerBtnContainer = createButtonWithBackground(
     "trailer",
@@ -181,8 +186,8 @@ export function createButtons(slide, config, UserData, itemId, RemoteTrailers, u
         console.warn("Favori durumu alınamadı, varsayılan false ile açılıyor", err);
       }
       openTrailerModal(
-        trailer.Url,
-        trailer.Name,
+        (trailer?.Url || trailer?.url),
+        (trailer?.Name || trailer?.name || ""),
         item.Name || item.OriginalTitle,
         item.Type,
         isFav,
@@ -302,12 +307,20 @@ async function startNowPlayback(itemId, sessionId) {
   }
 }
 
-export function createProviderContainer({ config, ProviderIds, RemoteTrailers, itemId, slide }) {
+export function createProviderContainer({ config, ProviderIds, RemoteTrailers, itemId, slide, item } = {}) {
+  const trailers =
+    (Array.isArray(RemoteTrailers) && RemoteTrailers.length) ? RemoteTrailers :
+    (Array.isArray(item?.RemoteTrailers) && item.RemoteTrailers.length) ? item.RemoteTrailers :
+    (Array.isArray(item?.TrailerUrls) && item.TrailerUrls.length) ? item.TrailerUrls :
+    [];
+
+  const pids = ProviderIds || item?.ProviderIds;
   const container = document.createElement("div");
   container.className = "provider-container";
   applyContainerStyles(container, 'provider');
 
-  if (!ProviderIds && !config.showSettingsLink && !(config.showTrailerIcon && RemoteTrailers?.length) && !config.showCast) {
+  const canEnrichLater = Boolean(itemId) && (config.showTrailerIcon || config.showProviderInfo);
+  if (!pids && !config.showSettingsLink && !(config.showTrailerIcon && trailers.length) && !config.showCast && !canEnrichLater) {
     return container;
   }
 
@@ -315,6 +328,56 @@ export function createProviderContainer({ config, ProviderIds, RemoteTrailers, i
   const providerDiv = document.createElement("div");
   providerDiv.className = "providericons-container";
   applyContainerStyles(providerDiv, 'providericons');
+
+  const ensureProviderDivMounted = () => {
+    if (!container.contains(providerDiv)) container.appendChild(providerDiv);
+  };
+
+  const addTrailerIcon = (url) => {
+    if (!url) return;
+    if (providerDiv.querySelector(".provider-link.youtube")) return;
+    const trailerLink = document.createElement("span");
+    trailerLink.innerHTML = `<i class="fa-brands fa-youtube"></i>`;
+    trailerLink.className = "provider-link youtube";
+    trailerLink.title = `${config.languageLabels.youtubetrailer}`;
+    trailerLink.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      window.open(url, "_blank");
+    });
+    providerDiv.appendChild(trailerLink);
+    ensureProviderDivMounted();
+  };
+
+  const addProviderIcons = (providerIds) => {
+    if (!providerIds) return;
+    allowedProviders.forEach(provider => {
+      if (!config.showProviderInfo || !providerIds[provider]) return;
+      const cls = `.provider-link.${provider.toLowerCase()}`;
+      if (providerDiv.querySelector(cls)) return;
+
+      const link = document.createElement("span");
+      if (provider === "Imdb") {
+        link.innerHTML = `<img src="./slider/src/images/imdb.svg" alt="IMDb">`;
+        link.className = "provider-link imdb";
+      } else if (provider === "Tmdb") {
+        link.innerHTML = `<img src="./slider/src/images/tmdb.svg" alt="TMDb">`;
+        link.className = "provider-link tmdb";
+      } else {
+        link.innerHTML = `<img src="./slider/src/images/tvdb.svg" alt="TVDb">`;
+        link.className = "provider-link tvdb";
+      }
+      link.title = `${provider} Profiline Git`;
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const url = getProviderUrl(provider, providerIds[provider], providerIds["TvdbSlug"]);
+        window.open(url, "_blank");
+      });
+      providerDiv.appendChild(link);
+      ensureProviderDivMounted();
+    });
+  };
 
   if (config.showSettingsLink) {
     const settingsLink = document.createElement("span");
@@ -327,6 +390,7 @@ export function createProviderContainer({ config, ProviderIds, RemoteTrailers, i
       settings.open('slider');
     });
     providerDiv.appendChild(settingsLink);
+    ensureProviderDivMounted();
   }
 
  if (config.showCast) {
@@ -372,49 +436,33 @@ export function createProviderContainer({ config, ProviderIds, RemoteTrailers, i
     deviceSelectorContainer.appendChild(deviceDropdown);
     castContainer.appendChild(deviceSelectorContainer);
     providerDiv.appendChild(castContainer);
+    ensureProviderDivMounted();
   }
 
-  if (config.showTrailerIcon && RemoteTrailers?.length > 0) {
-    const trailerLink = document.createElement("span");
-    trailerLink.innerHTML = `<i class="fa-brands fa-youtube"></i>`;
-    trailerLink.className = "provider-link youtube";
-    trailerLink.title = `${config.languageLabels.youtubetrailer}`;
-    trailerLink.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      window.open(RemoteTrailers[0].Url, "_blank");
-    });
-    providerDiv.appendChild(trailerLink);
+  if (config.showTrailerIcon && trailers.length > 0) {
+    addTrailerIcon(trailers[0]?.Url || trailers[0]?.url);
   }
 
-  if (ProviderIds) {
-    allowedProviders.forEach(provider => {
-      if (config.showProviderInfo && ProviderIds[provider]) {
-        const link = document.createElement("span");
-        if (provider === "Imdb") {
-          link.innerHTML = `<img src="./slider/src/images/imdb.svg" alt="IMDb">`;
-          link.className = "provider-link imdb";
-        } else if (provider === "Tmdb") {
-          link.innerHTML = `<img src="./slider/src/images/tmdb.svg" alt="TMDb">`;
-          link.className = "provider-link tmdb";
-        } else {
-          link.innerHTML = `<img src="./slider/src/images/tvdb.svg" alt="TVDb">`;
-          link.className = "provider-link tvdb";
+  if (pids) addProviderIcons(pids);
+
+  if (itemId && (config.showTrailerIcon || config.showProviderInfo) && (!trailers.length || !pids)) {
+    (async () => {
+      try {
+        const details = await fetchItemDetails(itemId);
+        const dTrailers = (details?.RemoteTrailers?.length ? details.RemoteTrailers :
+                          details?.TrailerUrls?.length ? details.TrailerUrls : []);
+        const dPids = details?.ProviderIds;
+
+        if (config.showTrailerIcon && !trailers.length && dTrailers.length) {
+          addTrailerIcon(dTrailers[0]?.Url || dTrailers[0]?.url);
         }
-        link.title = `${provider} Profiline Git`;
-        link.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          const url = getProviderUrl(provider, ProviderIds[provider], ProviderIds["TvdbSlug"]);
-          window.open(url, "_blank");
-        });
-        providerDiv.appendChild(link);
+        if (config.showProviderInfo && !pids && dPids) {
+          addProviderIcons(dPids);
+        }
+      } catch (e) {
+        console.warn("Provider/Trailer enrich başarısız:", e);
       }
-    });
-  }
-
-  if (providerDiv.childNodes.length > 0) {
-    container.appendChild(providerDiv);
+    })();
   }
 
   return container;

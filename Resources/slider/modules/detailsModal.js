@@ -214,6 +214,7 @@ async function fetchTmdbReviews(kind, tmdbId, { signal, language = null, page = 
     results: Array.isArray(data?.results) ? data.results : [],
     page: Number(data?.page || page || 1),
     total_pages: Number(data?.total_pages || 1),
+    total_results: Number(data?.total_results || 0),
   };
 }
 
@@ -222,6 +223,83 @@ function escapeHtml(s) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+function markdownToHtmlLite(inputMd) {
+  const src = String(inputMd ?? "");
+  if (!src) return "";
+
+  let s = escapeHtml(src).replace(/\r\n/g, "\n");
+
+  const codeBlocks = [];
+  s = s.replace(/```([\s\S]*?)```/g, (_, code) => {
+    codeBlocks.push(code);
+    return `@@JMS_CODEBLOCK_${codeBlocks.length - 1}@@`;
+  });
+
+  const inlineCodes = [];
+  s = s.replace(/`([^`]+)`/g, (_, code) => {
+    inlineCodes.push(code);
+    return `@@JMS_CODE_${inlineCodes.length - 1}@@`;
+  });
+
+  s = s.replace(/\[([^\]]+?)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>');
+  s = s.replace(/\*\*([\s\S]+?)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  s = s.replace(/(^|[^_])_([^_\n]+)_(?!_)/g, "$1<em>$2</em>");
+  s = s.replace(/@@JMS_CODE_(\d+)@@/g, (m, i) => {
+    const idx = Number(i);
+    return `<code>${inlineCodes[idx] ?? ""}</code>`;
+  });
+
+  s = s.replace(/@@JMS_CODEBLOCK_(\d+)@@/g, (m, i) => {
+    const idx = Number(i);
+    return `<pre><code>${codeBlocks[idx] ?? ""}</code></pre>`;
+  });
+
+  const lines = s.split("\n");
+  const out = [];
+  let buf = [];
+  let mode = null;
+
+  const flush = () => {
+    if (!buf.length) return;
+    const raw = buf.join("\n").trimEnd();
+    const html = raw.replace(/\n/g, "<br>");
+    if (mode === "q") out.push(`<blockquote><p>${html}</p></blockquote>`);
+    else out.push(`<p>${html}</p>`);
+    buf = [];
+    mode = null;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+
+    if (!ln.trim()) {
+      flush();
+      continue;
+    }
+
+    const isQuote = ln.startsWith("&gt;") || ln.startsWith("&gt; ");
+    if (isQuote) {
+      const content = ln.replace(/^&gt;\s?/, "");
+      if (mode && mode !== "q") flush();
+      mode = "q";
+      buf.push(content);
+    } else {
+      if (mode && mode !== "p") flush();
+      mode = "p";
+      buf.push(ln);
+    }
+  }
+  flush();
+
+  return out.join("");
+}
+
+function looksLikeHtmlish(input) {
+  const s = String(input ?? "");
+  return /<\/?(?:em|i|strong|b|u|s|p|br|div|span|ul|ol|li|blockquote|code|pre|a|spoiler)\b/i.test(s);
 }
 
 function sanitizeLimitedHtml(inputHtml) {
@@ -340,22 +418,39 @@ function renderTmdbReviewsHtml(reviews = [], { showMore = false } = {}) {
         const author = escapeHtml(r?.author || r?.author_details?.username || '—');
         const date = escapeHtml((r?.created_at || r?.updated_at || '').toString().slice(0, 10));
         const raw = String(r?.content || "");
-        const fullHtml = sanitizeLimitedHtml(raw);
+        const baseHtml = looksLikeHtmlish(raw) ? raw : markdownToHtmlLite(raw);
+        const fullHtml = sanitizeLimitedHtml(baseHtml);
         const plain = toPlainTextFromHtml(fullHtml);
-        const shortText = plain.length > 220 ? plain.slice(0, 220) + '…' : plain;
+        const isLong = plain.length > 220;
+        const shortHtml = fullHtml;
         const id = escapeHtml(r?.id || Math.random().toString(36).slice(2));
 
-        _reviewHtmlStore.set(String(id), { fullHtml, shortText });
+        const ratingRaw = r?.author_details?.rating;
+        const ratingNum =
+          (typeof ratingRaw === "number" && Number.isFinite(ratingRaw)) ? ratingRaw : null;
+        const ratingPct =
+          (ratingNum != null) ? Math.round(Math.max(0, Math.min(10, ratingNum)) * 10) : null;
+        const ratingHtml =
+          (ratingPct != null)
+            ? `<span class="jmsdm-review-rating" title="${ratingNum.toFixed(1)}/10"
+                 style="font-size:12px;color:rgba(255,255,255,.85);font-weight:600;">
+                 ${ratingPct}%</span>`
+            : ``;
+
+        _reviewHtmlStore.set(String(id), { fullHtml, shortHtml, plain });
 
         return `
           <div class="jmsdm-review" data-reviewid="${id}">
             <div class="jmsdm-review-head">
               <div class="jmsdm-review-author">${author}</div>
-              <div class="jmsdm-review-date">${date}</div>
+              <div style="display:flex;gap:10px;align-items:center;">
+                ${ratingHtml}
+                <div class="jmsdm-review-date">${date}</div>
+              </div>
             </div>
-            <div class="jmsdm-review-body" data-expanded="0">${escapeHtml(shortText)}</div>
+            <div class="jmsdm-review-body is-collapsed" data-expanded="0">${shortHtml}</div>
 
-            ${plain.length > 220 ? `<button class="jmsdm-review-more">${config.languageLabels.more || 'Devamı'}</button>` : ''}
+            ${isLong ? `<button class="jmsdm-review-more">${config.languageLabels.more || 'Devamı'}</button>` : ''}
           </div>
         `;
       }).join('')}
@@ -454,7 +549,8 @@ async function loadTmdbReviewsInto(root, displayItem, { signal } = {}) {
                 }
             }
 
-            countSpan.textContent = all.length.toString();
+            const totalCount = (pack?.total_results && pack.total_results > 0) ? pack.total_results : all.length;
+            countSpan.textContent = totalCount.toString();
 
             if (!all.length) {
                 container.innerHTML = `<div style="color:rgba(255,255,255,.7);font-size:13px;line-height:1.5;">${config.languageLabels.noReviews || 'Henüz yorum yok.'}</div>`;
@@ -498,10 +594,12 @@ async function loadTmdbReviewsInto(root, displayItem, { signal } = {}) {
                     body.innerHTML = st.fullHtml || "";
                     wireSpoilers(body);
                     body.setAttribute('data-expanded', '1');
+                    body.classList.remove("is-collapsed");
                     btn.textContent = config.languageLabels.less || 'Kısalt';
                   } else {
-                    body.textContent = st.shortText || "";
+                    body.innerHTML = st.shortHtml || "";
                     body.setAttribute('data-expanded', '0');
+                    body.classList.add("is-collapsed");
                     btn.textContent = config.languageLabels.more || 'Devamı';
                   }
                 });
@@ -571,7 +669,10 @@ async function loadTmdbReviewsInto(root, displayItem, { signal } = {}) {
             const { tmdbId, kind } = await getTmdbIdForItem(displayItem, { signal: null });
             if (tmdbId && kind) {
                 const pack = await fetchTmdbReviews(kind, tmdbId, { signal: null, page: 1 });
-                const count = pack.results?.length || 0;
+                const count =
+                (pack?.total_results && pack.total_results > 0)
+                  ? pack.total_results
+                  : (pack.results?.length || 0);
                 countSpan.textContent = count.toString();
             }
         }
@@ -657,10 +758,66 @@ function stopHeroMedia(root) {
   } catch {}
 }
 
+const HERO_REPLAY_ICON_D =
+  "M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46A7.93 7.93 0 0 0 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74A7.93 7.93 0 0 0 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z";
+
+function setHeroReplayVisible(btn, visible) {
+  if (!btn) return;
+  btn.classList.toggle("is-visible", !!visible);
+  btn.setAttribute("aria-hidden", visible ? "false" : "true");
+}
+
+function ensureHeroReplayButton(root, item, { signal } = {}) {
+  const hero = root?.querySelector?.(".jmsdm-hero");
+  if (!hero) return null;
+
+  hero.style.position = hero.style.position || "relative";
+
+  let btn = hero.querySelector(".jmsdm-hero-replay");
+  if (!btn) {
+    const label =
+      (config?.languageLabels?.replayTrailer || config?.languageLabels?.playTrailer || "").toString().trim()
+      || "Fragmanı tekrar oynat";
+
+    btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "jmsdm-btn jmsdm-hero-replay";
+    btn.innerHTML = `${icon(HERO_REPLAY_ICON_D)}`;
+    btn.setAttribute("aria-label", label);
+    btn.setAttribute("title", label);
+    hero.appendChild(btn);
+  }
+
+  if (!btn.__wired) {
+    btn.__wired = true;
+
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (!_open || signal?.aborted) return;
+
+      try {
+        btn.disabled = true;
+        setHeroReplayVisible(btn, false);
+        await startHeroTrailer(root, item, { signal });
+      } finally {
+        try { btn.disabled = false; } catch {}
+      }
+    });
+  }
+
+  return btn;
+}
+
 async function startHeroTrailer(root, item, { signal } = {}) {
   if (!root || !item) return;
   const hero = root.querySelector(".jmsdm-hero");
   if (!hero) return;
+
+  const replayBtn = ensureHeroReplayButton(root, item, { signal });
+  setHeroReplayVisible(replayBtn, false);
+  try { if (replayBtn) replayBtn.disabled = true; } catch {}
 
   let media = hero.querySelector(".jmsdm-hero-media");
   if (!media) {
@@ -722,6 +879,7 @@ async function startHeroTrailer(root, item, { signal } = {}) {
         });
 
         showImg(true);
+        try { if (replayBtn) replayBtn.disabled = false; } catch {}
 
         const backToBackdrop = () => {
           if (signal?.aborted) return;
@@ -730,6 +888,8 @@ async function startHeroTrailer(root, item, { signal } = {}) {
           try { v.remove(); } catch {}
           try { media.innerHTML = ""; } catch {}
           showImg(true);
+          try { if (replayBtn) replayBtn.disabled = false; } catch {}
+          setHeroReplayVisible(replayBtn, true);
         };
 
         v.addEventListener("playing", () => {
@@ -776,10 +936,13 @@ async function startHeroTrailer(root, item, { signal } = {}) {
       try { f.remove(); } catch {}
       try { media.innerHTML = ""; } catch {}
       showImg(true);
+      try { if (replayBtn) replayBtn.disabled = false; } catch {}
+      setHeroReplayVisible(replayBtn, true);
     };
 
     media.appendChild(f);
     showImg(false);
+    try { if (replayBtn) replayBtn.disabled = false; } catch {}
     wireYoutubeEndedToBackdrop(f, backToBackdrop, { signal });
   } catch (e) {
     if (!signal?.aborted) console.warn("startHeroTrailer remote error:", e);

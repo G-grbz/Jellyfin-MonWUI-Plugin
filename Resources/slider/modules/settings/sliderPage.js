@@ -82,13 +82,9 @@ export function createSliderPanel(config, labels) {
 
   const tmdbWrap = document.createElement('div');
   tmdbWrap.className = 'fsetting-item';
-  tmdbWrap.style.borderTop = '1px solid rgba(255,255,255,.08)';
-  tmdbWrap.style.paddingTop = '12px';
-  tmdbWrap.style.marginTop = '12px';
 
   const tmdbTitle = document.createElement('h3');
   tmdbTitle.textContent = labels.tmdbReviewsTitle || 'TMDb Yorumları';
-  tmdbTitle.style.cssText = 'font-weight:700; margin-bottom:8px;';
 
   const tmdbKeyField = (() => {
     const w = document.createElement('div');
