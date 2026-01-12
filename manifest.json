@@ -13,8 +13,8 @@
         "changelog": "Fix",
         "targetAbi": "10.10.0.0",
         "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v1.7.0/JMSFusion-1.7.5.0-server.zip",
-        "checksum": "b042dcb01e0799e9b471c4627992b787",
-        "timestamp": "2026-01-12T21:01:20.0276965Z"
+        "checksum": "03bc9fb01c2fd8bd34f6416ffa769141",
+        "timestamp": "2026-01-12T21:54:07.2754230Z"
       },
       {
         "version": "1.7.4.0",
