@@ -1,4 +1,5 @@
 export const languageLabels = {
+  playTrailer: "Replay",
   badgeDelayResumeMs: "Delay before showing the age badge after resuming",
   ageBadgeDurationResumeMs: "How long to show the age badge after resuming",
   becauseYouWatchedSettings: "Recommendations Based on What You Watched",
