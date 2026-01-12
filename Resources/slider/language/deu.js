@@ -1,4 +1,5 @@
 export const languageLabels = {
+  playTrailer: "Erneut abspielen",
   badgeDelayResumeMs: "Verzögerung vor dem Anzeigen des Altersabzeichens nach dem Fortsetzen",
   ageBadgeDurationResumeMs: "Anzeigedauer des Altersabzeichens nach dem Fortsetzen",
   becauseYouWatchedSettings: "Empfehlungen basierend auf deinem Sehverlauf",
