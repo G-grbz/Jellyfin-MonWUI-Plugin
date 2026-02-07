@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/G-grbz/Jellyfin-MonWUI-Plugin/main/img/icon.png",
     "versions": [
       {
+        "version": "1.8.0.0",
+        "changelog": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/tag/v1.8.0",
+        "targetAbi": "10.10.0.0",
+        "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v1.8.0/JMSFusion-1.8.0.0-server.zip",
+        "checksum": "cb09b26dd7ef3ccb59573b4b52abf743",
+        "timestamp": "2026-02-07T22:05:55.8522218Z"
+      },
+      {
         "version": "1.7.5.0",
         "changelog": "Fix",
         "targetAbi": "10.10.0.0",
