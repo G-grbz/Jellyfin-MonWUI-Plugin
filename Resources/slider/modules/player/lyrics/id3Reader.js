@@ -1,5 +1,5 @@
 import { musicPlayerState } from "../core/state.js";
-import { getAuthToken } from "../core/auth.js";
+import { getAuthToken, apiUrl } from "../core/auth.js";
 import { getConfig } from "../../config.js";
 
 const config = getConfig();
@@ -169,7 +169,7 @@ async function processSingle(trackId) {
   let timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   let resp, arrayBuffer = null;
   try {
-    resp = await fetch(`/Audio/${trackId}/stream?Static=true`, {
+    resp = await fetch(apiUrl(`/Audio/${trackId}/stream?Static=true`), {
       method: "GET",
       headers: {
         Range: `bytes=0-${RANGE_BYTES - 1}`,
@@ -271,7 +271,7 @@ function readTagsWithFallback(blob, trackId, fullFetch) {
           const token = getAuthToken();
           const controller = new AbortController();
           const t = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-          const fullResp = await fetch(`/Audio/${trackId}/stream?Static=true`, {
+          const fullResp = await fetch(apiUrl(`/Audio/${trackId}/stream?Static=true`), {
             headers: { "X-Emby-Token": token },
             signal: controller.signal
           });

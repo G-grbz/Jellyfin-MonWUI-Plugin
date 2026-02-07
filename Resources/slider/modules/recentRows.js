@@ -13,6 +13,7 @@ import {
   getMeta,
   setMeta,
 } from "./dirRowsDb.js";
+import { withServer, withServerSrcset } from "./jfUrl.js";
 
 const config = getConfig();
 const labels = getLanguageLabels?.() || {};
@@ -170,24 +171,33 @@ const COMMON_FIELDS = [
 function buildPosterUrl(item, height = 540, quality = 72) {
   const tag = item?.ImageTags?.Primary || item?.PrimaryImageTag;
   if (!tag) return null;
-  return `/Items/${item.Id}/Images/Primary?tag=${encodeURIComponent(tag)}&maxHeight=${height}&quality=${quality}&EnableImageEnhancers=false`;
+
+  const path =
+    `/Items/${item.Id}/Images/Primary?tag=${encodeURIComponent(tag)}` +
+    `&maxHeight=${height}&quality=${quality}&EnableImageEnhancers=false`;
+
+  return withServer(path);
 }
+
 function buildPosterUrlHQ(item){ return buildPosterUrl(item, 540, 72); }
+
 function buildPosterUrlLQ(item){ return buildPosterUrl(item, 80, 20); }
 
 function buildLogoUrl(item, width = 220, quality = 80) {
   if (!item) return null;
+
   const tag =
     (item.ImageTags && (item.ImageTags.Logo || item.ImageTags.logo || item.ImageTags.LogoImageTag)) ||
     item.LogoImageTag ||
     null;
+
   if (!tag) return null;
 
-  return `/Items/${item.Id}/Images/Logo` +
-    `?tag=${encodeURIComponent(tag)}` +
-    `&maxWidth=${width}` +
-    `&quality=${quality}` +
-    `&EnableImageEnhancers=false`;
+  const path =
+    `/Items/${item.Id}/Images/Logo?tag=${encodeURIComponent(tag)}` +
+    `&maxWidth=${width}&quality=${quality}&EnableImageEnhancers=false`;
+
+  return withServer(path);
 }
 
 function buildBackdropUrl(item, width = 1920, quality = 80) {
@@ -200,19 +210,72 @@ function buildBackdropUrl(item, width = 1920, quality = 80) {
 
   if (!tag) return null;
 
-  return `/Items/${item.Id}/Images/Backdrop` +
-    `?tag=${encodeURIComponent(tag)}` +
-    `&maxWidth=${width}` +
-    `&quality=${quality}` +
-    `&EnableImageEnhancers=false`;
+  const path =
+    `/Items/${item.Id}/Images/Backdrop?tag=${encodeURIComponent(tag)}` +
+    `&maxWidth=${width}&quality=${quality}&EnableImageEnhancers=false`;
+
+  return withServer(path);
 }
+
 function buildBackdropUrlHQ(item){ return buildBackdropUrl(item, 1920, 80); }
+
+function withCacheBust(url) {
+  if (!url) return url;
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}cb=${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+}
+
+function scheduleImgRetry(img, phase /* "lq"|"hi" */, delayMs) {
+  if (!img) return;
+  const st = (img.__retryState ||= { lq: { tries: 0 }, hi: { tries: 0 } });
+  const slot = st[phase] || (st[phase] = { tries: 0 });
+  const maxTries = (phase === "hi") ? 8 : 6;
+  if (slot.tries >= maxTries) return;
+
+  slot.tries++;
+  clearTimeout(slot.tid);
+
+  slot.tid = setTimeout(() => {
+    const data = img.__data || {};
+    const fb = data.fallback || PLACEHOLDER_URL;
+
+    try { img.removeAttribute("srcset"); } catch {}
+    try { img.src = ""; } catch {}
+
+    if (phase === "hi" && data.hqSrc) {
+      img.__phase = "hi";
+      img.__hiRequested = true;
+      img.src = withCacheBust(data.hqSrc);
+      requestIdleCallback(() => {
+        if (data.hqSrcset) img.srcset = data.hqSrcset;
+      });
+      return;
+    }
+
+    img.__phase = "lq";
+    img.__hiRequested = false;
+    img.src = withCacheBust(data.lqSrc || fb);
+  }, Math.max(250, delayMs|0));
+}
 
 function buildPosterSrcSet(item) {
   const hs = [240, 360, 540];
   const q  = 50;
   const ar = Number(item.PrimaryImageAspectRatio) || 0.6667;
-  return hs.map(h => `${buildPosterUrl(item, h, q)} ${Math.round(h * ar)}w`).join(", ");
+
+  const raw = hs
+    .map(h => {
+      const tag = item?.ImageTags?.Primary || item?.PrimaryImageTag;
+      if (!tag) return "";
+      const path =
+        `/Items/${item.Id}/Images/Primary?tag=${encodeURIComponent(tag)}` +
+        `&maxHeight=${h}&quality=${q}&EnableImageEnhancers=false`;
+      return `${path} ${Math.round(h * ar)}w`;
+    })
+    .filter(Boolean)
+    .join(", ");
+
+  return withServerSrcset(raw);
 }
 
 let __imgIO = window.__JMS_RECENT_IMGIO;
@@ -254,22 +317,36 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
   img.__hydrated = false;
 
   const onError = () => {
-    if (img.__phase === "hi") {
-      try { img.removeAttribute("srcset"); } catch {}
-      img.src = lqSrc || fb;
-      img.classList.add("is-lqip");
-      img.__phase = "lq";
-      img.__hiRequested = false;
-    }
-  };
+  const data = img.__data || {};
+  const fb = data.fallback || PLACEHOLDER_URL;
 
-  const onLoad = () => {
-    if (img.__phase === "hi") {
-      img.classList.add("__hydrated");
-      img.classList.remove("is-lqip");
-      img.__hydrated = true;
-    }
-  };
+  try { img.removeAttribute("srcset"); } catch {}
+  try { img.src = fb; } catch {}
+
+  img.__hiRequested = false;
+  if (img.__phase === "hi") {
+    const delay = 800 * Math.min(6, (img.__retryState?.hi?.tries || 0) + 1);
+    scheduleImgRetry(img, "hi", delay);
+  } else {
+    const delay = 600 * Math.min(5, (img.__retryState?.lq?.tries || 0) + 1);
+    scheduleImgRetry(img, "lq", delay);
+  }
+};
+
+const onLoad = () => {
+  if (img.__retryState) {
+    try { clearTimeout(img.__retryState.lq?.tid); } catch {}
+    try { clearTimeout(img.__retryState.hi?.tid); } catch {}
+    img.__retryState.lq && (img.__retryState.lq.tries = 0);
+    img.__retryState.hi && (img.__retryState.hi.tries = 0);
+  }
+
+  if (img.__phase === "hi") {
+    img.classList.add("__hydrated");
+    img.classList.remove("is-lqip");
+    img.__hydrated = true;
+  }
+};
 
   img.__onErr = onError;
   img.__onLoad = onLoad;
@@ -284,6 +361,13 @@ function unobserveImage(img) {
   try { img.removeEventListener("load",  img.__onLoad); } catch {}
   delete img.__onErr; delete img.__onLoad;
   try { img.removeAttribute("srcset"); img.removeAttribute("src"); } catch {}
+  try {
+    if (img.__retryState) {
+      clearTimeout(img.__retryState.lq?.tid);
+      clearTimeout(img.__retryState.hi?.tid);
+    }
+  } catch {}
+  delete img.__retryState;
 }
 
 function formatRuntime(ticks) {
@@ -716,6 +800,7 @@ function createRecommendationCard(item, serverId, { aboveFold=false, showProgres
           itemId: item.Id,
           serverId,
           preferBackdropIndex: backdropIndex,
+          originEl: hostEl?.querySelector?.('img.cardImage') || hostEl,
           originEvent: e
         });
       },
@@ -1744,3 +1829,10 @@ function getHomeSectionsContainer(indexPage) {
 
   setTimeout(tick, 0);
 })();
+
+window.addEventListener("online", () => {
+  document.querySelectorAll("img.is-lqip").forEach(img => {
+    try { scheduleImgRetry(img, img.__phase === "hi" ? "hi" : "lq", 300); } catch {}
+  });
+});
+

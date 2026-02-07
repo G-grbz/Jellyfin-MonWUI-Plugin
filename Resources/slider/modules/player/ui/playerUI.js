@@ -17,6 +17,7 @@ import { getAuthToken } from "../core/auth.js";
 import { showNotification } from "./notification.js";
 import { loadCSS, isMobileDevice } from "../main.js";
 import { makeCleanupBag, addEvent, trackTimeout, trackObserver } from "../utils/cleanup.js";
+import { withServer, withParams } from "../../jfUrl.js";
 
 const config = getConfig();
 const DEFAULT_ARTWORK = "./slider/src/images/defaultArt.png";
@@ -550,7 +551,13 @@ async function getTrackImage(track) {
   const imageTag = track.AlbumPrimaryImageTag || track.PrimaryImageTag;
   const imageId = track.AlbumId || track.Id;
   if (imageTag) {
-    return `/Items/${imageId}/Images/Primary?fillHeight=100&fillWidth=100&quality=70&tag=${imageTag}`;
+    return withParams(`/Items/${imageId}/Images/Primary`, {
+      fillHeight: 100,
+      fillWidth: 100,
+      quality: 70,
+      tag: imageTag,
+      api_key: getAuthToken(),
+    });
   }
 
   try {
@@ -580,8 +587,8 @@ async function toggleFavorite() {
     }
 
     const isFavorite = track.UserData?.IsFavorite || false;
-    const url = `/Users/${window.ApiClient.getCurrentUserId()}/FavoriteItems/${track.Id}`;
-    const method = isFavorite ? "DELETE" : "POST";
+    const userId = await window.ApiClient.getCurrentUserId();
+    const url = withServer(`/Users/${userId}/FavoriteItems/${track.Id}`);
 
     const response = await fetch(url, {
       method,
@@ -710,7 +717,13 @@ export function updatePlayerBackground() {
     const tag = track.AlbumPrimaryImageTag || track.PrimaryImageTag;
     const id = track.AlbumId || track.Id;
     if (tag && id) {
-      bgUrl = `/Items/${id}/Images/Primary?fillHeight=1000&fillWidth=1000&quality=96&tag=${tag}`;
+      bgUrl = withParams(`/Items/${id}/Images/Primary`, {
+        fillHeight: 1000,
+        fillWidth: 1000,
+        quality: 96,
+        tag,
+        api_key: getAuthToken(),
+      });
     }
   }
 
@@ -871,9 +884,9 @@ async function showTopTracksInMainView(tab) {
   try {
     const token = getAuthToken();
     const userId = await window.ApiClient.getCurrentUserId();
-    const { apiUrl } = getApiUrlForTab(tab, userId);
+    const { apiPath, params } = getApiUrlForTab(tab, userId);
 
-    const response = await fetch(apiUrl, {
+    const response = await fetch(withParams(apiPath, params), {
       headers: { "X-Emby-Token": token },
       signal: __topTracksAborter.signal
     });
@@ -1121,31 +1134,74 @@ function getSequentialIndices(playlist, currentIndex, maxNextTracks) {
 
 function getApiUrlForTab(tab, userId) {
   const config = getConfig();
+
+  const base = `/Users/${userId}/Items`;
+  const common = {
+    IncludeItemTypes: "Audio",
+    Recursive: "true",
+  };
+
   switch (tab) {
-    case 'top':
+    case "top":
       return {
-        apiUrl: `/Users/${userId}/Items?SortBy=PlayCount&SortOrder=Descending&IncludeItemTypes=Audio&Recursive=true&Limit=${config.topTrack}`,
-        trackListName: config.languageLabels.topTracks || 'En Çok Dinlenenler'
+        apiPath: base,
+        params: {
+          ...common,
+          SortBy: "PlayCount",
+          SortOrder: "Descending",
+          Limit: config.topTrack,
+        },
+        trackListName: config.languageLabels.topTracks || "En Çok Dinlenenler",
       };
-    case 'recent':
+
+    case "recent":
       return {
-        apiUrl: `/Users/${userId}/Items?SortBy=DatePlayed&SortOrder=Descending&IncludeItemTypes=Audio&Recursive=true&Limit=${config.topTrack}`,
-        trackListName: config.languageLabels.recentTracks || 'Son Dinlenenler'
+        apiPath: base,
+        params: {
+          ...common,
+          SortBy: "DatePlayed",
+          SortOrder: "Descending",
+          Limit: config.topTrack,
+        },
+        trackListName: config.languageLabels.recentTracks || "Son Dinlenenler",
       };
-    case 'latest':
+
+    case "latest":
       return {
-        apiUrl: `/Users/${userId}/Items?SortBy=DateCreated&SortOrder=Descending&IncludeItemTypes=Audio&Recursive=true&Limit=${config.topTrack}`,
-        trackListName: config.languageLabels.latestTracks || 'Son Eklenenler'
+        apiPath: base,
+        params: {
+          ...common,
+          SortBy: "DateCreated",
+          SortOrder: "Descending",
+          Limit: config.topTrack,
+        },
+        trackListName: config.languageLabels.latestTracks || "Son Eklenenler",
       };
-    case 'favorites':
+
+    case "favorites":
       return {
-        apiUrl: `/Users/${userId}/Items?Filters=IsFavorite&IncludeItemTypes=Audio&Recursive=true&SortBy=SortName&SortOrder=Ascending&Limit=${config.topTrack}`,
-        trackListName: config.languageLabels.favorites || 'Favorilerim'
+        apiPath: base,
+        params: {
+          Filters: "IsFavorite",
+          IncludeItemTypes: "Audio",
+          Recursive: "true",
+          SortBy: "SortName",
+          SortOrder: "Ascending",
+          Limit: config.topTrack,
+        },
+        trackListName: config.languageLabels.favorites || "Favorilerim",
       };
+
     default:
       return {
-        apiUrl: `/Users/${userId}/Items?SortBy=PlayCount&SortOrder=Descending&IncludeItemTypes=Audio&Recursive=true&Limit=${config.nextTrack}`,
-        trackListName: config.languageLabels.topTracks || 'En Çok Dinlenenler'
+        apiPath: base,
+        params: {
+          ...common,
+          SortBy: "PlayCount",
+          SortOrder: "Descending",
+          Limit: config.nextTrack,
+        },
+        trackListName: config.languageLabels.topTracks || "En Çok Dinlenenler",
       };
   }
 }

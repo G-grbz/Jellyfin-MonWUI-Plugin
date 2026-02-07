@@ -1,14 +1,6 @@
-import {
-  getSessionInfo,
-  makeApiRequest,
-  getAuthHeader,
-  withServer,
-  getEmbyHeaders,
-  fetchItemDetails,
-  jms
-} from "./api.js";
+import { getSessionInfo, makeApiRequest, getAuthHeader, getEmbyHeaders, fetchItemDetails,  jms, updateFavoriteStatus, goToDetailsPage, getDetailsUrl } from "./api.js";
 import { getConfig } from "./config.js";
-import { updateFavoriteStatus, goToDetailsPage, getDetailsUrl } from "./api.js";
+import { withServer } from "./jfUrl.js";
 
 const config = getConfig();
 

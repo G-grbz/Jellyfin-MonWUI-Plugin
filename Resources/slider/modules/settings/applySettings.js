@@ -130,7 +130,8 @@ const _MAX_MIN = 1000;
             enableQualityBadges: formData.get('enableQualityBadges') === 'on',
             enableTrailerThenVideo: formData.get('enableTrailerThenVideo') === 'on',
             disableAllPlayback: formData.get('disableAllPlayback') === 'on',
-
+            enableSlider: formData.get('enableSlider') === 'on',
+            onlyShowSliderOnHomeTab: formData.get('onlyShowSliderOnHomeTab') === 'on',
             enableNotifications: formData.get('enableNotifications') === 'on',
             enableToastNew: formData.get('enableToastNew') === 'on',
             enableToastSystem: formData.get('enableToastSystem') === 'on',
@@ -151,6 +152,11 @@ const _MAX_MIN = 1000;
             becauseYouWatchedRowCount: parseInt(formData.get('becauseYouWatchedRowCount'), 10),
             becauseYouWatchedCardCount: parseInt(formData.get('becauseYouWatchedCardCount'), 10),
             enableBecauseYouWatched: formData.get('enableBecauseYouWatched') === 'on',
+
+            enableLoadingScreen: formData.get('enableLoadingScreen') === 'on',
+            loadingScreenSimulateProgress: formData.get('loadingScreenSimulateProgress') === 'on',
+            loadingScreenShowTips: formData.get('loadingScreenShowTips') === 'on',
+            loadingScreenTipIntervalMs: parseInt(formData.get('loadingScreenTipIntervalMs'), 10) || 6000,
 
             enableRecentRows: formData.get('enableRecentRows') === 'on',
             enableRecentMoviesRow: (() => {

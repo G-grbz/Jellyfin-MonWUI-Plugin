@@ -6,6 +6,7 @@ import { playTrack } from "../player/playback.js";
 import { updatePlaylistModal } from "../ui/playlistModal.js";
 import { toggleArtistModal } from "../ui/artistModal.js";
 import { makeCleanupBag, addEvent, trackTimeout } from "../utils/cleanup.js";
+import { withServer, withParams } from "../../jfUrl.js";
 
 const config = getConfig();
 
@@ -28,7 +29,12 @@ export async function fetchJellyfinPlaylists() {
   try {
     const userId = window.ApiClient.getCurrentUserId();
     const response = await fetch(
-      `/Users/${userId}/Items?Recursive=true&IncludeItemTypes=Playlist&Fields=PrimaryImageAspectRatio&StartIndex=0`,
+      withParams(`/Users/${userId}/Items`, {
+        Recursive: "true",
+        IncludeItemTypes: "Playlist",
+        Fields: "PrimaryImageAspectRatio",
+        StartIndex: 0,
+      }),
       { headers: { "X-Emby-Token": authToken } }
     );
 
@@ -56,7 +62,10 @@ export async function fetchJellyfinPlaylists() {
 
 function getStreamUrl(itemId) {
   const authToken = getAuthToken();
-  return `/Audio/${itemId}/stream.mp3?Static=true&api_key=${authToken}`;
+  return withParams(`/Audio/${itemId}/stream.mp3`, {
+    Static: "true",
+    api_key: authToken,
+  });
 }
 
 export async function playJellyfinPlaylist(playlistId) {
@@ -73,7 +82,10 @@ export async function playJellyfinPlaylist(playlistId) {
   try {
     const userId = window.ApiClient.getCurrentUserId();
     const playlistResponse = await fetch(
-      `/Playlists/${playlistId}/Items?UserId=${userId}&Fields=PrimaryImageAspectRatio,MediaSources,Chapters,ArtistItems,AlbumArtist,Album,Genres`,
+      withParams(`/Playlists/${playlistId}/Items`, {
+        UserId: userId,
+        Fields: "PrimaryImageAspectRatio,MediaSources,Chapters,ArtistItems,AlbumArtist,Album,Genres",
+      }),
       { headers: { "X-Emby-Token": authToken } }
     );
 
@@ -194,7 +206,11 @@ export async function showJellyfinPlaylistsModal() {
     if (pl.imageTag) {
       const img = document.createElement("img");
       img.className = "jellyfin-playlist-item__image";
-      img.src = `/Items/${pl.id}/Images/Primary?maxHeight=50`;
+      img.src = withParams(`/Items/${pl.id}/Images/Primary`, {
+        maxHeight: 50,
+        quality: 85,
+        api_key: getAuthToken(),
+      });
       item.appendChild(img);
     }
 
@@ -301,11 +317,10 @@ async function deleteJellyfinPlaylist(playlistId) {
   }
 
   try {
-    const url = `/Items/${playlistId}`;
-    const response = await fetch(url, {
-      method: "DELETE",
-      headers: { "X-Emby-Token": authToken }
-    });
+    const response = await fetch(
+      withServer(`/Items/${playlistId}`),
+      { method: "DELETE", headers: { "X-Emby-Token": authToken } }
+    );
 
     if (!response.ok) {
       const _text = await response.text();

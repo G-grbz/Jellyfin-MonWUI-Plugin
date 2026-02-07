@@ -5,7 +5,10 @@ import { languageLabels as fraLabels } from './fre.js';
 import { languageLabels as rusLabels } from './rus.js';
 
 export function getLanguageLabels(lang) {
-  switch (lang) {
+  const effective =
+    lang || getEffectiveLanguage?.() || detectBrowserLanguage?.() || 'tur';
+
+  switch (effective) {
     case 'eng': return engLabels;
     case 'deu': return deuLabels;
     case 'fre': return fraLabels;

@@ -6,11 +6,10 @@ import {
   fetchLocalTrailers,
   pickBestLocalTrailer,
   getAuthHeader,
-  withServer,
-  withServerSrcset,
   playNow,
 } from "./api.js";
 import { openDetailsModal } from "./detailsModal.js";
+import { withServer, withServerSrcset, invalidateServerBaseCache, resolveServerBase } from "./jfUrl.js";
 
 const config = getConfig();
 const S = (u) => {

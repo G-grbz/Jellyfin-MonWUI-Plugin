@@ -4,13 +4,14 @@ import { getConfig } from './config.js';
 import { getLanguageLabels, getDefaultLanguage } from '../language/index.js';
 import { getCurrentIndex, setCurrentIndex, setRemainingTime } from "./sliderState.js";
 import { applyContainerStyles } from "./positionUtils.js";
-import { playNow, fetchItemDetails, getCachedUserTopGenres, getGenresForDot, goToDetailsPage, withServer } from "./api.js";
+import { playNow, fetchItemDetails, getCachedUserTopGenres, getGenresForDot, goToDetailsPage } from "./api.js";
 import { applySlideAnimation, applyDotPosterAnimation, teardownAnimations, forceReflow, nextAnimToken, hardCleanupSlide } from "./animations.js";
 import { getVideoQualityText } from "./containerUtils.js";
 import { previewPreloadCache } from "./hoverTrailerModal.js";
 import { attachMiniPosterHover, openMiniPopoverFor } from "./studioHubsUtils.js";
 import { modalState, set, get, resetModalRefs } from './modalState.js';
 import { createVideoModal, destroyVideoModal, animatedShow, closeVideoModal, modalIsVisible, preloadVideoPreview, updateModalContent, positionModalRelativeToItem, applyVolumePreference, ensureOverlaysClosed, getBackdropFromItem, calculateMatchPercentage, openPreviewModalForItem, setModalAnimation, getPlayButtonText, PREVIEW_MAX_ENTRIES, startModalHideTimer, getClosingRemaining, bindModalEvents, hardStopPlayback, resetModalInfo, resetModalButtons, scheduleOpenForItem } from './hoverTrailerModal.js';
+import { withServer } from "./jfUrl.js";
 
 const IS_TOUCH = (typeof window !== 'undefined') && (('ontouchstart' in window) || (navigator.maxTouchPoints > 0));
 const config = getConfig();

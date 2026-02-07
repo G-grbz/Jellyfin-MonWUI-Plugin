@@ -1,4 +1,4 @@
-import { getSessionInfo, makeApiRequest, getCachedUserTopGenres, playNow, withServer, withServerSrcset } from "./api.js";
+import { getSessionInfo, makeApiRequest, getCachedUserTopGenres, playNow } from "./api.js";
 import { getConfig } from "./config.js";
 import { getLanguageLabels, getDefaultLanguage } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";
@@ -6,7 +6,7 @@ import { openGenreExplorer, openPersonalExplorer } from "./genreExplorer.js";
 import { REOPEN_COOLDOWN_MS, OPEN_HOVER_DELAY_MS } from "./hoverTrailerModal.js";
 import { createTrailerIframe, ensureJmsDetailsOverlay } from "./utils.js";
 import { openDetailsModal } from "./detailsModal.js";
-
+import { withServer, withServerSrcset } from "./jfUrl.js";
 import {
   openPrcDB,
   makeScope,
@@ -66,6 +66,40 @@ const PRC_DB_STATE = {
   serverId: null,
   failed: false,
 };
+
+function __appendCb(url, cb) {
+  if (!url) return url;
+  const u = String(url);
+  const sep = u.includes('?') ? '&' : '?';
+  return `${u}${sep}cb=${encodeURIComponent(String(cb))}`;
+}
+
+function __preloadOk(src) {
+  return new Promise((resolve) => {
+    const im = new Image();
+    im.decoding = 'async';
+    im.onload = () => resolve(true);
+    im.onerror = () => resolve(false);
+    im.src = src;
+  });
+}
+
+async function __preloadDecode(src) {
+  if (!src) return false;
+  try {
+    const im = new Image();
+    im.decoding = 'async';
+    im.src = src;
+    if (typeof im.decode === 'function') {
+      await im.decode();
+    } else {
+      await new Promise((res, rej) => { im.onload = res; im.onerror = rej; });
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function __prcCfg() {
   const cfg = getConfig?.() || config || {};
@@ -458,7 +492,7 @@ function detachGenreScrollIdleLoader() {
   }
 }
 
-function setPrimaryCtaText(cardEl, text) {
+function setPrimaryCtaText(cardEl, text, isResume = false) {
   const btn =
     cardEl.querySelector('.dir-row-hero-play') ||
     cardEl.querySelector('.preview-play-button') ||
@@ -474,7 +508,7 @@ function setPrimaryCtaText(cardEl, text) {
     }
   }
 
-  try { cardEl.dataset.prcResume = (text === 'Sürdür') ? '1' : '0'; } catch {}
+  try { cardEl.dataset.prcResume = isResume ? '1' : '0'; } catch {}
 }
 
 function __idle(fn, timeout = 800) {
@@ -540,7 +574,9 @@ async function applyResumeLabelsToCards(cardEls, userId) {
     const it = byId.get(id);
     const pos = Number(it?.UserData?.PlaybackPositionTicks || 0);
     const isResume = pos > 0;
-    setPrimaryCtaText(el, isResume ? (config.languageLabels?.devamet || 'Sürdür') : (config.languageLabels?.izle || 'Oynat'));
+    const resumeText = (config.languageLabels?.devamet || 'Sürdür');
+    const playText   = (config.languageLabels?.izle    || 'Oynat');
+    setPrimaryCtaText(el, isResume ? resumeText : playText, isResume);
   }
 }
 
@@ -576,20 +612,82 @@ function __shouldRequestHiRes() {
   return true;
 }
 
+function mountHero(heroHost, heroItem, serverId, heroLabel, { aboveFold=false } = {}) {
+  if (!heroHost || !heroItem?.Id) return;
+
+  const existing = heroHost.querySelector('.dir-row-hero');
+  const same = existing && (existing.dataset.itemId === String(heroItem.Id));
+
+  if (same) {
+    const lbl = existing.querySelector('.dir-row-hero-label');
+    if (lbl && heroLabel) lbl.textContent = heroLabel;
+    return;
+  }
+
+  if (existing) {
+    existing.classList.add('is-leaving');
+    setTimeout(() => { try { existing.remove(); } catch {} }, 180);
+  }
+
+  const hero = createGenreHeroCard(heroItem, serverId, heroLabel, { aboveFold });
+  hero.classList.add('is-entering');
+  heroHost.appendChild(hero);
+  requestAnimationFrame(() => hero.classList.remove('is-entering'));
+}
+
 const __imgIO = new IntersectionObserver((entries) => {
   for (const ent of entries) {
     const img = ent.target;
     const data = img.__data || {};
     if (ent.isIntersecting) {
-      if (!__shouldRequestHiRes()) continue;
-      if (img.__hiFailed) continue;
-      if (!img.__hiRequested) {
-        img.__hiRequested = true;
-        img.__phase = 'hi';
-        if (data.hqSrcset) { try { img.srcset = data.hqSrcset; } catch {} }
-        if (data.hqSrc)    { try { img.src    = data.hqSrc;    } catch {} }
-      }
-    } else {
+        if (!__shouldRequestHiRes()) continue;
+
+        const now = Date.now();
+        const retryAfter = Number(img.__retryAfter || 0);
+        const canRetry = !retryAfter || now >= retryAfter;
+
+        if (img.__hiFailed && !canRetry) continue;
+
+        if (!img.__hiRequested || (img.__hiFailed && canRetry)) {
+          img.__hiRequested = true;
+          img.__hiFailed = false;
+          img.__phase = 'hi';
+
+          const data = img.__data || {};
+          const token = (img.__retryToken = (Number(img.__retryToken || 0) + 1));
+          const hqSrc = data.hqSrc
+            ? (img.__hiFailed ? __appendCb(data.hqSrc, `${now}-${token}`) : data.hqSrc)
+            : null;
+          const hqSrcset = data.hqSrcset
+            ? data.hqSrcset.split(',')
+                .map(s => s.trim())
+                .filter(Boolean)
+                .map(part => {
+                  const m = part.match(/^(\S+)\s+(.*)$/);
+                  if (!m) return part;
+                  const u = img.__hiFailed ? __appendCb(m[1], `${now}-${token}`) : m[1];
+                  return `${u} ${m[2]}`;
+                })
+                .join(', ')
+            : null;
+
+          (async () => {
+            if (hqSrc) {
+              const ok = await __preloadDecode(hqSrc);
+              if (!ok) throw new Error('decode failed');
+            }
+            if (hqSrcset) { try { img.srcset = hqSrcset; } catch {} }
+            if (hqSrc)    { try { img.src = hqSrc; } catch {} }
+          })().catch(() => {
+            img.__hiFailed = true;
+            img.__hiRequested = false;
+            img.__phase = 'lq';
+            img.__retryAfter = Date.now() + 12_000;
+            try { __imgIO.unobserve(img); } catch {}
+            try { __imgIO.observe(img); } catch {}
+          });
+        }
+      } else {
     }
   }
 }, { rootMargin: '300px 0px' });
@@ -631,6 +729,13 @@ function makePRCLooseKey(it) {
       contain: layout paint style;
     }
     .dir-row-hero-host { min-height: 260px; }
+
+    .dir-row-hero {
+      transition: opacity .18s ease, transform .18s ease;
+      will-change: opacity, transform;
+    }
+    .dir-row-hero.is-entering { opacity: 0; transform: translateY(2px); }
+    .dir-row-hero.is-leaving  { opacity: 0; }
 
     .personal-recs-card .cardImage {
       width: 100%;
@@ -705,6 +810,10 @@ function buildBackdropUrl(item, width = "auto", quality = 90) {
           `&EnableImageEnhancers=false`;
   return withServer(url);
  }
+
+function buildBackdropUrlLQ(item) {
+  return buildBackdropUrl(item, 420, 25);
+}
 
 function buildBackdropUrlHQ(item) {
   return buildBackdropUrl(item, 1920, 80);
@@ -925,17 +1034,26 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
   const onError = () => {
     if (img.__phase === 'hi') {
       img.__hiFailed = true;
+      img.__hiRequested = false;
+      img.__retryAfter = Date.now() + 12_000;
+
       try { img.removeAttribute('srcset'); } catch {}
       try { img.classList.remove('__hydrated'); } catch {}
+
       if (lqSrc) {
-        if (img.src !== lqSrc) img.src = lqSrc;
+        const lq = __appendCb(lqSrc, `lq-${Date.now()}`);
+        if (img.src !== lq) img.src = lq;
       } else {
         img.src = fb;
       }
+
       img.classList.add('is-lqip');
       img.__phase = 'lq';
-      img.__hiRequested = false;
+
       try { __imgIO.unobserve(img); } catch {}
+      try { __imgIO.observe(img); } catch {}
+    } else {
+      try { img.src = fb; } catch {}
     }
   };
 
@@ -1449,14 +1567,13 @@ async function renderBecauseYouWatchedAuto(indexPage) {
     try {
       const heroHost = section.__heroHost || section.querySelector('.dir-row-hero-host');
       if (heroHost) {
-        heroHost.innerHTML = "";
         const heroItem = seed || items[0];
         if (heroItem?.Id) {
           const heroLabel = formatBecauseYouWatchedTitle(seedName);
-          const hero = createGenreHeroCard(heroItem, serverId, heroLabel, { aboveFold: i === 0 });
-          heroHost.appendChild(hero);
+          mountHero(heroHost, heroItem, serverId, heroLabel, { aboveFold: i === 0 });
           try {
-            const backdropImg = hero.querySelector('.dir-row-hero-bg');
+            const heroEl = heroHost.querySelector('.dir-row-hero');
+            const backdropImg = heroEl?.querySelector?.('.dir-row-hero-bg');
             const RemoteTrailers =
               heroItem.RemoteTrailers ||
               heroItem.RemoteTrailerItems ||
@@ -1465,7 +1582,7 @@ async function renderBecauseYouWatchedAuto(indexPage) {
             createTrailerIframe({
               config,
               RemoteTrailers,
-              slide: hero,
+              slide: heroEl,
               backdropImg,
               itemId: heroItem.Id,
               serverId,
@@ -1951,84 +2068,98 @@ function buildPosterUrl(item, height = 540, quality = 72) {
   return withServer(url);
 }
 
- function createGenreHeroCard(item, serverId, genreName, { aboveFold = false } = {}) {
-   const hero = document.createElement('div');
-   hero.className = 'dir-row-hero';
-   hero.dataset.itemId = item.Id;
+function createGenreHeroCard(item, serverId, genreName, { aboveFold = false } = {}) {
+  const hero = document.createElement('div');
+  hero.className = 'dir-row-hero';
+  hero.dataset.itemId = item.Id;
 
-   const bg = buildBackdropUrlHQ(item) || buildPosterUrlHQ(item) || PLACEHOLDER_URL;
-   const logo = buildLogoUrl(item);
-   const year = item.ProductionYear || '';
-   const plot = clampText(item.Overview, 240);
-   const ageChip = normalizeAgeChip(item.OfficialRating || '');
-   const isSeries = item.Type === 'Series';
-   const genres = Array.isArray(item.Genres) ? item.Genres.slice(0, 3).join(", ") : "";
+  const bgLQ = buildBackdropUrlLQ(item) || buildPosterUrlLQ(item) || null;
+  const bgHQ = buildBackdropUrlHQ(item) || buildPosterUrlHQ(item) || null;
 
-   const metaParts = [];
-   if (ageChip) metaParts.push(ageChip);
-   if (year) metaParts.push(year);
-   if (genres) metaParts.push(genres);
-   const meta = metaParts.join(" • ");
+  const logo = buildLogoUrl(item);
+  const year = item.ProductionYear || '';
+  const plot = clampText(item.Overview, 240);
+  const ageChip = normalizeAgeChip(item.OfficialRating || '');
+  const genres = Array.isArray(item.Genres) ? item.Genres.slice(0, 3).join(", ") : "";
 
-   hero.innerHTML = `
-     <div class="dir-row-hero-bg-wrap">
-       <img class="dir-row-hero-bg"
-            src="${bg}"
-            alt="${escapeHtml(item.Name)}"
-            decoding="async"
-            loading="${aboveFold ? 'eager' : 'lazy'}"
-            ${aboveFold ? 'fetchpriority="high"' : ''}>
-     </div>
+  const metaParts = [];
+  if (ageChip) metaParts.push(ageChip);
+  if (year) metaParts.push(year);
+  if (genres) metaParts.push(genres);
+  const meta = metaParts.join(" • ");
 
-     <div class="dir-row-hero-inner">
-       <div class="dir-row-hero-meta-container">
+  hero.innerHTML = `
+    <div class="dir-row-hero-bg-wrap">
+      <img class="dir-row-hero-bg"
+           alt="${escapeHtml(item.Name)}"
+           decoding="async"
+           loading="${aboveFold ? 'eager' : 'lazy'}"
+           ${aboveFold ? 'fetchpriority="high"' : ''}>
+    </div>
 
-       <div class="dir-row-hero-label">
-           ${escapeHtml(genreName || "")}
-         </div>
+    <div class="dir-row-hero-inner">
+      <div class="dir-row-hero-meta-container">
 
-         ${logo ? `
-           <div class="dir-row-hero-logo">
-             <img src="${logo}"
-                  alt="${escapeHtml(item.Name)} logo"
-                  decoding="async"
-                  loading="lazy">
-           </div>
-         ` : ``}
+        <div class="dir-row-hero-label">
+          ${escapeHtml(genreName || "")}
+        </div>
 
-         <div class="dir-row-hero-title">${escapeHtml(item.Name)}</div>
+        ${logo ? `
+          <div class="dir-row-hero-logo">
+            <img src="${logo}"
+                 alt="${escapeHtml(item.Name)} logo"
+                 decoding="async"
+                 loading="lazy">
+          </div>
+        ` : ``}
 
-         <div class="dir-row-hero-submeta">
-           ${meta ? `</span><span class="dir-row-hero-meta">${escapeHtml(meta)}</span>` : ""}
-         </div>
+        <div class="dir-row-hero-title">${escapeHtml(item.Name)}</div>
 
-         ${plot ? `<div class="dir-row-hero-plot">${escapeHtml(plot)}</div>` : ""}
+        <div class="dir-row-hero-submeta">
+          ${meta ? `<span class="dir-row-hero-meta">${escapeHtml(meta)}</span>` : ""}
+        </div>
 
-       </div>
-     </div>
-   `;
+        ${plot ? `<div class="dir-row-hero-plot">${escapeHtml(plot)}</div>` : ""}
 
-   const goDetails = () => {
-     try {
-       window.location.hash = getDetailsUrl(item.Id, serverId);
-     } catch {
-       window.location.href = getDetailsUrl(item.Id, serverId);
-     }
-   };
+      </div>
+    </div>
+  `;
 
-   hero.addEventListener('click', () => {
-     goDetails();
-   });
+  try {
+    const img = hero.querySelector('.dir-row-hero-bg');
+    if (img) {
+      if (bgHQ || bgLQ) {
+        hydrateBlurUp(img, {
+          lqSrc: bgLQ,
+          hqSrc: bgHQ,
+          hqSrcset: null,
+          fallback: PLACEHOLDER_URL
+        });
+      } else {
+        img.src = PLACEHOLDER_URL;
+      }
+    }
+  } catch {}
 
-   hero.classList.add('active');
+  const goDetails = () => {
+    try { window.location.hash = getDetailsUrl(item.Id, serverId); }
+    catch { window.location.href = getDetailsUrl(item.Id, serverId); }
+  };
 
-   hero.addEventListener('jms:cleanup', () => {
-     detachPreviewHandlers(hero);
-   }, { once: true });
+  hero.addEventListener('click', () => { goDetails(); });
 
-   return hero;
- }
+  hero.classList.add('active');
 
+  hero.addEventListener('jms:cleanup', () => {
+    detachPreviewHandlers(hero);
+    try {
+      const img = hero.querySelector('.dir-row-hero-bg');
+      if (img) unobserveImage(img);
+    } catch {}
+  }, { once: true });
+
+  return hero;
+}
 
 function createRecommendationCard(item, serverId, aboveFold = false) {
   const card = document.createElement("div");
@@ -2126,6 +2257,7 @@ if (posterUrlHQ) {
             itemId: item.Id,
             serverId,
             preferBackdropIndex: backdropIndex,
+            originEl: hostEl?.querySelector?.('img.cardImage') || hostEl,
           });
         },
         onPlay: async () => {
@@ -2528,15 +2660,15 @@ async function ensureGenreLoaded(idx) {
       if (heroHost) {
         heroHost.innerHTML = "";
         if (best) {
-          const hero = createGenreHeroCard(best, serverId, genre, { aboveFold: idx === 0 });
-          heroHost.appendChild(hero);
+          mountHero(heroHost, best, serverId, genre, { aboveFold: idx === 0 });
           try {
-            const backdropImg = hero.querySelector('.dir-row-hero-bg');
+            const heroEl = heroHost.querySelector('.dir-row-hero');
+            const backdropImg = heroEl?.querySelector?.('.dir-row-hero-bg');
             const RemoteTrailers = best.RemoteTrailers || best.RemoteTrailerItems || best.RemoteTrailerUrls || [];
             createTrailerIframe({
               config,
               RemoteTrailers,
-              slide: hero,
+              slide: heroEl,
               backdropImg,
               itemId: best.Id,
               serverId,
@@ -3028,3 +3160,20 @@ function scheduleHomeScrollerRefresh(ms = 120) {
   document.addEventListener("viewshow",  () => scheduleHomeScrollerRefresh(0));
   document.addEventListener("viewshown", () => scheduleHomeScrollerRefresh(0));
 })();
+
+function __forceRetryAllBroken() {
+  document.querySelectorAll('img.cardImage').forEach(img => {
+    if (!img || !img.__data) return;
+    img.__hiFailed = false;
+    img.__hiRequested = false;
+    img.__retryAfter = 0;
+    try { __imgIO.unobserve(img); } catch {}
+    try { __imgIO.observe(img); } catch {}
+  });
+}
+
+window.addEventListener('online', __forceRetryAllBroken);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) __forceRetryAllBroken();
+});
+

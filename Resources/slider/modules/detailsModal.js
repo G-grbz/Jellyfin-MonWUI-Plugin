@@ -1,5 +1,4 @@
 import {
-  withServer,
   makeApiRequest,
   fetchItemDetailsFull,
   getDetailsUrl,
@@ -8,7 +7,7 @@ import {
   pickBestLocalTrailer,
   getVideoStreamUrl,
 } from "./api.js";
-
+import { withServer } from "./jfUrl.js";
 import { getConfig } from "./config.js";
 import { getLanguageLabels } from "../language/index.js";
 
@@ -28,8 +27,178 @@ let _restore = null;
 let _scrollSnap = null;
 let _unbindKeyHandler = null;
 let _currentListeners = [];
-
+let _closing = false;
+let _openOrigin = null;
 let _ytApiPromise = null;
+
+function __prefersReducedMotion() {
+  try { return window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches; }
+  catch { return false; }
+}
+
+function __resolveOriginEl(el) {
+  if (!el || !el.closest) return null;
+  return (
+    el.querySelector?.("img.cardImage, img, .cardImage, .cardImageContainer") ||
+    el.closest?.(".cardImageContainer, .card, .dir-row-hero, button, a") ||
+    el
+  );
+}
+
+function __getRectSafe(el) {
+  if (!el || !el.getBoundingClientRect) return null;
+  const r = el.getBoundingClientRect();
+  if (!r || !Number.isFinite(r.width) || !Number.isFinite(r.height)) return null;
+  if (r.width < 16 || r.height < 16) return null;
+  const vw = window.innerWidth || 0;
+  const vh = window.innerHeight || 0;
+  if (r.right < 0 || r.bottom < 0 || r.left > vw || r.top > vh) return null;
+  return { left: r.left, top: r.top, width: r.width, height: r.height };
+}
+
+function __calcTransform(fromRect, toRect) {
+  const fromCx = fromRect.left + fromRect.width / 2;
+  const fromCy = fromRect.top + fromRect.height / 2;
+  const toCx = toRect.left + toRect.width / 2;
+  const toCy = toRect.top + toRect.height / 2;
+
+  const sx = fromRect.width / Math.max(1, toRect.width);
+  const sy = fromRect.height / Math.max(1, toRect.height);
+  const tx = fromCx - toCx;
+  const ty = fromCy - toCy;
+
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  return {
+    sx: clamp(sx, 0.05, 1.0),
+    sy: clamp(sy, 0.05, 1.0),
+    tx: clamp(tx, -2000, 2000),
+    ty: clamp(ty, -2000, 2000),
+  };
+}
+
+function __transformStr(t) {
+  return `translate3d(${t.tx}px, ${t.ty}px, 0) scale(${t.sx}, ${t.sy})`;
+}
+
+async function __animateInFromOrigin(root) {
+  try {
+    if (__prefersReducedMotion()) return;
+    const originRect = _openOrigin?.rect || null;
+    if (!originRect) return;
+
+    const backdropEl = root?.querySelector?.(".jmsdm-backdrop");
+    const cardEl = root?.querySelector?.(".jmsdm-card");
+    if (!cardEl || !cardEl.getBoundingClientRect) return;
+    const toRect = cardEl.getBoundingClientRect();
+    if (!toRect || toRect.width < 10 || toRect.height < 10) return;
+
+    const t = __calcTransform(originRect, toRect);
+
+    try { cardEl.style.animation = "none"; } catch {}
+    cardEl.style.transformOrigin = "center center";
+    cardEl.style.transform = __transformStr(t);
+    cardEl.style.opacity = "0.001";
+
+    if (backdropEl) {
+      backdropEl.style.opacity = "0";
+    }
+
+    await new Promise(requestAnimationFrame);
+
+    if (cardEl.animate) {
+      const a1 = cardEl.animate(
+        [
+          { transform: __transformStr(t), opacity: 0.001 },
+          { transform: "translate3d(0,0,0) scale(1,1)", opacity: 1 }
+        ],
+        { duration: 260, easing: "cubic-bezier(.2,.8,.2,1)", fill: "forwards" }
+      );
+      const a2 = backdropEl?.animate
+        ? backdropEl.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 180, easing: "linear", fill: "forwards" })
+        : null;
+      try { await Promise.all([a1.finished, a2?.finished].filter(Boolean)); } catch {}
+    } else {
+      cardEl.style.transform = "";
+      cardEl.style.opacity = "1";
+      if (backdropEl) backdropEl.style.opacity = "1";
+    }
+
+    cardEl.style.transform = "";
+    cardEl.style.opacity = "1";
+    if (backdropEl) backdropEl.style.opacity = "1";
+  } catch {}
+}
+
+async function __animateOutToOrigin(root) {
+  try {
+    if (__prefersReducedMotion()) return;
+
+    const cardEl = root?.querySelector?.(".jmsdm-card");
+    const backdropEl = root?.querySelector?.(".jmsdm-backdrop");
+    if (!cardEl) return;
+
+    const originEl = __resolveOriginEl(_openOrigin?.el);
+    const originRect = __getRectSafe(originEl) || _openOrigin?.rect || null;
+    if (!originRect) return;
+
+    const cardRect = cardEl.getBoundingClientRect();
+    if (!cardRect || cardRect.width < 10 || cardRect.height < 10) return;
+
+    const t = __calcTransform(originRect, cardRect);
+
+    try { cardEl.style.animation = "none"; } catch {}
+    try { cardEl.style.transition = "none"; } catch {}
+    try { cardEl.style.willChange = "transform, opacity"; } catch {}
+    if (backdropEl) {
+      try { backdropEl.style.transition = "none"; } catch {}
+      try { backdropEl.style.willChange = "opacity"; } catch {}
+    }
+
+    const DURATION = 380;
+    const BDUR = 260;
+    const EASE = "cubic-bezier(.22,.95,.25,1)";
+
+    if (cardEl.animate) {
+      const a1 = cardEl.animate(
+        [
+          { transform: "translate3d(0,0,0) scale(1,1)", opacity: 1 },
+          { transform: __transformStr(t), opacity: 0 }
+        ],
+        { duration: DURATION, easing: EASE, fill: "forwards" }
+      );
+      const a2 = backdropEl?.animate
+        ? backdropEl.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 180, easing: "linear", fill: "forwards" })
+        : null;
+      try { await Promise.all([a1.finished, a2?.finished].filter(Boolean)); } catch {}
+      } else {
+      try {
+        cardEl.style.transition = `transform ${DURATION}ms ${EASE}, opacity ${DURATION}ms ${EASE}`;
+        cardEl.style.transformOrigin = "center center";
+        if (backdropEl) backdropEl.style.transition = `opacity ${BDUR}ms linear`;
+        await new Promise(requestAnimationFrame);
+        cardEl.style.transform = __transformStr(t);
+        cardEl.style.opacity = "0";
+        if (backdropEl) backdropEl.style.opacity = "0";
+        await new Promise(r => setTimeout(r, DURATION + 30));
+      } catch {}
+    }
+  } catch {}
+}
+
+function softStopHeroMedia(root) {
+  try {
+    const v = root?.querySelector?.(".jmsdm-hero video[data-jms-hero-preview='1']");
+    if (v) {
+      try { v.muted = true; v.volume = 0; } catch {}
+      try { v.pause(); } catch {}
+    }
+    const f = root?.querySelector?.(".jmsdm-hero iframe[data-jms-hero-preview='1']");
+    if (f) {
+      try { f.__ytPlayer?.mute?.(); } catch {}
+      try { f.__ytPlayer?.pauseVideo?.(); } catch {}
+    }
+  } catch {}
+}
 
 function ensureYouTubeIframeApi() {
   if (_ytApiPromise) return _ytApiPromise;
@@ -1095,6 +1264,61 @@ function icon(svgPathD) {
   return `<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="${svgPathD}"></path></svg>`;
 }
 
+function getResumeTicksFromItem(it) {
+  try {
+    const t =
+      it?.UserData?.PlaybackPositionTicks ??
+      it?.UserData?.PlaybackPosition ??
+      0;
+    return Number.isFinite(t) ? t : Number(t || 0);
+  } catch {
+    return 0;
+  }
+}
+
+function setPlayButtonLabel(playBtn, isResume) {
+  if (!playBtn) return;
+  const txt = isResume
+    ? (config?.languageLabels?.devamet || "Devam et")
+    : (config?.languageLabels?.playNowLabel || "Şimdi Oynat");
+
+  playBtn.innerHTML = `${icon("M8 5v14l11-7z")} ${txt}`;
+}
+
+function getCurrentUserIdSafe() {
+  try {
+    return (window.ApiClient?.getCurrentUserId?.() || window.ApiClient?._currentUserId || "").toString();
+  } catch {
+    return "";
+  }
+}
+
+async function getResumeTicksForContainer(containerId, { signal } = {}) {
+  try {
+    const userId = getCurrentUserIdSafe();
+    if (!userId || !containerId) return 0;
+
+    const qp = new URLSearchParams();
+    qp.set("ParentId", String(containerId));
+    qp.set("Limit", "1");
+    qp.set("Fields", "UserData");
+
+    const r = await makeApiRequest(
+      `/Users/${encodeURIComponent(userId)}/Items/Resume?${qp.toString()}`,
+      { signal }
+    );
+
+    const first =
+      (Array.isArray(r?.Items) && r.Items[0]) ||
+      (Array.isArray(r) && r[0]) ||
+      null;
+
+    return getResumeTicksFromItem(first);
+  } catch {
+    return 0;
+  }
+}
+
 async function toggleFavorite(itemId, makeFav, { signal } = {}) {
   try {
     const userId =
@@ -1120,6 +1344,23 @@ function fmtRuntime(ticks) {
   const m = totalMin % 60;
   if (h <= 0) return `${m} ${config.languageLabels.dk || "dk"}`;
   return `${h} ${config.languageLabels.sa || "sa"} ${m} ${config.languageLabels.dk || "dk"}`;
+}
+
+function localizeItemType(rawType) {
+  const t = String(rawType ?? "").trim();
+  if (!t) return "";
+
+  const ll = config?.languageLabels || {};
+  const map = {
+    Movie: ll.film,
+    Series: ll.dizi,
+    Episode: ll.episode,
+    Season: ll.season,
+  };
+
+  const byKey = ll[`type_${t}`] || ll[`type${t}`];
+
+  return safeText(map[t] || byKey || "", t);
 }
 
 function safeText(s, fallback = "") {
@@ -1386,8 +1627,9 @@ function forceHideHoverOverlays() {
   } catch {}
 }
 
-export function closeDetailsModal() {
-  if (!_open) return;
+export async function closeDetailsModal() {
+  if (!_open || _closing) return;
+  _closing = true;
 
   cleanupEventListeners();
 
@@ -1405,9 +1647,11 @@ export function closeDetailsModal() {
 
   const root = document.getElementById(MODAL_ID);
   if (root) {
+    softStopHeroMedia(root);
+    await __animateOutToOrigin(root);
     stopHeroMedia(root);
-    root.innerHTML = "";
-    root.remove();
+    try { root.innerHTML = ""; } catch {}
+    try { root.remove(); } catch {}
   }
 
   lockScroll(false);
@@ -1428,14 +1672,21 @@ export function closeDetailsModal() {
 
   _open = false;
   _lastFocus = null;
+  _openOrigin = null;
+  _closing = false;
 }
 
-export async function openDetailsModal({ itemId, serverId = "", preferBackdropIndex = "0", perPage = 6 } = {}) {
+export async function openDetailsModal({ itemId, serverId = "", preferBackdropIndex = "0", perPage = 6, originEl } = {}) {
   if (!itemId) return;
+  const _originResolved = __resolveOriginEl(originEl || document.activeElement);
+  const _nextOrigin = { el: _originResolved, rect: __getRectSafe(_originResolved) };
+
   if (_open) {
-    closeDetailsModal();
+    await closeDetailsModal();
     await new Promise(resolve => setTimeout(resolve, 100));
   }
+
+  _openOrigin = _nextOrigin;
   _open = true;
   _lastFocus = document.activeElement;
   _abort = new AbortController();
@@ -1470,6 +1721,7 @@ export async function openDetailsModal({ itemId, serverId = "", preferBackdropIn
     `;
     wireCloseHandlers(root, closeDetailsModal);
     try { root.style.visibility = "visible"; root.style.opacity = "1"; } catch {}
+    await __animateInFromOrigin(root);
     return;
   }
 
@@ -1496,7 +1748,8 @@ export async function openDetailsModal({ itemId, serverId = "", preferBackdropIn
   const community = displayItem.CommunityRating ? String(displayItem.CommunityRating.toFixed?.(1) ?? displayItem.CommunityRating) : "";
   const runtime = fmtRuntime(displayItem.RunTimeTicks);
   const genres = Array.isArray(displayItem.Genres) ? displayItem.Genres.slice(0, 4) : [];
-  const type = safeText(displayItem.Type, "");
+  const typeRaw = safeText(baseItem?.Type || displayItem?.Type, "");
+  const type = localizeItemType(typeRaw);
 
   const btIndex = String(preferBackdropIndex ?? "0");
   const btTag =
@@ -1704,11 +1957,28 @@ export async function openDetailsModal({ itemId, serverId = "", preferBackdropIn
   _unbindKeyHandler = wireCloseHandlers(root, closeDetailsModal);
   try { root.style.visibility = "visible"; root.style.opacity = "1"; } catch {}
 
+  await __animateInFromOrigin(root);
+
   wireOverviewToggle(root);
   startHeroTrailer(root, displayItem, { signal: _abort.signal }).catch(() => {});
   loadTmdbReviewsInto(root, displayItem, { signal: _abort.signal });
 
   const playBtn = root.querySelector(".jmsdm-play");
+  const initialResumeTicks = getResumeTicksFromItem(baseItem);
+  setPlayButtonLabel(playBtn, initialResumeTicks > 0);
+
+  if (
+    initialResumeTicks <= 0 &&
+    (baseItem?.Type === "Series" || baseItem?.Type === "Season")
+  ) {
+    getResumeTicksForContainer(baseItem.Id, { signal: _abort.signal })
+      .then((t) => {
+        if (!_open || _abort.signal.aborted) return;
+        setPlayButtonLabel(playBtn, t > 0);
+      })
+      .catch(() => {});
+  }
+
   const openBtn = root.querySelector(".jmsdm-openpage");
   const favBtn  = root.querySelector(".jmsdm-fav");
 

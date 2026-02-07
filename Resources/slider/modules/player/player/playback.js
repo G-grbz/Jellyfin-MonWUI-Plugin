@@ -1,6 +1,6 @@
 import { musicPlayerState } from "../core/state.js";
 import { getConfig } from "../../config.js";
-import { getAuthToken } from "../core/auth.js";
+import { getAuthToken, apiUrl } from "../core/auth.js";
 import { updateMediaMetadata, initMediaSession, updatePositionState } from "../core/mediaSession.js";
 import { getFromOfflineCache, cacheForOffline } from "../core/offlineCache.js";
 import { readID3Tags } from "../lyrics/id3Reader.js";
@@ -508,7 +508,7 @@ async function getArtworkFromSources(track) {
     const imageTag = track.AlbumPrimaryImageTag || track.PrimaryImageTag;
     if (imageTag) {
       const imageId = track.AlbumId || track.Id;
-      const url = `/Items/${imageId}/Images/Primary?fillHeight=300&fillWidth=300&quality=90&tag=${imageTag}`;
+      const url = apiUrl(`/Items/${imageId}/Images/Primary?fillHeight=300&fillWidth=300&quality=90&tag=${imageTag}`);
       const valid = await checkImageExists(url);
       return valid ? url : DEFAULT_ARTWORK;
     }
@@ -606,7 +606,7 @@ export function playTrack(index) {
   disposables.addListener(audio, 'loadedmetadata', handleLoadedMetadata, { once: true });
   setupAudioListeners();
 
-  const audioUrl = `/Audio/${track.Id}/stream.mp3?Static=true`;
+  const audioUrl = apiUrl(`/Audio/${track.Id}/stream.mp3?Static=true`);
   audio.src = audioUrl;
   audio.load();
 
@@ -631,11 +631,11 @@ function getAudioUrl(track) {
       return null;
     }
 
-    return `/Audio/${encodeURIComponent(trackId)}/stream.mp3?Static=true&api_key=${authToken}`;
+    return apiUrl(`/Audio/${encodeURIComponent(trackId)}/stream.mp3?Static=true&api_key=${authToken}`);
   }
 
   return track.filePath || track.mediaSource ||
-        (track.Id && `/Audio/${track.Id}/stream.mp3`);
+        (track.Id && apiUrl(`/Audio/${track.Id}/stream.mp3`));
 }
 
 function getEffectiveDuration() {
@@ -668,7 +668,7 @@ async function reportPlaybackStart(track) {
     const authToken = getAuthToken();
     if (!authToken) return;
 
-    const response = await fetch(`/Sessions/Playing`, {
+    const response = await fetch(apiUrl(`/Sessions/Playing`), {
       method: "POST",
       headers: {
         "Authorization": `MediaBrowser Token="${authToken}"`,
@@ -699,7 +699,7 @@ async function reportPlaybackStopped(track, positionTicks) {
     const authToken = getAuthToken();
     if (!authToken) return;
 
-    const response = await fetch(`/Sessions/Playing/Stopped`, {
+    const response = await fetch(apiUrl(`/Sessions/Playing/Stopped`), {
       method: "POST",
       headers: {
         "Authorization": `MediaBrowser Token="${authToken}"`,

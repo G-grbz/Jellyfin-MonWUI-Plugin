@@ -1,7 +1,7 @@
 import { initPlayer, togglePlayerVisibility, isPlayerInitialized } from "./utils/mainIndex.js";
 import { refreshPlaylist } from "./core/playlist.js";
 import { updateProgress, updateDuration } from "./player/progress.js";
-import { checkForNewMusic } from "./ui/artistModal.js";
+import { syncDbIncremental, syncDbFullscan, startGlobalDbFullscanScheduler } from "./ui/artistModal.js";
 import { loadJSMediaTags } from "./lyrics/id3Reader.js";
 import { getConfig } from "../config.js";
 import { initializeControlStates } from "./ui/controls.js";
@@ -114,10 +114,32 @@ async function onToggleClick() {
       initInProgress = true;
 
       await loadJSMediaTags();
-      checkForNewMusic();
-
       await initPlayer();
       await new Promise(r => setTimeout(r, 250));
+      queueMicrotask(() => {
+      const run = async () => {
+        try {
+          startGlobalDbFullscanScheduler?.();
+
+          const dbIsEmpty = async () => {
+            try {
+              const t = await window.__musicDB?.getAllTracks?.();
+              return !t || t.length === 0;
+            } catch {
+              return true;
+            }
+          };
+          const r = await syncDbIncremental().catch(() => null);
+
+          if (!r || r.skipped === "no-credentials" || await dbIsEmpty()) {
+            await syncDbFullscan({ force: true }).catch(() => {});
+          }
+        } catch {}
+      };
+
+  if ("requestIdleCallback" in window) requestIdleCallback(run, { timeout: 5000 });
+  else setTimeout(run, 800);
+});
 
       togglePlayerVisibility();
       await refreshPlaylist();
@@ -132,7 +154,6 @@ async function onToggleClick() {
 
     } else {
       togglePlayerVisibility();
-      checkForNewMusic();
     }
   } catch (err) {
     console.error("GMMP geçiş hatası:", err);

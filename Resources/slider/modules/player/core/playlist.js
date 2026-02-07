@@ -1,6 +1,6 @@
 import { musicPlayerState, resetShuffle } from "./state.js";
 import { getConfig } from "../../config.js";
-import { getAuthToken } from "./auth.js";
+import { getAuthToken, apiUrl } from "./auth.js";
 import { shuffleArray } from "../utils/domUtils.js";
 import { showNotification } from "../ui/notification.js";
 import { updateModernTrackInfo, playTrack } from "../player/playback.js";
@@ -37,7 +37,7 @@ export async function refreshPlaylist() {
     let totalItems = 0;
     try {
       const countResponse = await fetch(
-        `/Items?${baseQuery}${genres.length > 0 ? `&Genres=${genres.map(encodeURIComponent).join(",")}` : ""}&Limit=1`,
+        apiUrl(`/Items?${baseQuery}${genres.length > 0 ? `&Genres=${genres.map(encodeURIComponent).join(",")}` : ""}&Limit=1`),
         { headers, signal }
       );
       if (countResponse.ok) {
@@ -76,7 +76,7 @@ export async function refreshPlaylist() {
       const initialFetches = genres.flatMap((genre) => {
         if (excludedIdChunks.length === 0) {
           return fetch(
-            `/Items?${baseQuery}&Limit=${perGenreLimit}&Genres=${encodeURIComponent(genre)}`,
+            apiUrl(`/Items?${baseQuery}&Limit=${perGenreLimit}&Genres=${encodeURIComponent(genre)}`),
             { headers, signal }
           )
             .then((r) => {
@@ -92,7 +92,7 @@ export async function refreshPlaylist() {
         return excludedIdChunks.map((chunk) => {
           const excludeIdsParam = `&ExcludeItemIds=${chunk.join(",")}`;
           return fetch(
-            `/Items?${baseQuery}&Limit=${Math.ceil(perGenreLimit / excludedIdChunks.length)}&Genres=${encodeURIComponent(genre)}${excludeIdsParam}`,
+            apiUrl(`/Items?${baseQuery}&Limit=${Math.ceil(perGenreLimit / excludedIdChunks.length)}&Genres=${encodeURIComponent(genre)}${excludeIdsParam}`),
             { headers, signal }
           )
             .then((r) => {
@@ -131,7 +131,7 @@ export async function refreshPlaylist() {
             const url = `/Items?${baseQuery}&Limit=1&Genres=${encodeURIComponent(genre)}${excludeParam}`;
 
             try {
-              const resp = await fetch(url, { headers, signal });
+              const resp = await fetch(apiUrl(url), { headers, signal });
               if (!resp.ok) continue;
               const { Items = [] } = await resp.json();
               const [track] = Items;
@@ -158,7 +158,7 @@ export async function refreshPlaylist() {
       );
     } else {
       if (excludedIdChunks.length === 0) {
-        const resp = await fetch(`/Items?${baseQuery}&Limit=${effectiveLimit}`, { headers, signal });
+        const resp = await fetch(apiUrl(`/Items?${baseQuery}&Limit=${effectiveLimit}`), { headers, signal });
         if (!resp.ok) throw new Error(config.languageLabels.unauthorizedRequest);
         const data = await resp.json();
         items = data.Items || [];
@@ -166,7 +166,7 @@ export async function refreshPlaylist() {
         const limitPerChunk = Math.ceil(effectiveLimit / excludedIdChunks.length);
         const chunkRequests = excludedIdChunks.map((chunk) => {
           const excludeIdsParam = `&ExcludeItemIds=${chunk.join(",")}`;
-          return fetch(`/Items?${baseQuery}&Limit=${limitPerChunk}${excludeIdsParam}`, { headers, signal })
+          return fetch(apiUrl(`/Items?${baseQuery}&Limit=${limitPerChunk}${excludeIdsParam}`), { headers, signal })
             .then((r) => {
               if (!r.ok) throw new Error(config.languageLabels.unauthorizedRequest);
               return r.json();
@@ -244,7 +244,7 @@ async function addItemsToPlaylist(playlistId, itemIds, userId) {
 
   try {
     const response = await fetch(
-      `/Playlists/${playlistId}/Items?ids=${idsQueryParam}&userId=${userId}`,
+      apiUrl(`/Playlists/${playlistId}/Items?ids=${idsQueryParam}&userId=${userId}`),
       {
         method: "POST",
         headers: {
@@ -278,7 +278,7 @@ export async function removeItemsFromPlaylist(playlistId, itemIds) {
   const idsParam = itemIds.join(",");
   const url = `/Playlists/${playlistId}/Items?entryIds=${idsParam}`;
 
-  const res = await fetch(url, {
+  const res = await fetch(apiUrl(url), {
     method: "DELETE",
     headers: {
       "X-Emby-Token": token,
@@ -297,7 +297,7 @@ export async function removeItemsFromPlaylist(playlistId, itemIds) {
 
 async function getPlaylistItems(playlistId) {
   const token = getAuthToken();
-  const response = await fetch(`/Playlists/${playlistId}/Items`, {
+  const response = await fetch(apiUrl(`/Playlists/${playlistId}/Items`), {
     headers: {
       "X-Emby-Token": token,
       "Content-Type": "application/json",
@@ -392,7 +392,7 @@ export async function saveCurrentPlaylistToJellyfin(
       }
       return { success: true };
     } else {
-      const createResponse = await fetch("/Playlists", {
+      const createResponse = await fetch(apiUrl("/Playlists"), {
         method: "POST",
         headers: {
           "X-Emby-Token": token,

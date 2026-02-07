@@ -5,9 +5,10 @@ import {
   getQualitySnapshot
 } from './cacheManager.js';
 
-import { fetchItemDetails, withServer } from './api.js';
+import { fetchItemDetails } from './api.js';
 import { getVideoQualityText } from "./containerUtils.js";
 import { getConfig } from "./config.js";
+import { withServer } from "./jfUrl.js";
 
 const config = getConfig();
 const QB_VER = '4';

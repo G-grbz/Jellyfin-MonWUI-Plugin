@@ -1,8 +1,9 @@
-import { getSessionInfo, getAuthHeader, makeApiRequest } from "./api.js";
+import { getSessionInfo, getEmbyHeaders, makeApiRequest } from "./api.js";
 import { getConfig } from './config.js';
 import { getLanguageLabels } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";
 import { waitForAnyVisible } from "../main.js";
+import { withServer } from "./jfUrl.js";
 
 const config = getConfig();
 const MANUAL_IDS = {};
@@ -240,7 +241,7 @@ function setPopoverContent(studioName, items) {
     const favAddText = config.languageLabels.addToFavorites || 'Favorilere ekle';
     const favRemoveText = config.languageLabels.removeFromFavorites || 'Favorilerden çıkar';
     itemEl.innerHTML = `
-      <img class="hub-preview-poster" src="${posterUrl || '/css/images/placeholder.png'}" alt="${item.Name}" loading="lazy">
+      <img class="hub-preview-poster" src="${posterUrl || withServer('/css/images/placeholder.png')}" alt="${item.Name}" loading="lazy">
       <div class="hub-preview-info">
         <div class="hub-preview-item-title">${item.Name}</div>
         <div class="hub-preview-rating">
@@ -290,9 +291,10 @@ async function toggleFavorite(itemId, isFavorite, buttonElement) {
   const favAddText = config.languageLabels.addToFavorites || 'Favorilere ekle';
   const favRemoveText = config.languageLabels.removeFromFavorites || 'Favorilerden çıkar';
   try {
-    const response = await fetch(`/Users/${userId}/FavoriteItems/${itemId}`, {
+    const response = await fetch(withServer(`/Users/${userId}/FavoriteItems/${itemId}`), {
       method: isFavorite ? 'POST' : 'DELETE',
-      headers: { 'Content-Type': 'application/json', 'Authorization': getAuthHeader() }
+      headers: getEmbyHeaders({ 'Content-Type': 'application/json', 'Accept': 'application/json' }),
+      credentials: 'same-origin'
     });
     if (response.ok) {
       if (isFavorite) {
@@ -612,7 +614,7 @@ async function resolveLogoUrl(name) {
 
 async function fetchStudios(signal) {
   const url = `/Studios?Limit=300&Recursive=true&SortBy=SortName&SortOrder=Ascending`;
-  const res = await fetch(url, { headers: hJSON(), signal });
+  const res = await fetch(withServer(url), { headers: hJSON(), signal, credentials: 'same-origin' });
   if (!res.ok) throw new Error("Studios alınamadı");
   const data = await res.json();
   const items = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data) ? data : []);
@@ -633,7 +635,7 @@ async function fetchStudioItemsViaUsers(studioId, studioName, userId, signal) {
   ];
   for (const u of urls) {
     try {
-      const r = await fetch(u, { headers: hJSON(), signal });
+      const r = await fetch(withServer(u), { headers: hJSON(), signal, credentials: 'same-origin' });
       if (!r.ok) continue;
       const data = await r.json();
       const items = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data) ? data : []);
@@ -643,17 +645,20 @@ async function fetchStudioItemsViaUsers(studioId, studioName, userId, signal) {
   return [];
 }
 
-function hJSON() { return { "Accept":"application/json", "Authorization": getAuthHeader() }; }
+function hJSON() {
+  return getEmbyHeaders({ "Accept":"application/json" });
+}
+
 function buildBackdropUrl(item, index = 0) {
   const tags = item.BackdropImageTags || [];
   const tag = tags[index];
   if (!tag) return null;
-  return `/Items/${item.Id}/Images/Backdrop/${index}?tag=${encodeURIComponent(tag)}&quality=90`;
+  return withServer(`/Items/${item.Id}/Images/Backdrop/${index}?tag=${encodeURIComponent(tag)}&quality=90`);
 }
 function buildPosterUrl(item, height = 300, quality = 95) {
   const tag = item.ImageTags?.Primary || item.PrimaryImageTag;
   if (!tag) return null;
-  return `/Items/${item.Id}/Images/Primary?tag=${encodeURIComponent(tag)}&fillHeight=${height}&quality=${quality}`;
+  return withServer(`/Items/${item.Id}/Images/Primary?tag=${encodeURIComponent(tag)}&fillHeight=${height}&quality=${quality}`);
 }
 function pickRandom(arr) { return arr.length ? arr[Math.floor(Math.random()*arr.length)] : null; }
 
@@ -665,8 +670,8 @@ async function chooseBackdropForStudio(studio, userId, signal) {
     const idx    = cached.index;
     const tag    = cached.tag || null;
     const url = tag
-      ? `/Items/${itemId}/Images/Backdrop/${idx}?tag=${encodeURIComponent(tag)}&quality=90`
-      : `/Items/${itemId}/Images/Backdrop/${idx}?quality=90`;
+      ? withServer(`/Items/${itemId}/Images/Backdrop/${idx}?tag=${encodeURIComponent(tag)}&quality=90`)
+      : withServer(`/Items/${itemId}/Images/Backdrop/${idx}?quality=90`);
     return { itemId, index: idx, url };
   }
 
@@ -930,7 +935,7 @@ async function searchStudiosByAliases(desired, signal) {
   for (const term of list) {
     const url = `/Studios?SearchTerm=${encodeURIComponent(term)}&Limit=20`;
     try {
-      const r = await fetch(url, { headers: hJSON(), signal });
+      const r = await fetch(withServer(url), { headers: hJSON(), signal });
       if (!r.ok) continue;
       const data = await r.json();
       const items = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data) ? data : []);

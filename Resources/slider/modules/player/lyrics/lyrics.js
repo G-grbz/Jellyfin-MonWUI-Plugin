@@ -1,6 +1,6 @@
 import { musicPlayerState } from "../core/state.js";
 import { getConfig } from "../../config.js";
-import { getAuthToken } from "../core/auth.js";
+import { getAuthToken, apiUrl } from "../core/auth.js";
 import { musicDB } from "../utils/db.js";
 import { showNotification } from "../ui/notification.js";
 import { parseID3Tags } from "./id3Reader.js";
@@ -239,8 +239,8 @@ function setError(msg) {
 async function fetchLyricsFromServer(trackId, signal) {
   const token = getAuthToken();
   const endpoints = [
-    { url: `/Audio/${trackId}/Lyrics`, type: "text" },
-    { url: `/Items/${trackId}/Lyrics`, type: "json" },
+    { url: apiUrl(`/Audio/${trackId}/Lyrics`), type: "text" },
+    { url: apiUrl(`/Items/${trackId}/Lyrics`), type: "json" },
   ];
 
   for (const { url, type } of endpoints) {
@@ -334,7 +334,7 @@ export async function getEmbeddedLyrics(trackId) {
     fetchAbort = new AbortController();
 
     const token = getAuthToken();
-    const response = await fetch(`/Audio/${trackId}/stream.mp3?Static=true`, {
+    const response = await fetch(apiUrl(`/Audio/${trackId}/stream.mp3?Static=true`), {
       headers: { "X-Emby-Token": token },
       signal: fetchAbort.signal
     });

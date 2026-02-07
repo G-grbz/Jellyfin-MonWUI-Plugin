@@ -1,12 +1,10 @@
 import { getConfig } from "./config.js";
-import {
-  getSessionInfo, makeApiRequest, getAuthHeader, playNow, fetchItemDetails,
-  withServer, getEmbyHeaders, jms
-} from "./api.js";
+import { getSessionInfo, makeApiRequest, getAuthHeader, playNow, fetchItemDetails, getEmbyHeaders, jms } from "./api.js";
 import { initSettings } from './settings.js';
 import { loadAvailableDevices, getDeviceIcon, startPlayback, showNotification, hideNotification } from './castModule.js';
 import { getProviderUrl } from './utils.js';
 import { applyContainerStyles } from './positionUtils.js';
+import { withServer } from "./jfUrl.js";
 
 let _menuCloserAttached = false;
 function attachGlobalMenuCloser() {

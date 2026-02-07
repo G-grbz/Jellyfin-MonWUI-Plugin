@@ -137,6 +137,7 @@ export function getConfig() {
       }
     })(),
     enableSlider: localStorage.getItem('enableSlider') !== 'false',
+    onlyShowSliderOnHomeTab: localStorage.getItem('onlyShowSliderOnHomeTab') !== 'false',
     showLanguageInfo: localStorage.getItem('showLanguageInfo') !== 'false',
     balanceItemTypes: localStorage.getItem('balanceItemTypes') !== 'false',
     showRatingInfo: localStorage.getItem('showRatingInfo') !== 'false',
@@ -198,11 +199,12 @@ export function getConfig() {
     playedBackgroundImageType: localStorage.getItem('playedBackgroundImageType') || 'playedBgImage',
     manualListIds: localStorage.getItem('manualListIds') || '',
     useManualList: localStorage.getItem('useManualList') === 'true',
+    enableSlider: localStorage.getItem('enableSlider') !== 'false',
     useListFile: localStorage.getItem('useListFile') === 'true',
     useRandomContent: localStorage.getItem('useRandomContent') !== 'false',
     fullscreenMode: localStorage.getItem('fullscreenMode') === 'true' ? true : false,
     listLimit: 20,
-    version: "v1.7.0",
+    version: "v1.8.0",
     historySize: 20,
     updateInterval: 300000,
     nextTracksSource: localStorage.getItem('nextTracksSource') || 'playlist',
@@ -315,6 +317,11 @@ export function getConfig() {
     enableBecauseYouWatched: (localStorage.getItem('enableBecauseYouWatched') || 'true') !== 'false',
     becauseYouWatchedRowCount: parseInt(localStorage.getItem('becauseYouWatchedRowCount'), 10) || 10,
     becauseYouWatchedCardCount: parseInt(localStorage.getItem('becauseYouWatchedCardCount'), 10) || 10,
+
+    enableLoadingScreen: localStorage.getItem('enableLoadingScreen') === 'true' ? true : false,
+    loadingScreenSimulateProgress: localStorage.getItem('loadingScreenSimulateProgress') === 'true' ? true : false,
+    loadingScreenShowTips: localStorage.getItem('loadingScreenShowTips') === 'true' ? true : false,
+    loadingScreenTipIntervalMs: parseInt(localStorage.getItem('loadingScreenTipIntervalMs'), 10) || 6000,
 
     enablePersonalRecommendations: localStorage.getItem('enablePersonalRecommendations') !== 'false',
     personalRecsCacheTtlMs: parseInt(localStorage.getItem('personalRecsCacheTtlMs'), 10) || 3600000,

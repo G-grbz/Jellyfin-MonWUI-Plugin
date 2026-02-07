@@ -1,6 +1,6 @@
 import { getConfig } from './config.js';
 import { getLanguageLabels, getDefaultLanguage } from '../language/index.js';
-import { playNow, getVideoStreamUrl, fetchItemDetails, fetchPlayableItemDetails, updateFavoriteStatus, goToDetailsPage, fetchLocalTrailers, pickBestLocalTrailer, getCachedUserTopGenres, withServer } from './api.js';
+import { playNow, getVideoStreamUrl, fetchItemDetails, fetchPlayableItemDetails, updateFavoriteStatus, goToDetailsPage, fetchLocalTrailers, pickBestLocalTrailer, getCachedUserTopGenres } from './api.js';
 import { getYoutubeEmbedUrl, isValidUrl } from './utils.js';
 import { getVideoQualityText } from './containerUtils.js';
 import { attachMiniPosterHover, openMiniPopoverFor } from "./studioHubsUtils.js";
@@ -9,6 +9,7 @@ import { modalState, set, get, resetModalRefs } from './modalState.js';
 import { applyDotPosterAnimation } from "./animations.js";
 import { getCurrentIndex } from "./sliderState.js";
 import { openDetailsModal } from "./detailsModal.js";
+import { withServer } from "./jfUrl.js";
 
 const REOPEN_BLOCK_MS = 600;
 const IS_TOUCH = (typeof window !== 'undefined') && (('ontouchstart' in window) || (navigator.maxTouchPoints > 0));

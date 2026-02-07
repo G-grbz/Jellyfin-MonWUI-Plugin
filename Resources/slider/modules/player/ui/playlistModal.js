@@ -6,6 +6,8 @@ import { saveCurrentPlaylistToJellyfin, removeItemsFromPlaylist } from "../core/
 import { fetchJellyfinPlaylists } from "../core/jellyfinPlaylists.js";
 import { readID3Tags } from "../lyrics/id3Reader.js";
 import { showGenreFilterModal } from "./genreFilterModal.js";
+import { withServer, withParams } from "../../jfUrl.js";
+import { getAuthToken } from "../core/auth.js";
 
 const config = getConfig();
 
@@ -604,7 +606,13 @@ async function loadImageForItem(item, index) {
     const imageTag = track.AlbumPrimaryImageTag || track.PrimaryImageTag;
     if (imageTag) {
       const imageId = track.AlbumId || track.Id;
-      const serverImageUrl = `/Items/${imageId}/Images/Primary?fillHeight=100&fillWidth=100&quality=70&tag=${imageTag}`;
+      const serverImageUrl = withParams(`/Items/${imageId}/Images/Primary`, {
+        fillHeight: 100,
+        fillWidth: 100,
+        quality: 70,
+        tag: imageTag,
+        api_key: getAuthToken(),
+      });
       img.style.backgroundImage = `url('${serverImageUrl}')`;
       return;
     }

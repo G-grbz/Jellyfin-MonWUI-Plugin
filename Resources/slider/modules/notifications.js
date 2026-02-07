@@ -1,7 +1,8 @@
-import { makeApiRequest, getSessionInfo, fetchItemDetails, getVideoStreamUrl, playNow, goToDetailsPage, isCurrentUserAdmin, fetchItemsBulk, withServer } from "./api.js";
+import { makeApiRequest, getSessionInfo, fetchItemDetails, getVideoStreamUrl, playNow, goToDetailsPage, isCurrentUserAdmin, fetchItemsBulk } from "./api.js";
 import { getConfig, getServerAddress } from "./config.js";
 import { getVideoQualityText } from "./containerUtils.js";
 import { getCurrentVersionFromEnv, compareSemver } from "./update.js";
+import { withServer } from "./jfUrl.js";
 
 const config = getConfig();
 

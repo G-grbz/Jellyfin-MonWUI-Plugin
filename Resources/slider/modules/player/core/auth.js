@@ -1,6 +1,62 @@
 const JSON_PREFIX = "Stored JSON credentials:";
 const WS_PREFIX = "opening web socket with url:";
 
+const ORIGIN =
+  (typeof window !== "undefined" && window.location?.origin)
+    ? window.location.origin
+    : "";
+
+function detectBasePathFromLocation() {
+  try {
+    const p = window.location?.pathname || "/";
+    const m = p.match(/^(.*)\/web(\/|$)/i);
+    if (m) {
+      const base = (m[1] || "").trim();
+      if (!base || base === "/") return "";
+      return base;
+    }
+
+    return "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeBasePath(s) {
+  if (!s) return "";
+  s = String(s).trim();
+  if (!s) return "";
+  if (!s.startsWith("/")) s = "/" + s;
+  return s.replace(/\/+$/, "");
+}
+
+function joinUrl(...parts) {
+  return parts
+    .filter((p) => p !== null && p !== undefined && String(p).length > 0)
+    .map((s, i) => {
+      s = String(s);
+      if (i === 0) return s.replace(/\/+$/, "");
+      return s.replace(/^\/+/, "").replace(/\/+$/, "");
+    })
+    .join("/")
+    .replace(/\/+$/, "");
+}
+
+const BASE_PATH =
+  (typeof window !== "undefined" && window.__JELLYFIN_BASEPATH)
+    ? normalizeBasePath(window.__JELLYFIN_BASEPATH)
+    : normalizeBasePath(detectBasePathFromLocation());
+
+export function apiUrl(path) {
+  if (!ORIGIN) return path || "";
+  if (!path) return joinUrl(ORIGIN, BASE_PATH);
+  if (/^https?:\/\//i.test(path)) return path;
+
+  const p = path.startsWith("/") ? path : `/${path}`;
+  const base = joinUrl(ORIGIN, BASE_PATH);
+  return `${base}${p}`;
+}
+
 export function saveCredentialsToSessionStorage(credentials) {
   try {
     sessionStorage.setItem("json-credentials", JSON.stringify(credentials));

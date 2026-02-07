@@ -1,4 +1,4 @@
-import { getSessionInfo, makeApiRequest, getCachedUserTopGenres, playNow, withServer } from "./api.js";
+import { getSessionInfo, makeApiRequest, getCachedUserTopGenres, playNow } from "./api.js";
 import { getConfig } from "./config.js";
 import { getLanguageLabels } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";
@@ -6,6 +6,7 @@ import { openDirectorExplorer } from "./genreExplorer.js";
 import { REOPEN_COOLDOWN_MS, OPEN_HOVER_DELAY_MS } from "./hoverTrailerModal.js";
 import { createTrailerIframe, ensureJmsDetailsOverlay } from "./utils.js";
 import { openDetailsModal } from "./detailsModal.js";
+import { withServer } from "./jfUrl.js";
 import { setupScroller } from "./personalRecommendations.js";
 import {
   openDirRowsDB,
@@ -270,6 +271,10 @@ function buildBackdropUrl(item, width = 1920, quality = 80) {
          `&EnableImageEnhancers=false`);
 }
 
+function buildBackdropUrlLQ(item) {
+  return buildBackdropUrl(item, 480, 25);
+}
+
 function buildBackdropUrlHQ(item) {
   return buildBackdropUrl(item, 1920, 80);
 }
@@ -278,10 +283,52 @@ function buildPosterSrcSet(item) {
   const hs = [240, 360, 540];
   const q  = 50;
   const ar = Number(item.PrimaryImageAspectRatio) || 0.6667;
-  return hs.map(h => `${buildPosterUrl(item, h, q)} ${Math.round(h * ar)}w`).join(", ");
+  return hs.map(h => `${withCacheBust(buildPosterUrl(item, h, q))} ${Math.round(h * ar)}w`).join(", ");
+}
+
+function withCacheBust(url) {
+  if (!url) return url;
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}cb=${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+}
+
+function scheduleImgRetry(img, phase, delayMs) {
+  if (!img) return;
+  const st = (img.__retryState ||= { lq: { tries: 0 }, hi: { tries: 0 } });
+  const slot = st[phase] || (st[phase] = { tries: 0 });
+
+  const maxTries = (phase === "hi") ? 8 : 6;
+  if (slot.tries >= maxTries) return;
+
+  slot.tries++;
+  clearTimeout(slot.tid);
+
+  slot.tid = setTimeout(() => {
+    const data = img.__data || {};
+    const fb = data.fallback || PLACEHOLDER_URL;
+
+    try { img.removeAttribute("srcset"); } catch {}
+
+    if (phase === "hi" && data.hqSrc) {
+      img.__phase = "hi";
+      img.__hiRequested = true;
+      img.src = withCacheBust(data.hqSrc);
+
+      const _rIC = window.requestIdleCallback || ((fn)=>setTimeout(fn, 0));
+      _rIC(() => {
+        if (img.__hiRequested && data.hqSrcset) img.srcset = data.hqSrcset;
+      });
+      return;
+    }
+
+    img.__phase = "lq";
+    img.__hiRequested = false;
+    img.src = withCacheBust(data.lqSrc || fb);
+  }, Math.max(250, delayMs|0));
 }
 
 let __imgIO = window.__JMS_DIR_IMGIO;
+
 if (!__imgIO) {
   const _rIC = window.requestIdleCallback || ((fn)=>setTimeout(fn, 0));
   __imgIO = new IntersectionObserver((entries) => {
@@ -330,23 +377,39 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
   img.__hydrated = false;
 
   const onError = () => {
-    if (img.__phase === 'hi') {
-      try { img.removeAttribute('srcset'); } catch {}
-      img.src = lqSrc || fb;
-      img.classList.add('is-lqip');
-      try { img.classList.remove('__hydrated'); } catch {}
-      img.__phase = 'lq';
-      img.__hiRequested = false;
+  const data = img.__data || {};
+  const fb = data.fallback || PLACEHOLDER_URL;
+
+  try { img.removeAttribute("srcset"); } catch {}
+
+  img.__hiRequested = false;
+
+  if (img.__phase === "hi") {
+    const delay = 800 * Math.min(6, (img.__retryState?.hi?.tries || 0) + 1);
+    scheduleImgRetry(img, "hi", delay);
+  } else {
+    if (!img.currentSrc && !img.src) {
+      try { img.src = fb; } catch {}
     }
-  };
+    const delay = 600 * Math.min(5, (img.__retryState?.lq?.tries || 0) + 1);
+    scheduleImgRetry(img, "lq", delay);
+  }
+};
 
   const onLoad = () => {
-    if (img.__phase === 'hi') {
-      img.classList.add('__hydrated');
-      img.classList.remove('is-lqip');
-      img.__hydrated = true;
-    }
-  };
+  if (img.__retryState) {
+    try { clearTimeout(img.__retryState.lq?.tid); } catch {}
+    try { clearTimeout(img.__retryState.hi?.tid); } catch {}
+    img.__retryState.lq && (img.__retryState.lq.tries = 0);
+    img.__retryState.hi && (img.__retryState.hi.tries = 0);
+  }
+
+  if (img.__phase === "hi") {
+    img.classList.add("__hydrated");
+    img.classList.remove("is-lqip");
+    img.__hydrated = true;
+  }
+};
 
   img.__onErr = onError;
   img.__onLoad = onLoad;
@@ -362,6 +425,13 @@ function unobserveImage(img) {
   delete img.__onErr; delete img.__onLoad;
   try { img.removeAttribute('srcset'); } catch {}
   try { delete img.__data; } catch {}
+  try {
+    if (img.__retryState) {
+      clearTimeout(img.__retryState.lq?.tid);
+      clearTimeout(img.__retryState.hi?.tid);
+    }
+  } catch {}
+  delete img.__retryState;
 }
 
 if (!window.__dirRowsPageShowBound) {
@@ -503,6 +573,7 @@ function createRecommendationCard(item, serverId, aboveFold = false) {
             itemId: item.Id,
             serverId,
             preferBackdropIndex: backdropIndex,
+            originEl: hostEl?.querySelector?.('img.cardImage') || hostEl,
           });
         },
         onPlay: async () => {
@@ -556,7 +627,7 @@ function createDirectorHeroCard(item, serverId, directorName) {
 
   hero.innerHTML = `
     <div class="dir-row-hero-bg-wrap">
-      <img class="dir-row-hero-bg" src="${bg}" alt="${escapeHtml(item.Name)}" loading="lazy" decoding="async">
+      <img class="dir-row-hero-bg" alt="${escapeHtml(item.Name)}" loading="lazy" decoding="async">
     </div>
 
     <div class="dir-row-hero-inner">
@@ -608,6 +679,22 @@ function createDirectorHeroCard(item, serverId, directorName) {
   }
 
   hero.classList.add('active');
+
+  try {
+  const bgImg = hero.querySelector('.dir-row-hero-bg');
+  if (bgImg) {
+    const bgHQ = bg || PLACEHOLDER_URL;
+
+    hydrateBlurUp(bgImg, {
+      lqSrc: buildBackdropUrlLQ(item) || PLACEHOLDER_URL,
+      hqSrc: bgHQ,
+      hqSrcset: "",
+      fallback: PLACEHOLDER_URL
+    });
+  }
+} catch (e) {
+  console.warn("dir-row-hero-bg hydrate failed:", e);
+}
 
   try {
     const backdropImg = hero.querySelector('.dir-row-hero-bg');

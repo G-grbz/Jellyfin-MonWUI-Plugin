@@ -6,6 +6,7 @@ import { showNotification } from "./notification.js";
 import { readID3Tags } from "../lyrics/id3Reader.js";
 import { saveCurrentPlaylistToJellyfin } from "../core/playlist.js";
 import { fetchJellyfinPlaylists } from "../core/jellyfinPlaylists.js";
+import { withParams } from "../../jfUrl.js";
 
 const config = getConfig();
 const DEFAULT_ARTWORK = "url('./slider/src/images/defaultArt.png')";
@@ -483,25 +484,9 @@ async function loadTracks() {
     const token = getAuthToken();
     const userId = await window.ApiClient.getCurrentUserId();
 
-    let apiUrl;
-    switch (activeTab) {
-      case 'top':
-        apiUrl = `/Users/${userId}/Items?SortBy=PlayCount&SortOrder=Descending&IncludeItemTypes=Audio&Recursive=true&Limit=${trackLimit}`;
-        break;
-      case 'recent':
-        apiUrl = `/Users/${userId}/Items?SortBy=DatePlayed&SortOrder=Descending&IncludeItemTypes=Audio&Recursive=true&Limit=${trackLimit}`;
-        break;
-      case 'latest':
-        apiUrl = `/Users/${userId}/Items?SortBy=DateCreated&SortOrder=Descending&IncludeItemTypes=Audio&Recursive=true&Limit=${trackLimit}`;
-        break;
-      case 'favorites':
-        apiUrl = `/Users/${userId}/Items?Filters=IsFavorite&IncludeItemTypes=Audio&Recursive=true&SortBy=SortName&SortOrder=Ascending&Limit=${trackLimit}`;
-        break;
-      default:
-        apiUrl = `/Users/${userId}/Items?SortBy=PlayCount&SortOrder=Descending&IncludeItemTypes=Audio&Recursive=true&Limit=20`;
-    }
+    const { apiPath, params } = getApiForTab(activeTab, userId, trackLimit);
 
-    const response = await fetch(apiUrl, {
+    const response = await fetch(withParams(apiPath, params), {
       headers: { "X-Emby-Token": token }
     });
 
@@ -609,6 +594,42 @@ async function loadTracks() {
   }
 }
 
+function getApiForTab(tab, userId, limit) {
+  const base = `/Users/${userId}/Items`;
+  const common = {
+    IncludeItemTypes: "Audio",
+    Recursive: "true",
+  };
+
+  switch (tab) {
+    case "top":
+      return {
+        apiPath: base,
+        params: { ...common, SortBy: "PlayCount", SortOrder: "Descending", Limit: limit }
+      };
+    case "recent":
+      return {
+        apiPath: base,
+        params: { ...common, SortBy: "DatePlayed", SortOrder: "Descending", Limit: limit }
+      };
+    case "latest":
+      return {
+        apiPath: base,
+        params: { ...common, SortBy: "DateCreated", SortOrder: "Descending", Limit: limit }
+      };
+    case "favorites":
+      return {
+        apiPath: base,
+        params: { Filters: "IsFavorite", IncludeItemTypes: "Audio", Recursive: "true", SortBy: "SortName", SortOrder: "Ascending", Limit: limit }
+      };
+    default:
+      return {
+        apiPath: base,
+        params: { ...common, SortBy: "PlayCount", SortOrder: "Descending", Limit: 20 }
+      };
+  }
+}
+
 function formatDate(date) {
   const now = new Date();
   const diffInDays = Math.floor((now - date) / (1000 * 60 * 60 * 24));
@@ -636,7 +657,13 @@ async function loadTrackImage(track, element) {
     const imageTag = track.AlbumPrimaryImageTag || track.PrimaryImageTag;
     if (imageTag) {
       const imageId = track.AlbumId || track.Id;
-      const imageUrl = `/Items/${imageId}/Images/Primary?fillHeight=300&fillWidth=300&quality=80&tag=${imageTag}`;
+      const imageUrl = withParams(`/Items/${imageId}/Images/Primary`, {
+        fillHeight: 300,
+        fillWidth: 300,
+        quality: 80,
+        tag: imageTag,
+        api_key: getAuthToken(),
+      });
       element.style.backgroundImage = `url('${imageUrl}')`;
       return;
     }
@@ -663,6 +690,7 @@ function addAndPlayTrack(track) {
   } else {
     const newIndex = playlist.length;
     playlist.push(track);
+    musicPlayerState.originalPlaylist?.push?.(track);
     playTrack(newIndex);
   }
 }

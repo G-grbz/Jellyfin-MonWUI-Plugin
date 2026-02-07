@@ -1,18 +1,14 @@
 import { saveCredentials, saveApiKey, getAuthToken } from "./auth.js";
 import { getConfig } from "./modules/config.js";
+import { getLanguageLabels, getDefaultLanguage } from "./language/index.js";
 import { getCurrentIndex, setCurrentIndex } from "./modules/sliderState.js";
-import { startSlideTimer, stopSlideTimer } from "./modules/timer.js";
-import { ensureProgressBarExists, resetProgressBar } from "./modules/progressBar.js";
+import { startSlideTimer, stopSlideTimer, pauseSlideTimer, resumeSlideTimer } from "./modules/timer.js";
+import { ensureProgressBarExists, resetProgressBar, pauseProgressBar, resumeProgressBar } from "./modules/progressBar.js";
 import { createSlide } from "./modules/slideCreator.js";
 import { changeSlide, createDotNavigation, primePeakFirstPaint, updatePeakClasses } from "./modules/navigation.js";
 import { attachMouseEvents } from "./modules/events.js";
-import { fetchItemDetails as fetchItemDetailsNet, getSessionInfo, getAuthHeader, waitForAuthReadyStrict, isAuthReadyStrict, withServer } from "./modules/api.js";
-import {
-  cachedFetchJson,
-  cachedFetchText,
-  createCachedItemDetailsFetcher,
-  startLibraryDeltaWatcher
-} from "./modules/sliderCache.js";
+import { fetchItemDetails as fetchItemDetailsNet, getSessionInfo, getAuthHeader, waitForAuthReadyStrict, isAuthReadyStrict } from "./modules/api.js";
+import { cachedFetchJson, cachedFetchText, createCachedItemDetailsFetcher, startLibraryDeltaWatcher } from "./modules/sliderCache.js";
 import { forceHomeSectionsTop, forceSkinHeaderPointerEvents } from "./modules/positionOverrides.js";
 import { setupPauseScreen } from "./modules/pauseModul.js";
 import { updateHeaderUserAvatar, initAvatarSystem } from "./modules/userAvatar.js";
@@ -26,8 +22,118 @@ import { mountDirectorRowsLazy } from "./modules/directorRows.js";
 import { setupHoverForAllItems  } from "./modules/hoverTrailerModal.js";
 import { teardownAnimations } from "./modules/animations.js";
 import { mountRecentRowsLazy, cleanupRecentRows } from "./modules/recentRows.js";
+import { initLoadingScreen } from "./modules/loadingScreen.js";
+import { withServer } from "./modules/jfUrl.js";
+import { initUserProfileAvatarPicker } from "./modules/avatarPicker.js";
+import { startGlobalDbFullscanScheduler } from "./modules/player/ui/artistModal.js";
 
 const idle = window.requestIdleCallback || ((cb) => setTimeout(cb, 0));
+
+function installHomeTabSliderOnlyGate() {
+  if (window.__homeTabSliderOnlyGateInstalled) return;
+  window.__homeTabSliderOnlyGateInstalled = true;
+
+  const setFlagsFromConfig = () => {
+    try {
+      const cfg = (typeof getConfig === "function" ? getConfig() : {}) || {};
+      const on = !!cfg.onlyShowSliderOnHomeTab;
+      document.documentElement.dataset.jmsHomeSliderOnly = on ? "1" : "0";
+      return on;
+    } catch {
+      document.documentElement.dataset.jmsHomeSliderOnly = "0";
+      return false;
+    }
+  };
+
+  function isHomeTabActive() {
+  const homeBtn =
+    document.querySelector('button.emby-tab-button[data-index="0"]') ||
+    document.querySelector('button.emby-tab-button');
+
+  if (!homeBtn) {
+    return !!document.querySelector("#indexPage:not(.hide), #homePage:not(.hide)");
+  }
+
+  return (
+    homeBtn.classList.contains("emby-tab-button-active") ||
+    homeBtn.classList.contains("active") ||
+    homeBtn.getAttribute("aria-selected") === "true"
+  );
+}
+
+  function apply() {
+    const onlyHome = setFlagsFromConfig();
+    if (!onlyHome) {
+      document.documentElement.dataset.jmsHomeTabActive = "1";
+      if (window.__jmsHomeTabPaused) {
+        window.__jmsHomeTabPaused = false;
+        try { resumeSlideTimer?.(); } catch {}
+        try { resumeProgressBar?.(); } catch {}
+      }
+      return;
+    }
+
+    const active = isHomeTabActive();
+    document.documentElement.dataset.jmsHomeTabActive = active ? "1" : "0";
+
+    if (typeof isSliderEnabled === "function" && !isSliderEnabled()) return;
+
+    if (!active) {
+      if (!window.__jmsHomeTabPaused) {
+        window.__jmsHomeTabPaused = true;
+        try { pauseSlideTimer?.(); } catch {}
+        try { pauseProgressBar?.(); } catch {}
+      }
+    } else {
+      if (window.__jmsHomeTabPaused) {
+        window.__jmsHomeTabPaused = false;
+        try { resumeProgressBar?.(); } catch {}
+        try { resumeSlideTimer?.(); } catch {}
+      }
+    }
+  }
+
+  apply();
+
+  const mo = new MutationObserver(() => apply());
+  mo.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["class"] });
+
+  const tick = () => apply();
+  window.addEventListener("popstate", tick);
+  window.addEventListener("pageshow", tick);
+  window.addEventListener("focus", tick);
+
+  window.__cleanupHomeTabSliderOnlyGate = () => {
+    try { mo.disconnect(); } catch {}
+    window.removeEventListener("popstate", tick);
+    window.removeEventListener("pageshow", tick);
+    window.removeEventListener("focus", tick);
+  };
+}
+
+function __getLabelsSafe() {
+  try {
+    const lang = (typeof getDefaultLanguage === "function" ? getDefaultLanguage() : null) || "tur";
+    return (typeof getLanguageLabels === "function" ? getLanguageLabels(lang) : {}) || {};
+  } catch {
+    return {};
+  }
+}
+
+function __pickFirstLabel(labels, keys, fallback) {
+  for (const k of keys) {
+    const v = labels?.[k];
+    if (typeof v === "string" && v.trim()) return v;
+  }
+  return fallback;
+}
+
+function L(keyOrKeys, fallback) {
+  const labels = __getLabelsSafe();
+  const keys = Array.isArray(keyOrKeys) ? keyOrKeys : [keyOrKeys];
+  return __pickFirstLabel(labels, keys, fallback);
+}
+
 window.__totalSlidesPlanned = 0;
 window.__slidesCreated = 0;
 window.__cycleStartAt = 0;
@@ -41,7 +147,19 @@ window.__peakBooting = true;
   const criticalCSS = `
     html[data-jms-notif="0"] .skinHeader .headerRight #jfNotifBtn { display:none !important; }
     .skinHeader .headerRight #jfNotifBtn { order: -9999; }
-   `;
+
+    html[data-jms-home-slider-only="1"][data-jms-home-tab-active="0"] #slides-container,
+    html[data-jms-home-slider-only="1"][data-jms-home-tab-active="0"] .slide-progress-bar,
+    html[data-jms-home-slider-only="1"][data-jms-home-tab-active="0"] .slide-progress-seconds,
+    html[data-jms-home-slider-only="1"][data-jms-home-tab-active="0"] .dot-navigation-container {
+      display: none !important;
+    }
+    html[data-jms-home-slider-only="1"][data-jms-home-tab-active="0"] .jms-slider,
+    html[data-jms-home-slider-only="1"][data-jms-home-tab-active="0"] .homeSlider,
+    html[data-jms-home-slider-only="1"][data-jms-home-tab-active="0"] #slides-container {
+      display: none !important;
+    }
+  `;
   if (!D.getElementById('jms-critical-css')) {
     const s = D.createElement('style');
     s.id = 'jms-critical-css';
@@ -85,6 +203,7 @@ window.__peakBooting = true;
   addCSS('/slider/src/studioHubs.css', 'jms-css-studiohubs');
   addCSS('/slider/src/detailsModal.css', 'jms-css-detailsModal');
   addCSS('/slider/src/studioHubsMini.css', 'jms-css-studioHubsMini');
+  addCSS('/slider/src/avatarPicker.css', 'jms-css-avatarPicker');
 
   const vmap = {
     peakslider: '/slider/src/peakslider.css',
@@ -233,9 +352,17 @@ function isPlannedLastIndex(idx) {
 }
 
 async function scheduleSliderRebuild(reason = "cycle-complete") {
+  if (!isSliderEnabled()) return;
   if (window.__rebuildingSlider) return;
   window.__rebuildingSlider = true;
   try {
+    try {
+      window.__jmsLoadingScreen?.show?.();
+      window.__jmsLoadingScreen?.updateProgress?.(
+        5,
+        L(["loadingMsgRebuilding", "loadingRebuilding"], "Yeniden hazırlanıyor...")
+      );
+    } catch {}
     clearCycleArm();
     window.__cycleExpired = false;
     try { teardownAnimations(); } catch {}
@@ -308,6 +435,16 @@ function getSlideDurationMs() {
 })();
 
 const config = getConfig();
+
+function isSliderEnabled() {
+  try {
+    const cfg = (typeof getConfig === "function" ? getConfig() : config) || {};
+    return cfg.enableSlider !== false;
+  } catch {
+    return true;
+  }
+}
+
 let cleanupPauseOverlay = null;
 let pauseBooted = false;
 let navObsBooted = false;
@@ -367,6 +504,9 @@ window.cleanupModalObserver = cleanupModalObserver;
 
 forceSkinHeaderPointerEvents();
 forceHomeSectionsTop();
+const cleanupAvatarPicker = initUserProfileAvatarPicker();
+window.cleanupAvatarPicker = cleanupAvatarPicker;
+
 const NOTIF_ENABLED = !!(config && config.enableNotifications);
  forcejfNotifBtnPointerEvents();
  updateHeaderUserAvatar();
@@ -880,6 +1020,14 @@ function warmUpcomingBackdrops(count = 3) {
 }
 
 export async function slidesInit() {
+  if (!isSliderEnabled()) {
+    console.debug("[JMS] slidesInit() skipped (slider disabled)");
+    try { window.__jmsLoadingScreen?.hide?.(); } catch {}
+    return;
+  }
+  window.__jmsLoadingScreen?.updateProgress(
+    10, L(["loadingMsgAuthWarmup", "loadingMsgPreparingSession"], "Kullanıcı oturumu hazırlanıyor...")
+  );
   if (window.__slidesInitRunning) {
     console.debug("[JMS] slidesInit() skipped (already running)");
     return;
@@ -1270,15 +1418,15 @@ export async function slidesInit() {
               const selectedItemsFromShuffle = allItems.filter((item) => pickedIds.includes(item.Id));
               selectedItems.push(...selectedItemsFromShuffle);
               if (!window.__shuffleSavedThisLoad) {
-  const newHistory = Array.from(new Set([...history, ...pickedIds])).slice(-shuffleSeedLimit);
-  try {
-    saveShuffleHistory(userId, newHistory);
-    console.debug("[JMS] shuffle history kaydedildi:", userId, newHistory.length);
-  } catch (e) {
-    console.warn("[JMS] shuffle history kaydedilemedi:", e);
-  }
-  window.__shuffleSavedThisLoad = true;
-}
+                const newHistory = Array.from(new Set([...history, ...pickedIds])).slice(-shuffleSeedLimit);
+                try {
+                  saveShuffleHistory(userId, newHistory);
+                  console.debug("[JMS] shuffle history kaydedildi:", userId, newHistory.length);
+                } catch (e) {
+                  console.warn("[JMS] shuffle history kaydedilemedi:", e);
+                }
+                window.__shuffleSavedThisLoad = true;
+              }
             }
           } else {
             selectedItems.push(...allItems.slice(0, remainingSlots));
@@ -1370,6 +1518,13 @@ export async function slidesInit() {
   } finally {
     window.sliderResetInProgress = false;
     window.__slidesInitRunning = false;
+    window.__jmsLoadingScreen?.updateProgress(
+      50, L(["loadingMsgLoadingContent", "loadingMsgContent"], "İçerikler yükleniyor...")
+    );
+
+    window.__jmsLoadingScreen?.updateProgress(
+      90, L(["loadingMsgPreparingSlider", "loadingMsgSlider"], "Slider hazırlanıyor...")
+    );
   }
 }
 
@@ -1599,6 +1754,37 @@ function setupNavigationObserver() {
 }
 
 function initializeSliderOnHome() {
+  try { window.__jmsHomeTabPaused = false; } catch {}
+
+  if (!isSliderEnabled()) {
+    try { cleanupSlider(); } catch {}
+    try { stopSlideTimer?.(); } catch {}
+    try { clearCycleArm(); } catch {}
+    try { window.__jmsLoadingScreen?.hide?.(); } catch {}
+
+    try {
+      const cfg = (typeof getConfig === 'function' ? getConfig() : {}) || {};
+
+      if (cfg.enablePersonalRecommendations || cfg.enableGenreHubs) {
+        renderPersonalRecommendations();
+      }
+      if (cfg.enableDirectorRows && typeof mountDirectorRowsLazy === 'function') {
+        mountDirectorRowsLazy();
+      }
+      if (cfg.enableRecentRows && typeof mountRecentRowsLazy === 'function') {
+        mountRecentRowsLazy();
+      }
+      if (cfg.enableStudioHubs) {
+        ensureStudioHubsMounted({ eager: true });
+      }
+    } catch {}
+
+    return;
+  }
+
+  window.__jmsLoadingScreen?.updateProgress(
+    20, L(["loadingMsgBootHome", "loadingMsgHome"], "Ana sayfa başlatılıyor...")
+  );
   const hasContainer = !!document.querySelector('#indexPage:not(.hide) #slides-container, #homePage:not(.hide) #slides-container');
   const willEarlyReturn = (window.__initOnHomeOnce && hasContainer);
 
@@ -1748,9 +1934,16 @@ function observeWhenHomeReady(cb, maxMs = 20000) {
 
 (async function robustBoot() {
   try {
+    const loadingScreen = initLoadingScreen();
+    document.addEventListener("jms:all-slides-ready", () => {
+      try { window.__jmsLoadingScreen?.hide?.(); } catch {}
+    }, { once: true });
     try {
       await waitAuthWarmupFallback(1000);
     } catch {}
+    try {
+      startGlobalDbFullscanScheduler();
+    } catch (e) { console.warn("startGlobalDbFullscanScheduler hata:", e); }
 
     const fastIndex = document.querySelector("#indexPage:not(.hide), #homePage:not(.hide)");
     if (fastIndex) {
@@ -1795,6 +1988,7 @@ function observeWhenHomeReady(cb, maxMs = 20000) {
     });
 
     setupNavigationObserver();
+    installHomeTabSliderOnlyGate();
     idle(() => { if (config.enableStudioHubs) ensureStudioHubsMounted(); });
   } catch (e) {
     console.warn("robustBoot (fast) hata:", e);

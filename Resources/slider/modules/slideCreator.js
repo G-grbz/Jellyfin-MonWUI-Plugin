@@ -1,9 +1,10 @@
 import { getYoutubeEmbedUrl, getProviderUrl, isValidUrl, createTrailerIframe, debounce, getHighResImageUrls, prefetchImages, getHighestQualityBackdropIndex, createImageWarmQueue } from "./utils.js";
-import { updateFavoriteStatus, updatePlayedStatus, fetchItemDetails, goToDetailsPage, withServer, withServerSrcset } from "./api.js";
+import { updateFavoriteStatus, updatePlayedStatus, fetchItemDetails, goToDetailsPage } from "./api.js";
 import { getConfig } from "./config.js";
 import { getLanguageLabels, getDefaultLanguage } from "../language/index.js";
 import { createSlidesContainer, createGradientOverlay, createHorizontalGradientOverlay, createLogoContainer, createStatusContainer, createActorSlider, createInfoContainer, createDirectorContainer, createRatingContainer, createLanguageContainer, createMetaContainer, createMainContentContainer, createPlotContainer, createTitleContainer } from "./containerUtils.js";
 import { createButtons, createProviderContainer } from './buttons.js';
+import { withServer, withServerSrcset } from "./jfUrl.js";
 
 const S = (u) => withServer(u);
 const config = getConfig();

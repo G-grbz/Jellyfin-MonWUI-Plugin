@@ -3,6 +3,8 @@ import { getConfig } from "../../config.js";
 import { getAuthToken } from "../core/auth.js";
 import { showNotification } from "../ui/notification.js";
 import { refreshPlaylist } from "../core/playlist.js";
+import { withServer, withParams } from "../../jfUrl.js";
+
 
 const config = getConfig();
 const PLACEHOLDER_IMAGE = "./slider/src/images/defaultArt.png";
@@ -23,11 +25,13 @@ export async function showGenreFilterModal() {
     fetchCtrl = new AbortController();
 
     const response = await fetch(
-      `/MusicGenres?Recursive=true&IncludeItemTypes=MusicAlbum,Audio&Fields=PrimaryImageAspectRatio,ImageTags&EnableTotalRecordCount=false`,
-      {
-        headers: { "X-Emby-Token": token },
-        signal: fetchCtrl.signal,
-      }
+      withParams(`/MusicGenres`, {
+        Recursive: "true",
+        IncludeItemTypes: "MusicAlbum,Audio",
+        Fields: "PrimaryImageAspectRatio,ImageTags",
+        EnableTotalRecordCount: "false",
+      }),
+      { headers: { "X-Emby-Token": token }, signal: fetchCtrl.signal }
     );
 
     if (!response.ok) throw new Error("Türler alınamadı");
@@ -148,7 +152,12 @@ function buildModal(genres, token) {
     const img = document.createElement("img");
     img.className = "genre-image";
     if (genre.ImageTags && genre.ImageTags.Primary) {
-      img.src = `/Items/${genre.Id}/Images/Primary?tag=${genre.ImageTags.Primary}&quality=90&maxHeight=80${apiKeyParam}`;
+      img.src = withParams(`/Items/${genre.Id}/Images/Primary`, {
+        tag: genre.ImageTags.Primary,
+        quality: 90,
+        maxHeight: 80,
+        api_key: token,
+      });
       img.onerror = () => {
         img.src = PLACEHOLDER_IMAGE;
       };

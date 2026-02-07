@@ -1,5 +1,6 @@
 import { getConfig, getServerAddress } from "./config.js";
 import { clearCredentials, getWebClientHints, getStoredServerBase } from "../auth.js";
+import { withServer, withServerSrcset, invalidateServerBaseCache, resolveServerBase } from "./jfUrl.js";
 
 const config = getConfig();
 const SERVER_ADDR_KEY = "jf_serverAddress";
@@ -8,7 +9,6 @@ const dotGenreCache = new Map();
 const CACHE_TTL = 24 * 60 * 60 * 1000;
 const USER_ID_KEY = "jf_userId";
 const DEVICE_ID_KEY = "jf_api_deviceId";
-const SERVER_BASE_MICRO_CACHE_MS = 1500;
 const notFoundTombstone = new Map();
 const NOTFOUND_TTL = 30 * 60 * 1000;
 const MAX_ITEM_CACHE = 600;
@@ -16,8 +16,6 @@ const MAX_DOT_GENRE_CACHE = 1200;
 const MAX_PREVIEW_CACHE = 200;
 const MAX_TOMBSTONES = 2000;
 
-let __serverBaseCache = "";
-let __serverBaseCacheAt = 0;
 let __lastAuthSnapshot = null;
 let __authWarmupStart = Date.now();
 const AUTH_WARMUP_MS = 15000;
@@ -116,25 +114,6 @@ function __qbTryPrimeQualityFromPayload(payload) {
   } catch {}
 }
 
-function normalizeServerBase(s) {
-  if (!s || typeof s !== "string") return "";
-  const base = s.trim().replace(/\/+$/, "");
-  return base;
-}
-
-function isAbsoluteUrl(u) {
-  return typeof u === "string" && /^https?:\/\//i.test(u);
-}
-
-function joinServerUrl(base, pathOrUrl) {
-  if (!pathOrUrl) return pathOrUrl;
-  if (isAbsoluteUrl(pathOrUrl)) return pathOrUrl;
-  const baseNorm = normalizeServerBase(base);
-  if (!baseNorm) return pathOrUrl;
-  const p = String(pathOrUrl);
-  return p.startsWith("/") ? `${baseNorm}${p}` : `${baseNorm}/${p}`;
-}
-
 function readStoredServerBase() {
   try {
     return normalizeServerBase(
@@ -152,70 +131,8 @@ async function ensureAuthReadyFor(url, ms = 2500) {
   return isAuthReadyStrict();
 }
 
-function persistServerBase(base) {
-  const b = normalizeServerBase(base);
-  if (!b) return;
-  try { localStorage.setItem(SERVER_ADDR_KEY, b); } catch {}
-  try { sessionStorage.setItem(SERVER_ADDR_KEY, b); } catch {}
-}
-
-function invalidateServerBaseCache() {
-  __serverBaseCache = "";
-  __serverBaseCacheAt = 0;
-}
-
-function getServerBaseCached() {
-  const now = Date.now();
-  if (__serverBaseCache && (now - __serverBaseCacheAt) < SERVER_BASE_MICRO_CACHE_MS) {
-    return __serverBaseCache;
-  }
-  __serverBaseCache = getServerBase();
-  __serverBaseCacheAt = now;
-  return __serverBaseCache;
-}
-
 export function getServerBase() {
-  try {
-    const stored = getStoredServerBase();
-    if (stored) return stored;
-  } catch {}
-
-  try {
-    const api = (typeof window !== "undefined" && window.ApiClient) ? window.ApiClient : null;
-    const apiBase =
-      (api && typeof api.serverAddress === "function" ? api.serverAddress()
-      : (api && typeof api.serverAddress === "string" ? api.serverAddress : "")) || "";
-    const fromApi = normalizeServerBase(apiBase);
-    if (fromApi) { persistServerBase(fromApi); return fromApi; }
-  } catch {}
-
-  try {
-    const cfg = normalizeServerBase(getServerAddress?.() || "");
-    if (cfg) { persistServerBase(cfg); return cfg; }
-  } catch {}
-
-  return readStoredServerBase();
-}
-
-export function withServer(url) {
-  return joinServerUrl(getServerBaseCached(), url);
-}
-
-export function withServerSrcset(srcset = "") {
-  if (!srcset || typeof srcset !== "string") return "";
-  return srcset
-    .split(",")
-    .map(part => {
-      const p = part.trim();
-      if (!p) return "";
-      const m = p.match(/^(\S+)(\s+.+)?$/);
-      if (!m) return p;
-      const url = m[1];
-      const desc = m[2] || "";
-      return `${withServer(url)}${desc}`;
-    })
-    .filter(Boolean)
-    .join(", ");
+  return resolveServerBase({ getServerAddress });
 }
 
 export function getEmbyHeaders(extra = {}) {
@@ -262,8 +179,10 @@ function dbgAuth(tag, url="") {
     const deviceId = readApiClientDeviceId() || "web-client";
     const serverId = api._serverInfo?.SystemId || api._serverInfo?.Id || null;
     try {
-      const base = (typeof api.serverAddress === "function") ? api.serverAddress() : "";
-      if (base) persistServerBase(base);
+      const baseFromLoc = normalizeServerBase(getBaseFromLocation());
+      const baseFromApi = normalizeServerBase((typeof api.serverAddress === "function") ? api.serverAddress() : "");
+      const pick = baseFromLoc || (baseFromApi && !isOriginOnly(baseFromApi) ? baseFromApi : "");
+      if (pick) persistServerBase(pick);
     } catch {}
     if (!userId) return;
     try { localStorage.setItem("persist_user_id", userId); } catch {}
@@ -1778,4 +1697,9 @@ export function hardSignOutCleanup() {
 
 export function clearLocalIdentityForDebug() {
   clearPersistedIdentity();
+}
+
+if (typeof window !== "undefined") {
+  window.__JMS_API = window.__JMS_API || {};
+  Object.assign(window.__JMS_API, { getSessionInfo, makeApiRequest });
 }

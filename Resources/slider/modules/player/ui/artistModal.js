@@ -10,8 +10,67 @@ import { updateNextTracks } from "./playerUI.js";
 import { shuffleArray } from "../utils/domUtils.js";
 import { showStatsModal } from "./statsModal.js";
 import { updatePlaylistModal } from "./playlistModal.js";
+import { withServer, withParams, getServerBaseCached } from "../../jfUrl.js";
+
+console.log("[artistModal] loaded", { hasMusicDB: !!musicDB, hasAddOrUpdate: !!musicDB?.addOrUpdateTracks });
+window.__musicDB = musicDB;
+let __artistModalClickLoggerAdded = false;
 
 const config = getConfig();
+
+let __syncPromise = null;
+const LAST_SYNC_MS_KEY = "gmmp_last_sync_ms";
+const LAST_FULLSCAN_MS_KEY = "gmmp_last_fullscan_ms";
+const FULLSCAN_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+let __fullscanSchedulerId = null;
+let __schedulerBooted = false;
+let __syncAbortCtrl = null;
+let __dbReadyOnce = null;
+
+async function ensureMusicDbReady() {
+  if (__dbReadyOnce) return __dbReadyOnce;
+
+  __dbReadyOnce = (async () => {
+    if (!musicDB) throw new Error("musicDB missing");
+    if (typeof musicDB.init === "function") await musicDB.init();
+    if (typeof musicDB.open === "function") await musicDB.open();
+    if (typeof musicDB.ready === "function") await musicDB.ready();
+    if (musicDB.dbPromise && typeof musicDB.dbPromise.then === "function") {
+      await musicDB.dbPromise;
+    }
+    return true;
+  })();
+
+  return __dbReadyOnce;
+}
+
+async function getValidJfCredsWithRetry({ tries = 8, delayMs = 250 } = {}) {
+  for (let i = 0; i < tries; i++) {
+    const creds = getJellyfinCredentials();
+    if (creds?.isValid) return creds;
+    await new Promise(r => setTimeout(r, delayMs));
+  }
+  return getJellyfinCredentials();
+}
+
+export function isDbSyncInProgress() {
+  return !!__syncPromise;
+}
+
+function getLastSyncMs() {
+  return Number(localStorage.getItem(LAST_SYNC_MS_KEY) || "0");
+}
+function setLastSyncMs(ms) {
+  localStorage.setItem(LAST_SYNC_MS_KEY, String(ms || Date.now()));
+}
+function getLastFullscanMs() {
+  return Number(localStorage.getItem(LAST_FULLSCAN_MS_KEY) || "0");
+}
+function setLastFullscanMs(ms) {
+  localStorage.setItem(LAST_FULLSCAN_MS_KEY, String(ms || Date.now()));
+}
+
 const DEFAULT_ARTWORK = "url('./slider/src/images/defaultArt.png')";
 const SEARCH_DEBOUNCE_TIME = 300;
 const TRACKS_PER_PAGE = config.sarkilimit;
@@ -58,7 +117,14 @@ function abortAllFetches() {
   }
   activeFetchControllers.clear();
 }
+
+function abortSyncFetch() {
+  try { __syncAbortCtrl?.abort?.(); } catch {}
+  __syncAbortCtrl = null;
+}
+
 function addFetchController(ctrl) { activeFetchControllers.add(ctrl); }
+
 function settleFetchController(ctrl) { activeFetchControllers.delete(ctrl); }
 
 function clearSearchTimer() {
@@ -66,6 +132,13 @@ function clearSearchTimer() {
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = null;
   }
+}
+
+function openJfDetails(artistId) {
+  if (!artistId) return;
+  const qs = new URLSearchParams({ id: artistId }).toString();
+  const url = withServer(`/web/#/details?${qs}`);
+  window.open(url, "_blank");
 }
 
 function groupTracksByAlbum(tracks) {
@@ -129,22 +202,49 @@ function sortTracks(tracks, sortOption) {
 
 export function getJellyfinCredentials() {
   try {
-    const credentials = JSON.parse(sessionStorage.getItem("json-credentials"));
-    let serverUrl =
+    const raw =
+      sessionStorage.getItem("json-credentials") ||
+      localStorage.getItem("json-credentials");
+    const credentials = raw ? JSON.parse(raw) : null;
+    let serverUrl = (
       credentials?.Servers?.[0]?.RemoteAddress ||
       credentials?.Servers?.[0]?.LocalAddress ||
-      credentials?.Servers?.[0]?.Url;
+      credentials?.Servers?.[0]?.Url ||
+      window.location.origin
+    );
+
     if (serverUrl) {
       serverUrl = serverUrl.replace(/\/$/, "");
       if (!serverUrl.startsWith("http")) {
         serverUrl = window.location.protocol + "//" + serverUrl;
       }
     }
+
+    const api = (typeof window !== "undefined" && window.ApiClient) ? window.ApiClient : null;
+
+    const userId =
+      credentials?.Servers?.[0]?.UserId ||
+      (typeof api?.getCurrentUserId === "function" ? api.getCurrentUserId() : null) ||
+      localStorage.getItem("userId") ||
+      sessionStorage.getItem("userId") ||
+      localStorage.getItem("emby-userid") ||
+      sessionStorage.getItem("emby-userid") ||
+      localStorage.getItem("jellyfin-userid") ||
+      sessionStorage.getItem("jellyfin-userid") ||
+      null;
+
+    const apiKey =
+      getAuthToken() ||
+      sessionStorage.getItem("api-key") ||
+      localStorage.getItem("api-key") ||
+      credentials?.Servers?.[0]?.AccessToken ||
+      null;
+
     return {
       serverUrl,
-      userId: credentials?.Servers?.[0]?.UserId,
-      apiKey: getAuthToken(),
-      isValid: !!serverUrl && !!credentials?.Servers?.[0]?.UserId && !!getAuthToken(),
+      userId,
+      apiKey,
+      isValid: !!userId && !!apiKey,
     };
   } catch {
     return { isValid: false };
@@ -159,6 +259,24 @@ export function createArtistModal() {
   artistModal.className = "modal hidden";
   artistModal.setAttribute("aria-hidden", "true");
 
+  if (!__artistModalClickLoggerAdded) {
+    __artistModalClickLoggerAdded = true;
+    document.addEventListener("click", (e) => {
+      const modal = document.getElementById("artist-modal");
+      if (!modal) return;
+      if (!e.target || !modal.contains(e.target)) return;
+      const t = e.target;
+      const fa = t.closest?.(".modal-fetch-all-music-btn");
+      const syn = t.closest?.(".modal-fetch-new-music-btn");
+      const cls = (t.className && String(t.className)) || t.tagName;
+      console.log("[artistModal click]", {
+        target: cls,
+        hitFetchAll: !!fa,
+        hitSync: !!syn,
+      });
+    }, true);
+  }
+
   const modalContent = document.createElement("div");
   modalContent.className = "modal-content modal-artist-content";
 
@@ -169,13 +287,20 @@ export function createArtistModal() {
   fetchAllMusicBtn.className = "modal-fetch-all-music-btn";
   fetchAllMusicBtn.innerHTML = '<i class="fa-solid fa-music-magnifying-glass"></i>';
   fetchAllMusicBtn.title = config.languageLabels.fetchAllMusic || "Tüm müzikleri getir";
-  fetchAllMusicBtn.onclick = loadAllMusicFromJellyfin;
+  fetchAllMusicBtn.onclick = (e) => {
+    try {
+      currentModalArtist = { name: (config.languageLabels.allMusic || "Tüm Müzikler"), id: null };
+      const nameEl = document.querySelector("#artist-modal .modal-artist-name");
+      if (nameEl) nameEl.textContent = currentModalArtist.name;
+    } catch {}
+    return loadAllMusicFromJellyfin({ forceFetch: false });
+  };
 
   const fetchNewMusicBtn = document.createElement("div");
   fetchNewMusicBtn.className = "modal-fetch-new-music-btn";
   fetchNewMusicBtn.innerHTML = '<i class="fa-solid fa-arrows-rotate"></i>';
   fetchNewMusicBtn.title = config.languageLabels.syncDB || "Veri tabanını senkronize et";
-  fetchNewMusicBtn.onclick = async () => {
+  fetchNewMusicBtn.onclick = async (e) => {
     fetchNewMusicBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
     showNotification(
       `<i class="fas fa-database"></i> ${config.languageLabels.syncStarted || "Senkronizasyon başlatıldı..."}`,
@@ -183,14 +308,14 @@ export function createArtistModal() {
       "db"
     );
     try {
-      await checkForNewMusic();
+      await syncDbFullscan({ force: true });
       showNotification(
         `<i class="fas fa-check-circle"></i> ${config.languageLabels.syncCompleted || "Senkronizasyon tamamlandı"}`,
         3000,
         "db"
       );
     } catch (error) {
-      console.error("Senkronizasyon hatası:", error);
+      if (error?.name !== "AbortError") console.error("Senkronizasyon hatası:", error);
     } finally {
       fetchNewMusicBtn.innerHTML = '<i class="fa-solid fa-arrows-rotate"></i>';
     }
@@ -233,11 +358,13 @@ export function createArtistModal() {
     e.stopPropagation();
     const currentTrack = musicPlayerState.playlist?.[musicPlayerState.currentIndex];
     if (!currentTrack) return;
+
     const artistId =
       currentTrack.AlbumArtistId ||
       currentTrack.ArtistItems?.[0]?.Id ||
       currentTrack.ArtistId;
-    if (artistId) window.open(`/web/#/details?id=${artistId}`, "_blank");
+
+    openJfDetails(artistId);
   });
 
   const artistInfo = document.createElement("div");
@@ -277,14 +404,16 @@ export function createArtistModal() {
   artistName.className = "modal-artist-name";
   artistName.textContent = "";
   artistName.addEventListener("click", (e) => {
-    e.stopPropagation();
+  e.stopPropagation();
     const currentTrack = musicPlayerState.playlist?.[musicPlayerState.currentIndex];
     if (!currentTrack) return;
+
     const artistId =
       currentTrack.AlbumArtistId ||
       currentTrack.ArtistItems?.[0]?.Id ||
       currentTrack.ArtistId;
-    if (artistId) window.open(`/web/#/details?id=${artistId}`, "_blank");
+
+    openJfDetails(artistId);
   });
 
   const artistMeta = document.createElement("div");
@@ -364,7 +493,249 @@ export function destroyArtistModal() {
   artistModal = null;
 }
 
-async function loadAllMusicFromJellyfin() {
+export async function syncDbIncremental({ force = false } = {}) {
+  if (__syncPromise) return __syncPromise;
+
+  __syncPromise = (async () => {
+    abortSyncFetch();
+
+    await ensureMusicDbReady();
+
+    let dbEmpty = false;
+    try {
+      const existing = await musicDB.getAllTracks?.();
+      dbEmpty = !existing || existing.length === 0;
+    } catch {
+      dbEmpty = true;
+    }
+    const { userId, apiKey, isValid } = await getValidJfCredsWithRetry();
+    if (!isValid) return { mode: "incremental", addedOrUpdated: 0, skipped: "no-credentials" };
+
+    const lastSyncMs = (force || dbEmpty) ? 0 : getLastSyncMs();
+    let newestSeenMs = lastSyncMs;
+
+    const LIMIT = 500;
+    let startIndex = 0;
+    let totalAddedOrUpdated = 0;
+
+    while (true) {
+      const params = new URLSearchParams({
+        Recursive: true,
+        IncludeItemTypes: "Audio",
+        Fields: "PrimaryImageAspectRatio,MediaSources,AlbumArtist,Album,Artists,Genres,DateCreated",
+        SortBy: "DateCreated",
+        SortOrder: "Descending",
+        Limit: String(LIMIT),
+        StartIndex: String(startIndex),
+        api_key: apiKey,
+      });
+
+      const ctrl = new AbortController();
+      __syncAbortCtrl = ctrl;
+      const resp = await fetch(
+        withParams(`/Users/${userId}/Items`, Object.fromEntries(params.entries())),
+        {
+          signal: ctrl.signal,
+          headers: {
+            "X-Emby-Token": apiKey,
+            "X-MediaBrowser-Token": apiKey,
+            "Accept": "application/json",
+          },
+        }
+      ).finally(() => {
+        if (__syncAbortCtrl === ctrl) __syncAbortCtrl = null;
+      });
+
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const items = data.Items || [];
+      if (!items.length) break;
+
+      const fresh = [];
+      let hitOld = false;
+
+      for (const it of items) {
+        const ms = Date.parse(it.DateCreated || "") || 0;
+        if (ms > newestSeenMs) newestSeenMs = ms;
+
+        if (!force && lastSyncMs && ms <= lastSyncMs) {
+          hitOld = true;
+          break;
+        }
+        fresh.push(it);
+      }
+
+      if (fresh.length) {
+        await musicDB.addOrUpdateTracks(fresh);
+        totalAddedOrUpdated += fresh.length;
+      }
+
+      if (hitOld) break;
+      startIndex += items.length;
+      if (items.length < LIMIT) break;
+    }
+
+    setLastSyncMs(newestSeenMs || Date.now());
+    const modalEl = document.getElementById("artist-modal");
+    if (modalEl && !modalEl.classList.contains("hidden")) {
+      const nameEl = modalEl.querySelector(".modal-artist-name");
+      const name = nameEl?.textContent;
+      if (name === (config.languageLabels.allMusic || "Tüm Müzikler")) {
+        loadAllMusicFromJellyfin();
+      }
+    }
+
+    return { mode: "incremental", addedOrUpdated: totalAddedOrUpdated };
+  })();
+
+  try {
+    return await __syncPromise;
+  } finally {
+    __syncPromise = null;
+  }
+}
+
+export async function syncDbFullscan({ force = false } = {}) {
+  if (__syncPromise) return __syncPromise;
+
+  __syncPromise = (async () => {
+    abortSyncFetch();
+
+    await ensureMusicDbReady();
+
+    const { userId, apiKey, isValid } = await getValidJfCredsWithRetry();
+    if (!isValid) return { mode: "fullscan", added: 0, deleted: 0, skipped: "no-credentials" };
+
+    const lastFs = getLastFullscanMs();
+    const now = Date.now();
+    if (!force && lastFs && (now - lastFs) < FULLSCAN_INTERVAL_MS) {
+      return { mode: "fullscan", skipped: true };
+    }
+
+    const params = new URLSearchParams({
+      Recursive: true,
+      IncludeItemTypes: "Audio",
+      Fields: "PrimaryImageAspectRatio,MediaSources,AlbumArtist,Album,Artists,Genres,DateCreated",
+      Limit: 20000,
+      SortBy: "DateCreated",
+      SortOrder: "Ascending",
+      api_key: apiKey,
+    });
+
+    const ctrl = new AbortController();
+    __syncAbortCtrl = ctrl;
+
+    const resp = await fetch(
+      withParams(`/Users/${userId}/Items`, Object.fromEntries(params.entries())),
+      {
+        signal: ctrl.signal,
+        headers: {
+          "X-Emby-Token": apiKey,
+          "X-MediaBrowser-Token": apiKey,
+          "Accept": "application/json",
+        },
+      }
+    ).catch((e) => {
+      if (e?.name === "AbortError") return null;
+      throw e;
+    }).finally(() => {
+      if (__syncAbortCtrl === ctrl) __syncAbortCtrl = null;
+    });
+
+    if (!resp) return { mode: "fullscan", aborted: true };
+
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    const currentTracks = data.Items || [];
+    const currentIds = new Set(currentTracks.map((i) => i.Id));
+
+    const dbTracks = await musicDB.getAllTracks();
+    const dbIds = new Set(dbTracks.map((t) => t.Id));
+
+    const deleted = [];
+    dbIds.forEach((id) => { if (!currentIds.has(id)) deleted.push(id); });
+
+    const added = [];
+    currentIds.forEach((id) => { if (!dbIds.has(id)) added.push(id); });
+
+    if (deleted.length) await musicDB.deleteTracks(deleted);
+    if (currentTracks.length) await musicDB.addOrUpdateTracks(currentTracks);
+
+    setLastFullscanMs(Date.now());
+    setLastSyncMs(Date.now());
+
+    if (added.length) {
+      showNotification(
+        `<i class="fas fa-database"></i> ${added.length} ${config.languageLabels.dbnewTracksAdded || "yeni şarkı eklendi"}`,
+        4000,
+        "db"
+      );
+    }
+    if (deleted.length) {
+      showNotification(
+        `<i class="fas fa-database"></i> ${deleted.length} ${config.languageLabels.dbtracksRemoved || "şarkı silindi"}`,
+        4000,
+        "db"
+      );
+    }
+
+    const modalEl = document.getElementById("artist-modal");
+    if (modalEl && !modalEl.classList.contains("hidden")) {
+      const nameEl = modalEl.querySelector(".modal-artist-name");
+      const name = nameEl?.textContent;
+      if (name === (config.languageLabels.allMusic || "Tüm Müzikler")) {
+        loadAllMusicFromJellyfin();
+      } else {
+        const currentTrack = musicPlayerState.playlist?.[musicPlayerState.currentIndex];
+        const artistId = currentTrack?.ArtistItems?.[0]?.Id ||
+          currentTrack?.AlbumArtistId || currentTrack?.ArtistId || null;
+        loadArtistTracks(name, artistId);
+      }
+    }
+
+    return { mode: "fullscan", added: added.length, deleted: deleted.length };
+  })();
+
+  try {
+    return await __syncPromise;
+  } finally {
+    __syncPromise = null;
+  }
+}
+
+export async function maybeRunFullscanIfDue() {
+  const lastFs = getLastFullscanMs();
+  const now = Date.now();
+  if (lastFs && (now - lastFs) < FULLSCAN_INTERVAL_MS) return { skipped: true };
+  return syncDbFullscan({ force: false });
+}
+
+export function startGlobalDbFullscanScheduler() {
+  if (__schedulerBooted) return;
+  __schedulerBooted = true;
+
+  const tick = async () => {
+    try {
+      const { isValid } = getJellyfinCredentials();
+      if (!isValid) return;
+      await maybeRunFullscanIfDue();
+    } catch (e) {
+      if (e?.name !== "AbortError") console.warn("[DB scheduler] fullscan tick error:", e);
+    }
+  };
+
+  setTimeout(() => tick(), 4000);
+
+  __fullscanSchedulerId = setInterval(() => tick(), FULLSCAN_INTERVAL_MS);
+
+  window.addEventListener("focus", () => tick(), { passive: true });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) tick();
+  }, { passive: true });
+}
+
+async function loadAllMusicFromJellyfin({ forceFetch = false } = {}) {
+  console.log("[FetchAll] loadAllMusicFromJellyfin ENTER", { forceFetch });
   const modalEl = document.getElementById("artist-modal");
   if (!modalEl) return;
 
@@ -379,27 +750,101 @@ async function loadAllMusicFromJellyfin() {
 
   try {
     let tracks = await musicDB.getAllTracks();
-    let needFetch = tracks.length === 0;
+    let needFetch = !!forceFetch || tracks.length === 0;
 
     if (needFetch) {
+      console.log("[FetchAll] needFetch true -> will fetch from Jellyfin");
       const { userId, apiKey, isValid } = getJellyfinCredentials();
       if (isValid) {
-        const params = new URLSearchParams({
-          Recursive: true,
-          IncludeItemTypes: "Audio",
-          Fields: "PrimaryImageAspectRatio,MediaSources,AlbumArtist,Album,Artists",
-          Limit: 20000,
-          SortBy: "AlbumArtist,Album,SortName",
-          api_key: apiKey,
-        });
-        const ctrl = new AbortController();
-        addFetchController(ctrl);
-        const resp = await fetch(`/Users/${userId}/Items?${params.toString()}`, { signal: ctrl.signal });
-        settleFetchController(ctrl);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const data = await resp.json();
-        tracks = data.Items || [];
-        await musicDB.saveTracks(tracks);
+        const LIMIT = 500;
+        let startIndex = 0;
+        let total = Infinity;
+        const combined = [];
+
+        while (startIndex < total) {
+          const params = new URLSearchParams({
+            Recursive: true,
+            IncludeItemTypes: "Audio",
+            Fields: "PrimaryImageAspectRatio,MediaSources,AlbumArtist,Album,Artists",
+            SortBy: "AlbumArtist,Album,SortName",
+            Limit: String(LIMIT),
+            StartIndex: String(startIndex),
+            api_key: apiKey,
+          });
+
+          const url = withParams(`/Users/${userId}/Items`, Object.fromEntries(params.entries()));
+          console.log("[FetchAll] URL =>", url);
+
+          const ctrl = new AbortController();
+          addFetchController(ctrl);
+          const timeoutId = setTimeout(() => {
+            console.warn("[FetchAll] fetch timeout -> aborting");
+            try { ctrl.abort(); } catch {}
+          }, 90_000);
+
+          let resp;
+          try {
+            resp = await fetch(url, {
+              signal: ctrl.signal,
+              headers: {
+                "X-Emby-Token": apiKey,
+                "X-MediaBrowser-Token": apiKey,
+                "Accept": "application/json",
+              },
+            });
+            console.log("[FetchAll] fetch returned", { ok: resp.ok, status: resp.status, statusText: resp.statusText });
+          } catch (e) {
+            console.error("[FetchAll] fetch threw", e);
+            throw e;
+          } finally {
+            clearTimeout(timeoutId);
+            settleFetchController(ctrl);
+          }
+
+          const rawText = await resp.text();
+          console.log("[FetchAll] raw response (first 200) =>", rawText.slice(0, 200));
+          if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText} :: ${rawText.slice(0, 200)}`);
+
+          let data;
+          try { data = JSON.parse(rawText); }
+          catch (e) { throw new Error("JSON parse failed: " + e?.message); }
+
+          const items = data.Items || [];
+          total = Number.isFinite(data.TotalRecordCount) ? data.TotalRecordCount : (startIndex + items.length);
+          combined.push(...items);
+
+          if (items.length) {
+            if (typeof musicDB?.addOrUpdateTracks === "function") {
+              try {
+                await musicDB.addOrUpdateTracks(items);
+              } catch (e) {
+                console.error("[FetchAll] DB write failed (addOrUpdateTracks)", e);
+                throw e;
+              }
+            } else if (typeof musicDB?.saveTracks === "function") {
+              try {
+                await musicDB.saveTracks(combined);
+              } catch (e) {
+                console.error("[FetchAll] DB write failed (saveTracks)", e);
+                throw e;
+              }
+            }
+          }
+          console.log("[FetchAll] page", { startIndex, got: items.length, total });
+
+          if (!items.length) break;
+          startIndex += items.length;
+          if (items.length < LIMIT) break;
+        }
+
+        tracks = combined;
+        console.log("[FetchAll] fetched total items:", tracks.length);
+        if (typeof musicDB?.addOrUpdateTracks !== "function") {
+          await musicDB.saveTracks(tracks);
+          console.log("[FetchAll] DB write OK:", tracks.length);
+        } else {
+          console.log("[FetchAll] DB incremental write OK");
+        }
       }
     }
 
@@ -428,6 +873,12 @@ async function loadAllMusicFromJellyfin() {
     if (totalPages > 1) paginationContainer.style.display = "flex";
   } catch (error) {
     if (error?.name === "AbortError") return;
+    console.error("[FetchAll] ERROR:", error);
+    showNotification(
+      `<i class="fas fa-exclamation-circle"></i> FetchAll error: ${String(error?.message || error)}`,
+      5000,
+      "error"
+    );
     tracksContainer.innerHTML = `
       <div class="modal-error-message">
         ${config.languageLabels.errorLoadAllMusic || "Tüm müzikler yüklenirken hata oluştu"}
@@ -745,8 +1196,12 @@ function createAlbumHeader(album, apiKey) {
   const imageTag = album.AlbumPrimaryImageTag || album.PrimaryImageTag;
 
   if (albumId && imageTag) {
-    let imageUrl = `/Items/${albumId}/Images/Primary?fillHeight=100&quality=80&tag=${imageTag}`;
-    if (apiKey) imageUrl += `&api_key=${apiKey}`;
+    const imageUrl = withParams(`/Items/${albumId}/Images/Primary`, {
+      fillHeight: 100,
+      quality: 80,
+      tag: imageTag,
+      api_key: apiKey,
+    });
     const img = new Image();
     img.onload = () => { albumCover.style.backgroundImage = `url('${imageUrl}')`; };
     img.onerror = () => { albumCover.style.backgroundImage = DEFAULT_ARTWORK; };
@@ -946,77 +1401,10 @@ function formatDuration(track) {
 
 export async function checkForNewMusic() {
   try {
-    abortAllFetches();
-    const { userId, apiKey, isValid } = getJellyfinCredentials();
-    if (!isValid) return;
-
-    const params = new URLSearchParams({
-      Recursive: true,
-      IncludeItemTypes: "Audio",
-      Fields: "PrimaryImageAspectRatio,MediaSources,AlbumArtist,Album,Artists,Genres",
-      Limit: 20000,
-      SortBy: "DateCreated",
-      SortOrder: "Ascending",
-      api_key: apiKey,
-    });
-
-    const ctrl = new AbortController();
-    addFetchController(ctrl);
-    const resp = await fetch(`/Users/${userId}/Items?${params.toString()}`, { signal: ctrl.signal });
-    settleFetchController(ctrl);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const data = await resp.json();
-    const currentTracks = data.Items || [];
-    const currentIds = new Set(currentTracks.map((i) => i.Id));
-
-    const dbTracks = await musicDB.getAllTracks();
-    const dbIds = new Set(dbTracks.map((t) => t.Id));
-
-    const deleted = [];
-    dbIds.forEach((id) => { if (!currentIds.has(id)) deleted.push(id); });
-
-    const added = [];
-    currentIds.forEach((id) => { if (!dbIds.has(id)) added.push(id); });
-
-    if (deleted.length) await musicDB.deleteTracks(deleted);
-    if (currentTracks.length) await musicDB.addOrUpdateTracks(currentTracks);
-
-    if (added.length) {
-      showNotification(
-        `<i class="fas fa-database"></i> ${added.length} ${config.languageLabels.dbnewTracksAdded || "yeni şarkı eklendi"}`,
-        4000,
-        "db"
-      );
-    }
-    if (deleted.length) {
-      showNotification(
-        `<i class="fas fa-database"></i> ${deleted.length} ${config.languageLabels.dbtracksRemoved || "şarkı silindi"}`,
-        4000,
-        "db"
-      );
-    }
-
-    const modalEl = document.getElementById("artist-modal");
-    if (modalEl && !modalEl.classList.contains("hidden")) {
-      const nameEl = modalEl.querySelector(".modal-artist-name");
-      const name = nameEl?.textContent;
-      if (name === (config.languageLabels.allMusic || "Tüm Müzikler")) {
-        loadAllMusicFromJellyfin();
-      } else {
-        const currentTrack = musicPlayerState.playlist?.[musicPlayerState.currentIndex];
-        const artistId = currentTrack?.ArtistItems?.[0]?.Id ||
-          currentTrack?.AlbumArtistId || currentTrack?.ArtistId || null;
-        loadArtistTracks(name, artistId);
-      }
-    }
-  } catch (error) {
-    if (error?.name === "AbortError") return;
-    console.error("Müzik senkronizasyonu sırasında hata:", error);
-    showNotification(
-      `<i class="fas fa-exclamation-circle"></i> ${config.languageLabels.syncError || "Senkronizasyon sırasında hata oluştu"}`,
-      4000,
-      "error"
-    );
+    await syncDbFullscan({ force: true });
+    return;
+  } catch (e) {
+    throw e;
   }
 }
 
@@ -1028,8 +1416,11 @@ async function loadArtistImage(artistId) {
     return;
   }
   try {
-    let url = `/Items/${artistId}/Images/Primary?fillHeight=300&quality=96`;
-    if (apiKey) url += `&api_key=${apiKey}`;
+    const url = withParams(`/Items/${artistId}/Images/Primary`, {
+      fillHeight: 300,
+      quality: 96,
+      api_key: apiKey,
+    });
 
     const img = new Image();
     img.onload = () => { el.style.backgroundImage = `url('${url}')`; };
@@ -1047,7 +1438,17 @@ async function loadArtistDetails(artistId) {
   const ctrl = new AbortController();
   addFetchController(ctrl);
   try {
-    const resp = await fetch(`/Users/${userId}/Items/${artistId}?api_key=${apiKey}`, { signal: ctrl.signal });
+    const resp = await fetch(
+      withParams(`/Users/${userId}/Items/${artistId}`, { api_key: apiKey }),
+      {
+        signal: ctrl.signal,
+        headers: {
+          "X-Emby-Token": apiKey,
+          "X-MediaBrowser-Token": apiKey,
+          "Accept": "application/json",
+        },
+      }
+    );
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
     const name = data.Name || data.OriginalTitle || config.languageLabels.artistUnknown;

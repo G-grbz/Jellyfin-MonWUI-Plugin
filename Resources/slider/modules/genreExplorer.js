@@ -1,5 +1,6 @@
-import { makeApiRequest, getSessionInfo, getCachedUserTopGenres, withServer } from "./api.js";
+import { makeApiRequest, getSessionInfo, getCachedUserTopGenres } from "./api.js";
 import { getConfig } from "./config.js";
+import { withServer } from "./jfUrl.js";
 
 const COMMON_FIELDS = [
   "PrimaryImageAspectRatio",

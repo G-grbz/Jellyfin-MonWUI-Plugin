@@ -1,6 +1,7 @@
-import { getSessionInfo, fetchItemDetails, makeApiRequest, isAuthReadyStrict, withServer } from "./api.js";
+import { getSessionInfo, fetchItemDetails, makeApiRequest, isAuthReadyStrict } from "./api.js";
 import { getConfig } from "./config.js";
 import { getLanguageLabels, getDefaultLanguage } from "../language/index.js";
+import { withServer } from "./jfUrl.js";
 
 function _numFinite(v, fallback) {
   const n = Number(v);
@@ -46,6 +47,52 @@ const BADGE_LOCK_MS = Math.max(0, Number(getConfig()?.pauseOverlay?.ageBadgeLock
 const _detailsLRU = new Map();
 const DETAILS_TTL = 90_000;
 const DETAILS_MAX = 120;
+
+const _maturityLRU = new Map();
+const MAT_TTL = _msFromConfig(getConfig()?.pauseOverlay?.maturityCacheTtlMs, 10 * 60 * 1000);
+const MAT_MAX = 200;
+
+function _maturitySig(d){
+  const id = d?.Id || "";
+  const r  = String(d?.OfficialRating || "");
+  const g  = Array.isArray(d?.Genres) ? d.Genres.join("|") : "";
+  const t  = Array.isArray(d?.Tags) ? d.Tags.join("|")
+           : Array.isArray(d?.Keywords) ? d.Keywords.join("|") : "";
+  return `${id}::${r}::${g}::${t}`;
+}
+
+function _computeMaturityUi(data){
+  const age = normalizeAgeChip(data?.OfficialRating);
+
+  const locGenres = localizedGenres(data?.Genres || []).filter(Boolean);
+  locGenres.sort((a,b)=>String(a).localeCompare(String(b), undefined, { sensitivity:"base" }));
+
+  const descFromTags = deriveTagDescriptors(data);
+  const descFromHeur = (!descFromTags.length && !locGenres.length) ? deriveKeywordDescriptors(data) : [];
+
+  const line2Arr = descFromTags.length
+    ? descFromTags.slice(0,2)
+    : locGenres.length
+      ? locGenres.slice(0,2)
+      : descFromHeur.slice(0,2);
+
+  const icons = buildIconListForItem(data);
+  return { age, line2Arr, icons };
+}
+
+function getMaturityUiCached(data){
+  const sig = _maturitySig(data);
+  const now = Date.now();
+  const rec = _maturityLRU.get(sig);
+  if (rec && (now - rec.t) < MAT_TTL) return rec.v;
+  const v = _computeMaturityUi(data);
+  _maturityLRU.set(sig, { v, t: now });
+  if (_maturityLRU.size > MAT_MAX) {
+    const first = _maturityLRU.keys().next().value;
+    _maturityLRU.delete(first);
+  }
+  return v;
+}
 
 function _badgeDelayFor(ctx){
   return (ctx === "resume") ? BADGE_DELAY_RESUME_MS : BADGE_DELAY_MS;
@@ -441,10 +488,10 @@ function normalizeAgeRating(raw) {
 function localizedMaturityHeader() {
   const lang = String(currentLang || "").toLowerCase();
   if (labels.maturityHeader) return labels.maturityHeader;
-  if (lang.startsWith("eng")) return "MATURITY RATING:";
-  if (lang.startsWith("deu")) return "ALTERSFREIGABE:";
-  if (lang.startsWith("fre")) return "CLASSIFICATION :";
-  if (lang.startsWith("rus")) return "ВОЗРАСТНОЕ ОГРАНИЧЕНИЕ:";
+  if (lang.startsWith("en")  || lang.startsWith("eng")) return "MATURITY RATING:";
+  if (lang.startsWith("de")  || lang.startsWith("deu")) return "ALTERSFREIGABE:";
+  if (lang.startsWith("fr")  || lang.startsWith("fre")) return "CLASSIFICATION :";
+  if (lang.startsWith("ru")  || lang.startsWith("rus")) return "ВОЗРАСТНОЕ ОГРАНИЧЕНИЕ:";
   return "YETİŞKİNLİK DÜZEYİ:";
 }
 function localizedGenres(genres = []) {
@@ -509,236 +556,745 @@ function countMatches(text, words) {
 }
 
 const BUCKETS = [
-  { key: 'superhero', needles: [
-    'superhero','super hero','superhuman','super human','super strength','super power','superpower',
-    'super soldier','supervillain','super villain','masked vigilante','masked superhero',
-    'symbiote','heroes','heroic','hero’s journey','hero\'s journey','teen superhero',
-    'superhero team','teamup','team up','justice league','avengers','x-men','spider-man',
-    'batman','superman','wonder woman','captain america','iron man','thor','venom',
-    'female superhero','aging superhero','masked supervillain','s.h.i.e.l.d','marvel cinematic universe (mcu)',
-    'dc universe (dcu)','dc extended universe (dceu)','sony’s spider-man universe','yrf spy universe'
-  ]},
+  {
+    key: "superhero",
+    needles: [
+      "superhero",
+      "super hero",
+      "superheroes",
+      "comic book superhero",
+      "comic book hero",
+      "superhuman",
+      "super powers",
+      "superpower",
+      "super strength",
+      "cape",
+      "masked vigilante",
+      "vigilante",
+      "secret identity",
+      "alter ego",
+      "supervillain",
+      "super villain",
+      "anti hero",
+      "antihero",
+      "marvel",
+      "marvel comics",
+      "dc",
+      "dc comics",
+      "marvel cinematic universe",
+      "mcu",
+      "dc extended universe",
+      "dceu",
+      "justice league",
+      "avengers",
+      "x men",
+      "x-men",
+      "spider man",
+      "spider-man",
+      "batman",
+      "superman",
+      "wonder woman",
+      "iron man",
+      "captain america",
+      "thor",
+      "hulk",
+      "deadpool",
+      "venom",
+    ],
+  },
 
-  { key: 'sci_fi_tech', needles: [
-    'science and technology','sci-fi','sci fi','sci-fi horror','spaceship','spacecraft','space station','space war',
-    'space battle','space opera','space western','space colony','space exploration','space mission','space travel',
-    'android','cyborg','robot','mecha','humanoid robot','synthetic android',
-    'artificial intelligence','artificial intelligence (a.i.)','a.i.','ai','nanotechnology','quantum mechanics',
-    'time travel','time loop','time machine','time paradox','time warp','time freeze','temporal agent',
-    'multiverse','alternate timeline','alternate universe','parallel universe','parallel world','wormhole',
-    'terraforming','cryonics','hologram','telekinesis','telepathy','invisibility','virtual reality','vr','simulator',
-    'simulation','simulated reality','mind control','mind reading','genetic engineering','genetic mutation','mutant','mutants',
-    'first contact','extraterrestrial technology','nuclear','post-apocalyptic','future war','future noir','near future',
-    'alien','alien invasion','alien race','alien planet','planet','planet mars','galaxy','cosmic','cosmology','spacewalk',
-    'space walk','space probe','space vessel','spacecraft accident','spaceship crash','asteroid','meteor'
-  ]},
+  {
+    key: "sci_fi_tech",
+    needles: [
+      "science fiction",
+      "sci fi",
+      "sci-fi",
+      "science-fiction",
+      "bilim kurgu",
+      "naçnaya fantastika",
+      "научная фантастика",
+      "science-fiction",
+      "ciencia ficcion",
+      "space travel",
+      "space mission",
+      "space exploration",
+      "space station",
+      "spaceship",
+      "spacecraft",
+      "rocket",
+      "astronaut",
+      "interstellar",
+      "outer space",
+      "cosmic voyage",
+      "first contact",
+      "alien",
+      "aliens",
+      "alien invasion",
+      "extraterrestrial",
+      "ufo",
+      "martian",
+      "space opera",
+      "space colony",
+      "cyberpunk",
+      "dystopia",
+      "dystopian future",
+      "post apocalyptic",
+      "post-apocalyptic",
+      "apocalyptic future",
+      "time travel",
+      "time loop",
+      "time machine",
+      "alternate timeline",
+      "parallel universe",
+      "alternate universe",
+      "multiverse",
+      "wormhole",
+      "simulation",
+      "simulated reality",
+      "virtual reality",
+      "vr",
+      "artificial intelligence",
+      "machine intelligence",
+      "android",
+      "robot",
+      "robots",
+      "cyborg",
+      "mecha",
+      "droid",
+      "humanoid robot",
+      "genetic engineering",
+      "clone",
+      "cloning",
+      "mutation",
+      "mutant",
+      "mutants",
+      "nanotechnology",
+    ],
+  },
 
-  { key: 'horror', needles: [
-    'horror','slasher','monster movie','creature feature','ghost','ghosts','haunted','haunting','haunted house','haunted mansion',
-    'possession','demonic','demon','exorcism','evil spirits','evil doll','killer doll','voodoo','folk horror','revenge horror',
-    'fear','nightmare','occult','ouija','religion and supernatural','supernatural horror','creepy doll','zombie','zombie apocalypse',
-    'vampire','werewolf','mummy','nosferatu','ghoulish','gruesome','gore','low-budget horror','revenge slasher'
-  ]},
+  {
+    key: "horror",
+    needles: [
+      "horror",
+      "horreur",
+      "ужасы",
+      "korku",
+      "slasher",
+      "splatter",
+      "found footage",
+      "haunted house",
+      "haunted",
+      "haunting",
+      "possession",
+      "demonic possession",
+      "demon",
+      "demons",
+      "exorcism",
+      "occult",
+      "satanic",
+      "curse",
+      "cursed",
+      "nightmare",
+      "gore",
+      "gruesome",
+      "bloodshed",
+      "ghost",
+      "ghosts",
+      "spirit",
+      "spirits",
+      "poltergeist",
+      "zombie",
+      "zombies",
+      "zombie apocalypse",
+      "vampire",
+      "vampires",
+      "werewolf",
+      "werewolves",
+    ],
+  },
 
-  { key: 'monster', needles: [
-    'monster','kaiju','godzilla','mothra','rodan','giant animal','giant ape','giant gorilla',
-    'giant crocodile','giant snake','giant spider','giant worm','dinosaur','tyrannosaurus rex',
-    'yeti','cyclops','giant insect','giant robot','monster island'
-  ]},
+  {
+    key: "monster",
+    needles: [
+      "monster",
+      "monsters",
+      "creature feature",
+      "giant monster",
+      "kaiju",
+      "godzilla",
+      "mothra",
+      "rodan",
+      "giant creature",
+      "giant animal",
+      "giant spider",
+      "giant snake",
+      "dinosaur",
+      "dinosaurs",
+      "tyrannosaurus rex",
+      "t-rex",
+      "loch ness",
+      "sea monster",
+      "mutant creature",
+    ],
+  },
 
-  { key: 'war', needles: [
-    'war','world war','world war i','world war ii','ww1','ww2','great war','warfare','battle','battlefield','frontline',
-    'soldier','army','military','naval battle','naval warfare','air force','marine','u.s. marine','u.s. army','u.s. navy',
-    'vietnam war','korean war (1950-53)','afghanistan war (2001-2021)','spanish civil war (1936-39)','pacific war',
-    'civil war','american civil war','gallipoli campaign','battle of thermopylae','d-day','omaha beach','kamikaze',
-    'war crimes','warlord','armageddon','save the world','resistance','guerrilla warfare','royal navy','royal air force'
-  ]},
+  {
+    key: "war",
+    needles: [
+      "war",
+      "warfare",
+      "battle",
+      "battlefield",
+      "frontline",
+      "trenches",
+      "soldier",
+      "army",
+      "military",
+      "navy",
+      "air force",
+      "marines",
+      "combat mission",
+      "world war",
+      "world war i",
+      "world war ii",
+      "ww1",
+      "ww2",
+      "wwii",
+      "vietnam war",
+      "korean war",
+      "gulf war",
+      "civil war",
+    ],
+  },
 
-  { key: 'crime', needles: [
-    'crime','criminal','crime boss','crime family','crime lord','underworld','organized crime','mafia','sicilian mafia',
-    'yakuza','triad','cartel','drug cartel','mob','mob boss','gang','gangster','gang war','gang violence',
-    'heist','bank heist','bank robbery','robbery','con artist','con man','scam','scammer','money laundering',
-    'kidnapped','kidnapping','copycat killer','homicide','murder','murder mystery','murder investigation',
-    'investigation','investigative journalism','investigative reporter','forensic','detective story',
-    'police corruption','crooked cop','crooked politician','cover-up','prison break','jailbreak','prison escape',
-    'hitman','assassin','vigilante justice','vigilantism','serial killer','sting operation', 'witness elimination'
-  ]},
+  {
+    key: "crime",
+    needles: [
+      "crime",
+      "criminal",
+      "organized crime",
+      "underworld",
+      "mafia",
+      "mob",
+      "gang",
+      "gangster",
+      "cartel",
+      "drug cartel",
+      "yakuza",
+      "triad",
+      "heist",
+      "bank heist",
+      "bank robbery",
+      "robbery",
+      "kidnapping",
+      "abduction",
+      "murder",
+      "homicide",
+      "serial killer",
+      "hitman",
+      "assassin",
+      "money laundering",
+      "police corruption",
+    ],
+  },
 
-  { key: 'violence', needles: [
-    'violence','violent','fight','fighting','combat','brawl','beat','beating','hand to hand combat',
-    'gun','guns','gunfight','gun violence','shootout','shooting','sniper','sniper rifle','weapon','weapons',
-    'knife','stabbing','stabbed','sword','swordsman','swordswoman','sword fight','sword battle','axe','sledgehammer',
-    'explosion','explosions','blood','bloody','gore','decapitation','brutal','brutality',
-    'martial arts','kung fu','karate','wing chun','underground fighting','torture','killing spree','massacre',
-    'assault rifle','bomb','bombing','grenade','dynamite', 'security guard'
-  ]},
+  {
+    key: "violence",
+    needles: [
+      "violence",
+      "violent",
+      "brutal",
+      "brutality",
+      "blood",
+      "bloody",
+      "gore",
+      "torture",
+      "massacre",
+      "gunfight",
+      "shootout",
+      "shooting",
+      "sniper",
+      "assault rifle",
+      "knife fight",
+      "stabbing",
+      "explosion",
+      "bombing",
+      "grenade",
+      "martial arts",
+      "hand to hand combat",
+    ],
+  },
 
-  { key: 'sex', needles: [
-    'sex','sexual','sexuality','sexual identity','sex scandal','sex offender','forbidden sexuality','intimate',
-    'killed during sex','sex abuse','sexual abuse','sexual violence','pornographic video','orgy'
-  ]},
+  {
+    key: "sex",
+    needles: [
+      "sexual content",
+      "sex",
+      "sexual",
+      "erotic",
+      "erotica",
+      "pornography",
+      "pornographic",
+      "sex scene",
+      "orgy",
+    ],
+  },
 
-  { key: 'nudity', needles: [
-    'nudity','nude','full frontal','topless','nude swimming'
-  ]},
+  {
+    key: "nudity",
+    needles: [
+      "nudity",
+      "nude",
+      "full frontal",
+      "topless",
+      "naked",
+      "striptease",
+    ],
+  },
 
-  { key: 'profanity', needles: [
-    'profanity','explicit language','strong language','vulgar'
-  ]},
+  {
+    key: "profanity",
+    needles: [
+      "strong language",
+      "explicit language",
+      "profanity",
+      "swearing",
+      "vulgar",
+      "obscene",
+    ],
+  },
 
-  { key: 'drugs', needles: [
-    'drugs','drug','drug abuse','drug addiction','drug dealer','drug lord','drug trafficking','narcotics',
-    'cocaine','heroin','meth','opium','marijuana','weed','nootropics','lsd'
-  ]},
+  {
+    key: "drugs",
+    needles: [
+      "drug use",
+      "drugs",
+      "drug abuse",
+      "drug addiction",
+      "narcotics",
+      "drug dealer",
+      "drug trafficking",
+      "cocaine",
+      "heroin",
+      "meth",
+      "opioid",
+      "overdose",
+    ],
+  },
 
-  { key: 'discrimination', needles: [
-    'racism','sexism','homophobia','discrimination','hate speech','slur','antisemitism','islamophobia',
-    'bigotry','class prejudice','caste system','apartheid'
-  ]},
+  {
+    key: "discrimination",
+    needles: [
+      "racism",
+      "sexism",
+      "homophobia",
+      "hate speech",
+      "slur",
+      "discrimination",
+      "antisemitism",
+      "islamophobia",
+      "xenophobia",
+    ],
+  },
 
-  { key: 'mature', needles: [
-    'adult themes','abuse','domestic violence','suicide','suicide attempt','self harm','self-harm','trauma',
-    'grief','intergenerational trauma','incest','rape','addiction','dysfunctional family',
-    'bereavement','loss of loved one','child abuse','child molestation','pedophilia','mental illness'
-  ]},
+  {
+    key: "mature",
+    needles: [
+      "adult themes",
+      "mature themes",
+      "psychological trauma",
+      "trauma",
+      "abuse",
+      "domestic violence",
+      "sexual assault",
+      "rape",
+      "incest",
+      "suicide",
+      "self harm",
+      "self-harm",
+      "child abuse",
+      "child molestation",
+    ],
+  },
 
-  { key: 'supernatural', needles: [
-    'supernatural','supernatural power','supernatural phenomena','paranormal activity','spirit','spirits',
-    'evil spell','sorcery','sorcerer','sorceress','witch','witch hunter','djinn',
-    'demonic possession','curse','cursed','magical realism','magic spell'
-  ]},
+  {
+    key: "supernatural",
+    needles: [
+      "supernatural",
+      "paranormal",
+      "paranormal activity",
+      "spirit",
+      "spirits",
+      "curse",
+      "cursed",
+      "witch",
+      "witchcraft",
+      "sorcery",
+      "magic ritual",
+      "djinn",
+      "demonic",
+      "possession",
+    ],
+  },
 
-  { key: 'historical', needles: [
-    'historical','historical drama','victorian era','renaissance','medieval','ancient greece','ancient rome',
-    'ancient egypt','ottoman empire','byzantium','spanish second republic (1931-39)',
-    'franco regime (francoism)','nazi germany','holocaust (shoah)','cold war','mccarthyism','biblical epic',
-    'roman empire','greek mythology','egyptian mythology','italian renaissance','medieval france'
-  ]},
+  {
+    key: "historical",
+    needles: [
+      "historical",
+      "historical drama",
+      "period drama",
+      "based on history",
+      "victorian era",
+      "renaissance",
+      "medieval",
+      "ancient rome",
+      "ancient greece",
+      "ancient egypt",
+      "ottoman empire",
+      "byzantium",
+    ],
+  },
 
-  { key: 'fairytale', needles: [
-    'fairy','fairy tale','fairytale','folk tale','folktale','fable',
-    'princess','prince','kingdom','witch','enchantress','fairy godmother'
-  ]},
+  {
+    key: "fairytale",
+    needles: [
+      "fairy tale",
+      "fairytale",
+      "folk tale",
+      "fable",
+      "storybook",
+      "princess",
+      "prince",
+      "kingdom",
+      "enchanted forest",
+    ],
+  },
 
-  { key: 'fantasy_magic', needles: [
-    'fantasy','dark fantasy','high fantasy','sword and sorcery','sword and sandal','fairy','fairy tale','fairytale',
-    'modern fairy tale','myth','mythology','mythical creature','elves','dwarf','goblin','orc',
-    'wizard','witch','enchantress','magical creature','magical object','legend','legendary hero',
-    'dragons','griffin','mermaid','excalibur','arthurian mythology','talisman','spell','curse'
-  ]},
+  {
+    key: "fantasy_magic",
+    needles: [
+      "fantasy",
+      "high fantasy",
+      "dark fantasy",
+      "magic",
+      "wizard",
+      "sorcerer",
+      "witch",
+      "spell",
+      "dragon",
+      "dragons",
+      "myth",
+      "mythology",
+      "legend",
+      "sword and sorcery",
+      "enchanted",
+    ],
+  },
 
-  { key: 'thriller_suspense', needles: [
-    'thriller','suspense','suspenseful','psychological thriller','conspiracy','conspiracy theory',
-    'cat and mouse','stalker','stalking','home invasion','kidnapping','hostage','hostage situation','manhunt',
-    'surveillance','surveillance camera','spy thriller','espionage','covert operation',
-    'taunting','tension','tense'
-  ]},
+  {
+    key: "thriller_suspense",
+    needles: [
+      "thriller",
+      "suspense",
+      "psychological thriller",
+      "conspiracy",
+      "manhunt",
+      "hostage",
+      "home invasion",
+      "stalker",
+      "kidnapping",
+      "espionage",
+      "spy thriller",
+    ],
+  },
 
-  { key: 'mystery_detective', needles: [
-    'mystery','detective','detective inspector','detective couple','whodunit','clues','clue','investigation',
-    'private detective','sherlock','sherlock holmes','noir','neo-noir','cold case','crime scene','locked room mystery'
-  ]},
+  {
+    key: "mystery_detective",
+    needles: [
+      "mystery",
+      "detective",
+      "whodunit",
+      "crime investigation",
+      "investigation",
+      "private detective",
+      "noir",
+      "neo noir",
+      "cold case",
+      "clues",
+    ],
+  },
 
-  { key: 'romance_love', needles: [
-    'romance','romantic','romantic drama','romantic fantasy','romcom','love','love affair','love at first sight',
-    'falling in love','tragic love','tragic romance','friends to lovers','forbidden love','everlasting love',
-    'new beginning','wedding','honeymoon','imminent wedding'
-  ]},
+  {
+    key: "romance_love",
+    needles: [
+      "romance",
+      "romantic",
+      "romantic drama",
+      "love story",
+      "love affair",
+      "falling in love",
+      "forbidden love",
+      "romcom",
+      "relationship",
+    ],
+  },
 
-  { key: 'comedy_humor', needles: [
-    'comedy','buddy comedy','satire','satirical','parody','spoof','mockumentary','slapstick comedy',
-    'hilarious','witty','wisecrack humor','breaking the fourth wall','comedy of situation','screenlife comedy'
-  ]},
+  {
+    key: "comedy_humor",
+    needles: [
+      "comedy",
+      "humor",
+      "funny",
+      "satire",
+      "parody",
+      "spoof",
+      "slapstick",
+      "dark comedy",
+    ],
+  },
 
-  { key: 'drama_family', needles: [
-    'drama','family','family drama','family relationships','family conflict',
-    'mother daughter relationship','mother son relationship','father son relationship','father daughter relationship',
-    'single mother','single father','coming of age','teenage life','teenage romance','grief','loss','friendship',
-    'found family','chosen family','kids','childhood','parenting','siblings'
-  ]},
+  {
+    key: "drama_family",
+    needles: [
+      "drama",
+      "family drama",
+      "family",
+      "family conflict",
+      "coming of age",
+      "teenage life",
+      "friendship",
+      "grief",
+      "loss",
+      "parenting",
+      "siblings",
+    ],
+  },
 
-  { key: 'action_adventure', needles: [
-    'action','action adventure','action comedy','action thriller','adventure','expedition',
-    'treasure','treasure hunt','quest','race against time','chase','car chase','police chase','parkour',
-    'stunt','stuntman','free climbing','helicopter chase','scaling a building','one man army','one against many',
-    'wilderness','desert','jungle','island','lost at sea','runaway'
-  ]},
+  {
+    key: "action_adventure",
+    needles: [
+      "action",
+      "action adventure",
+      "adventure",
+      "quest",
+      "expedition",
+      "treasure hunt",
+      "chase",
+      "car chase",
+      "escape",
+      "survival mission",
+    ],
+  },
 
-  { key: 'animation_kids', needles: [
-    'animation','animated','cgi animation','3d animation','stop motion','claymation','pixar',
-    'children cartoon','children’s adventure','kids','tween','family comedy','horror for children',
-    'live action and animation','cgi-live action hybrid','cartoon','cartoon animal','talking animal','talking dog','talking cat'
-  ]},
+  {
+    key: "animation_kids",
+    needles: [
+      "animation",
+      "animated",
+      "cartoon",
+      "family friendly",
+      "kids",
+      "children",
+      "pixar",
+      "disney",
+      "stop motion",
+      "stop-motion",
+    ],
+  },
 
-  { key: 'documentary_biopic', needles: [
-    'documentary','biography','biographical','docudrama','based on true story','based on memoir or autobiography',
-    'history and legacy','science documentary','behind the scenes'
-  ]},
+  {
+    key: "documentary_biopic",
+    needles: [
+      "documentary",
+      "docudrama",
+      "biography",
+      "biographical",
+      "biopic",
+      "based on true story",
+      "true story",
+      "real events",
+      "historical documentary",
+      "nature documentary",
+    ],
+  },
 
-  { key: 'music_dance', needles: [
-    'music','musical','jukebox musical','jazz','singer','singing','songwriter','concert','ballet','dance','dance performance',
-    'flamenco','hip-hop','pop music','music critic'
-  ]},
+  {
+    key: "music_dance",
+    needles: [
+      "music",
+      "musical",
+      "concert",
+      "band",
+      "singer",
+      "songwriter",
+      "dance",
+      "ballet",
+      "hip hop",
+      "hip-hop",
+      "jazz",
+    ],
+  },
 
-  { key: 'sports', needles: [
-    'sports','boxing','boxing champion','boxing trainer','basketball player','football (soccer)','ufc','mma','karate',
-    'martial arts tournament','sport climbing','race','grand prix','baseball'
-  ]},
+  {
+    key: "sports",
+    needles: [
+      "sports",
+      "boxing",
+      "mma",
+      "ufc",
+      "football",
+      "soccer",
+      "basketball",
+      "baseball",
+      "tennis",
+      "racing",
+      "grand prix",
+    ],
+  },
 
-  { key: 'western', needles: [
-    'western','outlaw','gunslinger','cowboy','wild west','spaghetti western','frontier','stagecoach'
-  ]},
+  {
+    key: "western",
+    needles: [
+      "western",
+      "cowboy",
+      "gunslinger",
+      "outlaw",
+      "wild west",
+      "frontier",
+      "spaghetti western",
+    ],
+  },
 
-  { key: 'political', needles: [
-    'political','politics','political thriller','political campaign','election','election campaign',
-    'political assassination','political crisis','political intrigue','authoritarianism','totalitarian regime',
-    'coup','resistance','senator','prime minister','president','the white house','washington dc, usa','usa politics'
-  ]},
+  {
+    key: "political",
+    needles: [
+      "political",
+      "politics",
+      "political thriller",
+      "election",
+      "campaign",
+      "white house",
+      "government conspiracy",
+      "coup",
+      "authoritarianism",
+      "totalitarian",
+    ],
+  },
 
-  { key: 'religion_myth', needles: [
-    'religion','religious allegory','religious cult','religious satire','religious symbolism','faith',
-    'christian','christianity','islam','judaism','hinduism','buddhism','shia','koran','bible','biblical epic',
-    'norse mythology','messiah','prophecy','prophet'
-  ]},
+  {
+    key: "religion_myth",
+    needles: [
+      "religion",
+      "religious",
+      "faith",
+      "religious cult",
+      "cult",
+      "biblical",
+      "bible",
+      "christianity",
+      "islam",
+      "judaism",
+      "hinduism",
+      "buddhism",
+      "mythology",
+      "norse mythology",
+      "greek mythology",
+    ],
+  },
 
-  { key: 'survival_disaster', needles: [
-    'disaster','disaster movie','earthquake','flood','tsunami','hurricane','avalanche','volcano','pandemic',
-    'outbreak','apocalypse','post-apocalyptic future','doomsday','end of the world','plague','famine','evacuation',
-    'survival','survival at sea','trapped','trapped in space','trapped in an elevator','trying to avoid making noise'
-  ]},
+  {
+    key: "survival_disaster",
+    needles: [
+      "disaster",
+      "disaster movie",
+      "earthquake",
+      "tsunami",
+      "flood",
+      "hurricane",
+      "tornado",
+      "volcano",
+      "pandemic",
+      "outbreak",
+      "apocalypse",
+      "doomsday",
+      "survival",
+      "trapped",
+    ],
+  },
 
-  { key: 'period_era', needles: [
-    'ancient','ancient world','18th century','19th century','20th century','5th century bc','6th century',
-    '10th century','12th century','15th century','1750s','1800s','1850s','1880s','1890s','1900s','1910s',
-    '1920s','1930s','1940s','1950s','1960s','1970s','1980s','1990s','2000s','2030s','2040s','2050s','2060s','2090s',
-    'near future','distant future','post world war ii','post war japan','eve of world war ii'
-  ]},
+  {
+    key: "period_era",
+    needles: [
+      "period piece",
+      "period drama",
+      "18th century",
+      "19th century",
+      "20th century",
+      "1920s",
+      "1930s",
+      "1940s",
+      "1950s",
+      "1960s",
+      "1970s",
+      "1980s",
+      "1990s",
+    ],
+  },
 
-  { key: 'travel_road', needles: [
-    'road movie','road trip','journey','trip','travel','tour','tourism','around the world',
-    'backpacker','explorer','expedition','trekking'
-  ]},
+  {
+    key: "travel_road",
+    needles: [
+      "road movie",
+      "road trip",
+      "journey",
+      "travel",
+      "travelling",
+      "tour",
+      "expedition",
+      "backpacking",
+    ],
+  },
 
-  { key: 'animals_nature', needles: [
-    'animal','animals','animal attack','bear','wolf','wolves','tiger','lion','shark','shark attack','crocodile','crocodile attack',
-    'horse','dog','cat','elephant','dolphin','whale','humpback whale','seal (animal)','penguin','octopus','squid',
-    'giraffe','zebra','panda','monkey','chimpanzee','gorilla','hippopotamus',
-    'wildlife','endangered species','nature','forest','jungle','savannah'
-  ]},
+  {
+    key: "animals_nature",
+    needles: [
+      "animals",
+      "animal",
+      "wildlife",
+      "nature",
+      "nature documentary",
+      "animal attack",
+      "shark attack",
+      "bear",
+      "wolf",
+      "tiger",
+      "lion",
+      "dolphin",
+      "whale",
+    ],
+  },
 ];
 
 const _NEEDLE_INDEX = (() => {
   const idx = new Map();
-  for (const b of BUCKETS) {
-    for (const raw of b.needles) {
-      const t = String(raw).toLowerCase().trim();
-      if (!t) continue;
-      if (!idx.has(t)) idx.set(t, new Set());
-      idx.get(t).add(b.key);
-    }
-  }
-  return idx;
-})();
+  const add = (k, bucket) => {
+    if (!k) return;
+    let set = idx.get(k);
+    if (!set) idx.set(k, (set = new Set()));
+    set.add(bucket);
+    };
+
+   for (const b of BUCKETS) {
+     for (const raw of b.needles) {
+      const full = String(raw).toLowerCase().trim();
+      if (!full) continue;
+      add(full, b.key);
+      const toks = full.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+      for (const tk of toks) add(tk, b.key);
+     }
+   }
+   return idx;
+ })();
 
 function _tokenizeTag(s) {
   return String(s || "")
@@ -748,14 +1304,18 @@ function _tokenizeTag(s) {
 }
 
 function _bucketsForTag(tag) {
-  const tokens = _tokenizeTag(tag);
+  const norm = _normTag(tag);
+  const tokens = _tokenizeTag(norm);
   const hits = new Set();
-  for (const tk of tokens) {
-    const set = _NEEDLE_INDEX.get(tk);
-    if (set) for (const k of set) hits.add(k);
-  }
-  return hits;
-}
+  const direct = _NEEDLE_INDEX.get(norm);
+  if (direct) for (const k of direct) hits.add(k);
+
+   for (const tk of tokens) {
+     const set = _NEEDLE_INDEX.get(tk);
+     if (set) for (const k of set) hits.add(k);
+   }
+   return hits;
+ }
 
 const NEGATIVE_WORDS = {
   fairytale: ['war','battle','soldier','army','frontline','sniper','bomb','grenade','blood','gore','massacre'],
@@ -789,230 +1349,22 @@ function getDescriptorTagMap() {
   if (labels?.descriptorTagMap && typeof labels.descriptorTagMap === "object") {
     return labels.descriptorTagMap;
   }
-  return {
-    superhero: [
-    'superhero','super hero','superhuman','super human','super strength','super power','superpower',
-    'super soldier','supervillain','super villain','masked vigilante','masked superhero',
-    'symbiote','heroes','heroic','hero’s journey','hero\'s journey','teen superhero',
-    'superhero team','teamup','team up','justice league','avengers','x-men','spider-man',
-    'batman','superman','wonder woman','captain america','iron man','thor','venom',
-    'female superhero','aging superhero','masked supervillain','s.h.i.e.l.d','marvel cinematic universe (mcu)',
-    'dc universe (dcu)','dc extended universe (dceu)','sony’s spider-man universe','yrf spy universe'
-  ],
 
-  sci_fi_tech: [
-    'science and technology','sci-fi','sci fi','sci-fi horror','spaceship','spacecraft','space station','space war',
-    'space battle','space opera','space western','space colony','space exploration','space mission','space travel',
-    'android','cyborg','robot','mecha','humanoid robot','synthetic android',
-    'artificial intelligence','artificial intelligence (a.i.)','a.i.','ai','nanotechnology','quantum mechanics',
-    'time travel','time loop','time machine','time paradox','time warp','time freeze','temporal agent',
-    'multiverse','alternate timeline','alternate universe','parallel universe','parallel world','wormhole',
-    'terraforming','cryonics','hologram','telekinesis','telepathy','invisibility','virtual reality','vr','simulator',
-    'simulation','simulated reality','mind control','mind reading','genetic engineering','genetic mutation','mutant','mutants',
-    'first contact','extraterrestrial technology','nuclear','post-apocalyptic','future war','future noir','near future',
-    'alien','alien invasion','alien race','alien planet','planet','planet mars','galaxy','cosmic','cosmology','spacewalk',
-    'space walk','space probe','space vessel','spacecraft accident','spaceship crash','asteroid','meteor'
-  ],
-
-  horror: [
-    'horror','slasher','monster movie','creature feature','ghost','ghosts','haunted','haunting','haunted house','haunted mansion',
-    'possession','demonic','demon','exorcism','evil spirits','evil doll','killer doll','voodoo','folk horror','revenge horror',
-    'fear','nightmare','occult','ouija','religion and supernatural','supernatural horror','creepy doll','zombie','zombie apocalypse',
-    'vampire','werewolf','mummy','nosferatu','ghoulish','gruesome','gore','low-budget horror','revenge slasher'
-  ],
-
-  monster: [
-    'monster','kaiju','godzilla','mothra','rodan','giant animal','giant ape','giant gorilla',
-    'giant crocodile','giant snake','giant spider','giant worm','dinosaur','tyrannosaurus rex',
-    'yeti','cyclops','giant insect','giant robot','monster island'
-  ],
-
-  war: [
-    'war','world war','world war i','world war ii','ww1','ww2','great war','warfare','battle','battlefield','frontline',
-    'soldier','army','military','naval battle','naval warfare','air force','marine','u.s. marine','u.s. army','u.s. navy',
-    'vietnam war','korean war (1950-53)','afghanistan war (2001-2021)','spanish civil war (1936-39)','pacific war',
-    'civil war','american civil war','gallipoli campaign','battle of thermopylae','d-day','omaha beach','kamikaze',
-    'war crimes','warlord','armageddon','save the world','resistance','guerrilla warfare','royal navy','royal air force'
-  ],
-
-  crime: [
-    'crime','criminal','crime boss','crime family','crime lord','underworld','organized crime','mafia','sicilian mafia',
-    'yakuza','triad','cartel','drug cartel','mob','mob boss','gang','gangster','gang war','gang violence',
-    'heist','bank heist','bank robbery','robbery','con artist','con man','scam','scammer','money laundering',
-    'kidnapped','kidnapping','copycat killer','homicide','murder','murder mystery','murder investigation',
-    'investigation','investigative journalism','investigative reporter','forensic','detective story',
-    'police corruption','crooked cop','crooked politician','cover-up','prison break','jailbreak','prison escape',
-    'hitman','assassin','vigilante justice','vigilantism','serial killer','sting operation','witness elimination'
-  ],
-
-  violence: [
-    'violence','violent','fight','fighting','combat','brawl','beat','beating','hand to hand combat',
-    'gun','guns','gunfight','gun violence','shootout','shooting','sniper','sniper rifle','weapon','weapons',
-    'knife','stabbing','stabbed','sword','swordsman','swordswoman','sword fight','sword battle','axe','sledgehammer',
-    'explosion','explosions','blood','bloody','gore','decapitation','brutal','brutality',
-    'martial arts','kung fu','karate','wing chun','underground fighting','torture','killing spree','massacre',
-    'assault rifle','bomb','bombing','grenade','dynamite','security guard'
-  ],
-
-  sex: [
-    'sex','sexual','sexuality','sexual identity','sex scandal','sex offender','forbidden sexuality','intimate',
-    'killed during sex','sex abuse','sexual abuse','sexual violence','pornographic video','orgy'
-  ],
-
-  nudity: [
-    'nudity','nude','full frontal','topless','nude swimming'
-  ],
-
-  profanity: [
-    'profanity','explicit language','strong language','vulgar'
-  ],
-
-  drugs: [
-    'drugs','drug','drug abuse','drug addiction','drug dealer','drug lord','drug trafficking','narcotics',
-    'cocaine','heroin','meth','opium','marijuana','weed','nootropics','lsd'
-  ],
-
-  discrimination: [
-    'racism','sexism','homophobia','discrimination','hate speech','slur','antisemitism','islamophobia',
-    'bigotry','class prejudice','caste system','apartheid'
-  ],
-
-  mature: [
-    'adult themes','abuse','domestic violence','suicide','suicide attempt','self harm','self-harm','trauma',
-    'grief','intergenerational trauma','incest','rape','addiction','dysfunctional family',
-    'bereavement','loss of loved one','child abuse','child molestation','pedophilia','mental illness'
-  ],
-
-  supernatural: [
-    'supernatural','supernatural power','supernatural phenomena','paranormal activity','spirit','spirits',
-    'evil spell','sorcery','sorcerer','sorceress','witch','witch hunter','djinn',
-    'demonic possession','curse','cursed','magical realism','magic spell'
-  ],
-
-  historical: [
-    'historical','historical drama','victorian era','renaissance','medieval','ancient greece','ancient rome',
-    'ancient egypt','ottoman empire','byzantium','spanish second republic (1931-39)',
-    'franco regime (francoism)','nazi germany','holocaust (shoah)','cold war','mccarthyism','biblical epic',
-    'roman empire','greek mythology','egyptian mythology','italian renaissance','medieval france'
-  ],
-
-  fantasy_magic: [
-    'fantasy','dark fantasy','high fantasy','sword and sorcery','sword and sandal','fairy','fairy tale','fairytale',
-    'modern fairy tale','myth','mythology','mythical creature','elves','dwarf','goblin','orc',
-    'wizard','witch','enchantress','magical creature','magical object','legend','legendary hero',
-    'dragons','griffin','mermaid','excalibur','arthurian mythology','talisman','spell','curse'
-  ],
-
-  thriller_suspense: [
-    'thriller','suspense','suspenseful','psychological thriller','conspiracy','conspiracy theory',
-    'cat and mouse','stalker','stalking','home invasion','kidnapping','hostage','hostage situation','manhunt',
-    'surveillance','surveillance camera','spy thriller','espionage','covert operation',
-    'taunting','tension','tense'
-  ],
-
-  mystery_detective: [
-    'mystery','detective','detective inspector','detective couple','whodunit','clues','clue','investigation',
-    'private detective','sherlock','sherlock holmes','noir','neo-noir','cold case','crime scene','locked room mystery'
-  ],
-
-  romance_love: [
-    'romance','romantic','romantic drama','romantic fantasy','romcom','love','love affair','love at first sight',
-    'falling in love','tragic love','tragic romance','friends to lovers','forbidden love','everlasting love',
-    'new beginning','wedding','honeymoon','imminent wedding'
-  ],
-
-  comedy_humor: [
-    'comedy','buddy comedy','satire','satirical','parody','spoof','mockumentary','slapstick comedy',
-    'hilarious','witty','wisecrack humor','breaking the fourth wall','comedy of situation','screenlife comedy'
-  ],
-
-  drama_family: [
-    'drama','family','family drama','family relationships','family conflict',
-    'mother daughter relationship','mother son relationship','father son relationship','father daughter relationship',
-    'single mother','single father','coming of age','teenage life','teenage romance','grief','loss','friendship',
-    'found family','chosen family','kids','childhood','parenting','siblings'
-  ],
-
-  fairytale: [
-    'based on cartoon','based on childrens book','based on novel or book'
-  ],
-
-  action_adventure: [
-    'action','action adventure','action comedy','action thriller','adventure','expedition',
-    'treasure','treasure hunt','quest','race against time','chase','car chase','police chase','parkour',
-    'stunt','stuntman','free climbing','helicopter chase','scaling a building','one man army','one against many',
-    'wilderness','desert','jungle','island','lost at sea','runaway'
-  ],
-
-  animation_kids: [
-    'animation','animated','cgi animation','3d animation','stop motion','claymation','pixar',
-    'children cartoon','children’s adventure','kids','tween','family comedy','horror for children',
-    'live action and animation','cgi-live action hybrid','cartoon','cartoon animal','talking animal','talking dog','talking cat'
-  ],
-
-  documentary_biopic: [
-    'documentary','biography','biographical','docudrama','based on true story','based on memoir or autobiography',
-    'history and legacy','science documentary','behind the scenes'
-  ],
-
-  music_dance: [
-    'music','musical','jukebox musical','jazz','singer','singing','songwriter','concert','ballet','dance','dance performance',
-    'flamenco','hip-hop','pop music','music critic'
-  ],
-
-  sports: [
-    'sports','boxing','boxing champion','boxing trainer','basketball player','football (soccer)','ufc','mma','karate',
-    'martial arts tournament','sport climbing','race','grand prix','baseball'
-  ],
-
-  western: [
-    'western','outlaw','gunslinger','cowboy','wild west','spaghetti western','frontier','stagecoach'
-  ],
-
-  political: [
-    'political','politics','political thriller','political campaign','election','election campaign',
-    'political assassination','political crisis','political intrigue','authoritarianism','totalitarian regime',
-    'coup','resistance','senator','prime minister','president','the white house','washington dc, usa','usa politics'
-  ],
-
-  religion_myth: [
-    'religion','religious allegory','religious cult','religious satire','religious symbolism','faith',
-    'christian','christianity','islam','judaism','hinduism','buddhism','shia','koran','bible','biblical epic',
-    'norse mythology','messiah','prophecy','prophet'
-  ],
-
-  survival_disaster: [
-    'disaster','disaster movie','earthquake','flood','tsunami','hurricane','avalanche','volcano','pandemic',
-    'outbreak','apocalypse','post-apocalyptic future','doomsday','end of the world','plague','famine','evacuation',
-    'survival','survival at sea','trapped','trapped in space','trapped in an elevator','trying to avoid making noise'
-  ],
-
-  period_era: [
-    'ancient','ancient world','18th century','19th century','20th century','5th century bc','6th century',
-    '10th century','12th century','15th century','1750s','1800s','1850s','1880s','1890s','1900s','1910s',
-    '1920s','1930s','1940s','1950s','1960s','1970s','1980s','1990s','2000s','2030s','2040s','2050s','2060s','2090s',
-    'near future','distant future','post world war ii','post war japan','eve of world war ii'
-  ],
-
-  travel_road: [
-    'road movie','road trip','journey','trip','travel','tour','tourism','around the world',
-    'backpacker','explorer','expedition','trekking'
-  ],
-
-  animals_nature: [
-    'animal','animals','animal attack','bear','wolf','wolves','tiger','lion','shark','shark attack','crocodile','crocodile attack',
-    'horse','dog','cat','elephant','dolphin','whale','humpback whale','seal (animal)','penguin','octopus','squid',
-    'giraffe','zebra','panda','monkey','chimpanzee','gorilla','hippopotamus',
-    'wildlife','endangered species','nature','forest','jungle','savannah'
-  ],
-  };
+  const map = {};
+  for (const b of BUCKETS) {
+    map[b.key] = Array.isArray(b.needles) ? b.needles.slice() : [];
+  }
+  return map;
 }
+
 function hasAny(tag, needles) {
   return tokenIncludes(tag || "", needles || []);
 }
+
 function _normTag(s) {
   return String(s || "").toLowerCase().trim();
 }
+
 function deriveTagDescriptors(item = {}) {
   const raw = (item.Tags || item.Keywords || []).filter(Boolean);
   if (!raw.length) return [];
@@ -1358,17 +1710,16 @@ function kickBindRetries(schedule = [50,150,350,800,1500,2500,4000,6000,8000,120
       }
     } catch {}
 
-    const age = normalizeAgeChip(data?.OfficialRating);
-    const locGenres = localizedGenres(data?.Genres || []);
-    const descFromTags = deriveTagDescriptors(data);
-    const descFromHeur = !descFromTags.length && !locGenres.length ? deriveKeywordDescriptors(data) : [];
+    const mui = getMaturityUiCached(data);
+    const age = mui.age;
+    const line2Arr = mui.line2Arr;
+    try { data.__jmsMaturityIcons = mui.icons; } catch {}
 
-    if (!age && descFromTags.length === 0 && locGenres.length === 0 && descFromHeur.length === 0) {
+    if (!age && (!line2Arr || line2Arr.length === 0)) {
       hideRatingGenre();
       return;
     }
     const line1 = age ? [localizedMaturityHeader(), age].join(" ") : "";
-    const line2Arr = descFromTags.length ? descFromTags.slice(0, 2) : locGenres.length ? locGenres.slice(0, 2) : descFromHeur.slice(0, 2);
     const line2 = line2Arr.join(", ");
 
     if (line1 || line2) {
@@ -1386,7 +1737,7 @@ function kickBindRetries(schedule = [50,150,350,800,1500,2500,4000,6000,8000,120
         hideRatingGenre("auto");
         setTimeout(() => {
           try {
-            showIconBadges(data, duration);
+            showIconBadges(mui.icons, duration);
           } catch {}
         }, 380);
       }, duration);
@@ -3223,13 +3574,15 @@ function buildIconListForItem(item){
   return out;
 }
 
-function showIconBadges(item, durationMs) {
+function showIconBadges(itemOrIcons, durationMs) {
   const po = getConfig()?.pauseOverlay || {};
   if (po.showAgeBadge === false) return;
 
   const el = createIconEl();
   const row = el.querySelector(".rating-icons-row");
-  const icons = buildIconListForItem(item);
+  const icons = Array.isArray(itemOrIcons)
+    ? itemOrIcons
+    : (itemOrIcons?.__jmsMaturityIcons || buildIconListForItem(itemOrIcons));
 
   if (!icons.length) { hideIconBadges(); return; }
 
