@@ -1,4 +1,7 @@
 export const languageLabels = {
+  forceGlobalLockedTitle: "Bu sunucuda ayarlar yönetici tarafından global olarak zorlandı.",
+  collectionNotFound: "Bir koleksiyona ait değil.",
+  collectionTitle: "Koleksiyon",
   enableSlider: "Slider’ı Etkinleştir",
   onlyShowSliderOnHomeTab: "Sadece AnaSayfa Sekmesinde Göster",
   avatarSec: "Avatar Seç",

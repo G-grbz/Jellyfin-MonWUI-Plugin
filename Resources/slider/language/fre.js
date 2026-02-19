@@ -1,4 +1,7 @@
 export const languageLabels = {
+  forceGlobalLockedTitle: "Ces paramètres ont été appliqués globalement par l’administrateur sur ce serveur.",
+  collectionNotFound: "Ne fait pas partie d'une collection.",
+  collectionTitle: "Collection",
   enableSlider: "Activer le slider",
   onlyShowSliderOnHomeTab: "Afficher uniquement dans l’onglet Accueil",
   avatarSec: "Choisir un avatar",

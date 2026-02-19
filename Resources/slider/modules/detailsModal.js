@@ -20,6 +20,7 @@ const labels =
 
 const _reviewHtmlStore = new Map();
 const MODAL_ID = "jms-details-modal-root";
+let _closeListeners = [];
 let _open = false;
 let _lastFocus = null;
 let _abort = null;
@@ -271,6 +272,7 @@ function ensureRoot() {
 
 const LS_TMDB_KEY  = 'jms_tmdb_api_key';
 const LS_TMDB_LANG = 'jms_tmdb_reviews_lang';
+
 
 function getTmdbApiKey() {
   const k1 = (config?.TmdbApiKey || config?.tmdbApiKey || '').toString().trim();
@@ -711,7 +713,7 @@ async function loadTmdbReviewsInto(root, displayItem, { signal } = {}) {
                 try {
                     localStorage.setItem(LS_TMDB_LANG, 'en-US');
                     page = 1;
-                    pack = await fetchTmdbReviews(kind, tmdbId, { signal, page });
+                    pack = await fetchTmdbReviews(kind, tmdbId, { signal, page, language: "en-US" });
                     all = pack.results || [];
                 } finally {
                     try { localStorage.setItem(LS_TMDB_LANG, oldLang); } catch {}
@@ -1118,38 +1120,87 @@ async function startHeroTrailer(root, item, { signal } = {}) {
   }
 }
 
+function isIOSLike() {
+  try {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  } catch { return false; }
+}
+
 function lockScroll(lock) {
   try {
     const docEl = document.documentElement;
+    if (!docEl) return;
 
     if (lock) {
       if (_scrollSnap) return;
 
       const y = window.scrollY || docEl.scrollTop || 0;
-      const scrollbarW = window.innerWidth - docEl.clientWidth;
-      _scrollSnap = { y, scrollbarW };
+      const x = window.scrollX || docEl.scrollLeft || 0;
+      const scrollbarW = (window.innerWidth || 0) - (docEl.clientWidth || 0);
+
+      _scrollSnap = { y, x, scrollbarW, usedBodyFixed: false, blocker: null };
 
       docEl.style.scrollbarGutter = "stable";
       if (scrollbarW > 0) document.body.style.paddingRight = `${scrollbarW}px`;
 
       docEl.style.overflow = "hidden";
       document.body.style.overflow = "hidden";
-      document.body.style.touchAction = "none";
+
+      const ios = isIOSLike();
+      if (ios) {
+        _scrollSnap.usedBodyFixed = true;
+        document.body.style.position = "fixed";
+        document.body.style.top = `-${y}px`;
+        document.body.style.left = `-${x}px`;
+        document.body.style.right = "0";
+        document.body.style.width = "100%";
+        document.body.style.touchAction = "none";
+      }
+
+      const blocker = (e) => {
+        const root = document.getElementById(MODAL_ID);
+        const card = root?.querySelector?.(".jmsdm-card");
+        if (!card) { e.preventDefault(); return; }
+        if (e.target && card.contains(e.target)) return;
+        e.preventDefault();
+      };
+
+      window.addEventListener("wheel", blocker, { passive: false });
+      window.addEventListener("touchmove", blocker, { passive: false });
+      _scrollSnap.blocker = blocker;
+
     } else {
       if (!_scrollSnap) return;
-      const { y } = _scrollSnap;
+
+      const { y, x, blocker, usedBodyFixed } = _scrollSnap;
+
+      if (blocker) {
+        window.removeEventListener("wheel", blocker);
+        window.removeEventListener("touchmove", blocker);
+      }
+
+      if (usedBodyFixed) {
+        document.body.style.position = "";
+        document.body.style.top = "";
+        document.body.style.left = "";
+        document.body.style.right = "";
+        document.body.style.width = "";
+        document.body.style.touchAction = "";
+      }
 
       document.body.style.paddingRight = "";
       document.body.style.overflow = "";
-      document.body.style.touchAction = "";
       docEl.style.overflow = "";
       docEl.style.scrollbarGutter = "";
 
       _scrollSnap = null;
-      window.scrollTo(0, y);
+
+      window.scrollTo(x || 0, y || 0);
     }
   } catch {}
 }
+
 
 function capturePreviewState() {
   try {
@@ -1438,39 +1489,79 @@ function getPrimaryImageUrlMini(it) {
   );
 }
 
-function renderMiniCards(items = []) {
-    if (!items.length) {
-        return `<div class="jmsdm-empty-state" style="color:rgba(255,255,255,.6);font-size:14px;padding:20px;text-align:center;">${config.languageLabels.contentNotFound || "Henüz benzer içerik bulunamadı."}</div>`;
+function getEpisodeImageUrlMini(ep, { maxWidth = 280 } = {}) {
+  try {
+    if (!ep?.Id) return "";
+
+    const primaryTag = ep?.ImageTags?.Primary;
+    if (primaryTag) {
+      return withServer(
+        `/Items/${encodeURIComponent(ep.Id)}/Images/Primary?tag=${encodeURIComponent(primaryTag)}&quality=85&maxWidth=${encodeURIComponent(maxWidth)}`
+      );
     }
 
-    return `
-        <div class="jmsdm-minicards">
-            ${items
-                .map((it) => {
-                    const img = getPrimaryImageUrlMini(it);
-                    const title = safeText(it.Name, "");
-                    const year = it.ProductionYear ? `(${it.ProductionYear})` : "";
-                    const rating = it.CommunityRating ? `<span style="color:#ffd700;font-size:11px;">★ ${it.CommunityRating.toFixed(1)}</span>` : "";
+    const seriesPrimary = ep?.SeriesPrimaryImageTag;
+    if (seriesPrimary && ep?.SeriesId) {
+      return withServer(
+        `/Items/${encodeURIComponent(ep.SeriesId)}/Images/Primary?tag=${encodeURIComponent(seriesPrimary)}&quality=85&maxWidth=${encodeURIComponent(maxWidth)}`
+      );
+    }
 
-                    return `
-                        <div class="jmsdm-minicard" data-itemid="${it.Id}" title="${title}">
-                            <div class="jmsdm-minicard-img">
-                                ${img
-                                    ? `<img src="${img}" alt="${title}" loading="lazy" decoding="async">`
-                                    : `<div class="jmsdm-skeleton" style="width:100%;height:100%;"></div>`
-                                }
-                            </div>
-                            <div class="jmsdm-minicard-title">
-                                ${title}
-                                ${year ? `<span class="jmsdm-minicard-year">${year}</span>` : ''}
-                                ${rating}
-                            </div>
-                        </div>
-                    `;
-                })
-                .join("")}
-        </div>
-    `;
+    const pbt = Array.isArray(ep?.ParentBackdropImageTags) ? ep.ParentBackdropImageTags[0] : null;
+    if (pbt) {
+      const parent = ep?.SeasonId || ep?.ParentId || ep?.SeriesId;
+      if (parent) {
+        return withServer(
+          `/Items/${encodeURIComponent(parent)}/Images/Backdrop/0?tag=${encodeURIComponent(pbt)}&quality=85&maxWidth=${encodeURIComponent(maxWidth)}`
+        );
+      }
+    }
+  } catch {}
+
+  return "";
+}
+
+function renderMiniCards(items = []) {
+  if (!items.length) {
+    return `<div class="jmsdm-empty-state" style="color:rgba(255,255,255,.6);font-size:14px;padding:20px;text-align:center;">${config.languageLabels.contentNotFound || "Henüz benzer içerik bulunamadı."}</div>`;
+  }
+
+  return `
+    <div class="jmsdm-minicards">
+      ${items.map((it) => {
+        const img = getPrimaryImageUrlMini(it);
+        const title = safeText(it.Name, "");
+        const year = it.ProductionYear ? `(${it.ProductionYear})` : "";
+        const rating = it.CommunityRating
+          ? `<span style="color:#ffd700;font-size:11px;">★ ${it.CommunityRating.toFixed(1)}</span>`
+          : "";
+
+        return `
+          <div class="jmsdm-minicard" data-itemid="${it.Id}" title="${escapeHtml(title)}">
+            <div class="jmsdm-minicard-img">
+              ${
+                img
+                  ? `<img src="${img}" alt="${escapeHtml(title)}" loading="lazy" decoding="async">`
+                  : `<div class="jmsdm-skeleton" style="width:100%;height:100%;"></div>`
+              }
+
+              <div class="jmsdm-minicard-overlay" aria-hidden="true">
+                <div class="jmsdm-minicard-play">
+                  ${icon("M8 5v14l11-7z")}
+                </div>
+              </div>
+            </div>
+
+            <div class="jmsdm-minicard-title">
+              ${escapeHtml(title)}
+              ${year ? `<span class="jmsdm-minicard-year">${escapeHtml(year)}</span>` : ""}
+              ${rating}
+            </div>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
 }
 
 async function fetchSeasonsForSeries(seriesId, { signal } = {}) {
@@ -1493,7 +1584,10 @@ async function fetchEpisodesFor(seriesId, seasonId, { signal } = {}) {
   try {
     const userId = (window.ApiClient?.getCurrentUserId?.() || window.ApiClient?._currentUserId) || "";
     const qp = new URLSearchParams();
-    qp.set("Fields", "Overview,IndexNumber,ParentIndexNumber,UserData,Id,Name");
+    qp.set(
+      "Fields",
+      "Overview,IndexNumber,ParentIndexNumber,UserData,Id,Name,ImageTags,PrimaryImageAspectRatio,SeriesPrimaryImageTag,ParentBackdropImageTags"
+    );
     qp.set("UserId", userId);
     qp.set("Limit", "200");
     if (seasonId) qp.set("SeasonId", seasonId);
@@ -1560,6 +1654,27 @@ function cleanupEventListeners() {
   _currentListeners = [];
 }
 
+function cleanupCloseListeners() {
+  try {
+    _closeListeners.forEach(({ element, event, handler }) => {
+      if (element && element.removeEventListener) element.removeEventListener(event, handler);
+    });
+  } catch {}
+  _closeListeners = [];
+}
+
+function addCloseListener(element, event, handler) {
+  if (!element || !handler) return () => {};
+  element.addEventListener(event, handler);
+  _closeListeners.push({ element, event, handler });
+  return () => {
+    try { element.removeEventListener(event, handler); } catch {}
+    _closeListeners = _closeListeners.filter(
+      l => !(l.element === element && l.event === event && l.handler === handler)
+    );
+  };
+}
+
 function addEventListener(element, event, handler) {
   if (!element || !handler) return () => {};
   element.addEventListener(event, handler);
@@ -1576,6 +1691,7 @@ function wireCloseHandlers(root, closeFn) {
   const backdrop = root.querySelector(".jmsdm-backdrop");
   const closeBtn = root.querySelector(".jmsdm-close");
 
+  cleanupCloseListeners();
   const handleCloseClick = (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -1594,12 +1710,11 @@ function wireCloseHandlers(root, closeFn) {
     }
   };
 
-  cleanupEventListeners();
-  addEventListener(closeBtn, "click", handleCloseClick);
-  addEventListener(backdrop, "mousedown", handleBackdropClick);
-  addEventListener(window, "keydown", handleEscape);
+  addCloseListener(closeBtn, "click", handleCloseClick);
+  addCloseListener(backdrop, "mousedown", handleBackdropClick);
+  addCloseListener(window, "keydown", handleEscape);
 
-  return cleanupEventListeners;
+  return cleanupCloseListeners;
 }
 
 function focusFirst(root) {
@@ -1631,6 +1746,7 @@ export async function closeDetailsModal() {
   if (!_open || _closing) return;
   _closing = true;
 
+  cleanupCloseListeners();
   cleanupEventListeners();
 
   if (_unbindKeyHandler) {
@@ -1676,6 +1792,139 @@ export async function closeDetailsModal() {
   _closing = false;
 }
 
+function uniqById(items = [], seen = new Set()) {
+  const out = [];
+  for (const it of items || []) {
+    const id = it?.Id ? String(it.Id) : "";
+    if (!id) continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(it);
+  }
+  return out;
+}
+
+async function getBoxSetForMovie(movieId, { signal } = {}) {
+  try {
+    const userId = ApiClient.getCurrentUserId();
+    if (!userId || !movieId) return null;
+
+    const movieName = (() => {
+      try { return (window.__jms_lastDisplayItemName || "").toString().trim(); }
+      catch { return ""; }
+    })();
+
+    const qp = new URLSearchParams();
+    qp.set("UserId", userId);
+    qp.set("IncludeItemTypes", "BoxSet");
+    qp.set("Recursive", "true");
+    qp.set("Limit", "60");
+    qp.set("Fields", "ChildCount");
+    if (movieName) qp.set("SearchTerm", movieName);
+
+    let res = await ApiClient.getJSON(`/Items?${qp.toString()}`);
+    let candidates = res?.Items || [];
+
+    if (!candidates.length) {
+      qp.delete("SearchTerm");
+      qp.set("Limit", "200");
+      res = await ApiClient.getJSON(`/Items?${qp.toString()}`);
+      candidates = res?.Items || [];
+    }
+
+    for (const s of (candidates || []).filter(x => (x?.ChildCount ?? 1) > 0)) {
+      const children = await ApiClient.getJSON(`/Items?UserId=${userId}&ParentId=${s.Id}`);
+      if ((children?.Items || []).some(x => String(x.Id) === String(movieId))) {
+        return { id: s.Id, name: s.Name };
+      }
+    }
+
+    return null;
+  } catch (e) {
+    console.warn("getBoxSetForMovie error:", e);
+    return null;
+  }
+}
+
+async function fetchCollectionItems(boxsetId, { signal, limit = 12 } = {}) {
+  try {
+    const userId = (window.ApiClient?.getCurrentUserId?.() || window.ApiClient?._currentUserId) || "";
+    if (!userId || !boxsetId) return [];
+
+    const qp = new URLSearchParams();
+    qp.set("UserId", userId);
+    qp.set("ParentId", String(boxsetId));
+    qp.set("Recursive", "true");
+    qp.set("IncludeItemTypes", "Movie");
+    qp.set("Limit", String(limit));
+    qp.set("Fields", "Id,Name,ProductionYear,ImageTags,PrimaryImageAspectRatio,UserData");
+    qp.set("SortBy", "ProductionYear,SortName");
+    qp.set("SortOrder", "Ascending");
+
+    const r = await makeApiRequest(`/Items?${qp.toString()}`, { signal });
+    return Array.isArray(r?.Items) ? r.Items : [];
+  } catch (e) {
+    if (!signal?.aborted) console.warn("fetchCollectionItems error:", e);
+    return [];
+  }
+}
+
+function renderCollectionHtml({ title = "", items = [] } = {}) {
+  if (!items.length) {
+    return `<div class="jmsdm-empty-state" style="color:rgba(255,255,255,.6);font-size:14px;padding:16px;text-align:center;">
+      ${config.languageLabels.collectionNotFound || "Koleksiyon bulunamadı."}
+    </div>`;
+  }
+
+  const head = title
+    ? `<div style="color:rgba(255,255,255,.75);font-size:12px;margin-bottom:8px;">${escapeHtml(title)}</div>`
+    : "";
+
+  return `
+    ${head}
+    ${renderMiniCards(items)}
+  `;
+}
+
+function startCollectionLoad(root, movieItem, { signal } = {}) {
+  (async () => {
+    try {
+      if (!root || !movieItem?.Id) return;
+
+      const host = root.querySelector(".jmsdm-collection-host");
+      if (!host) return;
+
+      const box = await getBoxSetForMovie(movieItem.Id, { signal });
+      if (!_open || signal?.aborted) return;
+
+      if (!box?.id) {
+        host.innerHTML = renderCollectionHtml({ title: "", items: [] });
+        return;
+      }
+
+      const LIMIT = 12;
+      const items = await fetchCollectionItems(box.id, { signal, limit: LIMIT + 2 });
+      if (!_open || signal?.aborted) return;
+
+      const filtered = (items || []).filter(x => x?.Id && String(x.Id) !== String(movieItem.Id)).slice(0, LIMIT);
+
+      const collectionLabel =
+        config.languageLabels.collectionTitle ||
+        "Koleksiyon";
+
+      const title = box.name ? `${collectionLabel}: ${box.name}` : collectionLabel;
+
+      host.innerHTML = renderCollectionHtml({ title, items: filtered });
+    } catch (e) {
+      if (!signal?.aborted) console.warn("collection load error:", e);
+      try {
+        const host = root?.querySelector?.(".jmsdm-collection-host");
+        if (host) host.innerHTML = renderCollectionHtml({ title: "", items: [] });
+      } catch {}
+    }
+  })();
+}
+
 export async function openDetailsModal({ itemId, serverId = "", preferBackdropIndex = "0", perPage = 6, originEl } = {}) {
   if (!itemId) return;
   const _originResolved = __resolveOriginEl(originEl || document.activeElement);
@@ -1696,6 +1945,7 @@ export async function openDetailsModal({ itemId, serverId = "", preferBackdropIn
   const root = ensureRoot();
   lockScroll(true);
   renderSkeleton(root);
+  wireMiniCardDelegation();
   try { root.style.visibility = "hidden"; root.style.opacity = "0"; } catch {}
   _unbindKeyHandler = wireCloseHandlers(root, closeDetailsModal);
 
@@ -1739,6 +1989,11 @@ export async function openDetailsModal({ itemId, serverId = "", preferBackdropIn
 
   const displayItem = seriesItem || baseItem;
   const nameBase = safeText(displayItem.Name, config.languageLabels.untitled || "İsimsiz");
+
+  try {
+    window.__jms_lastDisplayItemName = safeText(displayItem.Name, "");
+  } catch {}
+
   const epName = isEpisode ? safeText(baseItem.Name, "") : "";
   const name = (isEpisode && epName && epName !== nameBase) ? `${nameBase} — ${epName}` : nameBase;
 
@@ -1799,30 +2054,63 @@ export async function openDetailsModal({ itemId, serverId = "", preferBackdropIn
   const totalPages = () => Math.max(1, Math.ceil((episodes.length || 0) / perPage));
   const pageSlice = () => episodes.slice((page - 1) * perPage, (page - 1) * perPage + perPage);
 
+  function wireMiniCardDelegation() {
+  if (root.__minicardDelegated) return;
+  root.__minicardDelegated = true;
+
+  addEventListener(root, "click", async (e) => {
+    const card = e.target?.closest?.(".jmsdm-minicard");
+    if (!card || !root.contains(card)) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const id = card.getAttribute("data-itemid");
+    if (!id) return;
+
+    try {
+      await openDetailsModal({
+        itemId: id,
+        serverId,
+        preferBackdropIndex,
+        perPage,
+        originEl: card,
+      });
+    } catch (err) {
+      console.warn("openDetailsModal from minicard error:", err);
+    }
+  });
+}
+
+wireMiniCardDelegation();
+
+
   if (isMovie) {
     try {
-      const sim = await fetchSimilarItems(item.Id, { signal: _abort.signal, limit: 12 });
+      const LIMIT = 12;
+      const seen = new Set([String(item.Id)]);
+
+      const similarTitle = config.languageLabels.similarItems || "Benzer İçerikler";
+
+      let picked = [];
+
+      const sim = await fetchSimilarItems(item.Id, { signal: _abort.signal, limit: LIMIT * 2 });
       if (!_open || _abort.signal.aborted) return;
-      const filteredSim = sim.filter(x => x?.Id && String(x.Id) !== String(item.Id));
-      if (filteredSim.length) {
-        recos = { title: config.languageLabels.similarItems || "Benzer İçerikler", items: filteredSim };
-      } else {
-        const byG = await fetchMoviesByGenres(item.Genres || [], { signal: _abort.signal, limit: 12 });
+      picked = picked.concat(uniqById(sim, seen)).slice(0, LIMIT);
+
+      if (picked.length < LIMIT) {
+        const byG = await fetchMoviesByGenres(item.Genres || [], { signal: _abort.signal, limit: LIMIT * 2 });
         if (!_open || _abort.signal.aborted) return;
-        const filteredG = byG.filter(x => x?.Id && String(x.Id) !== String(item.Id));
-        if (filteredG.length) {
-          recos = { title: config.languageLabels.sameGenre || "Aynı Türden", items: filteredG };
-        } else {
-          const byP = await fetchMoviesByPeople(item.People || [], { signal: _abort.signal, limit: 12 });
-          if (!_open || _abort.signal.aborted) return;
-          const filteredP = byP.filter(x => x?.Id && String(x.Id) !== String(item.Id));
-          if (filteredP.length) {
-            recos = { title: config.languageLabels.samePeople || "Aynı Oyunculardan", items: filteredP };
-          } else {
-            recos = { title: config.languageLabels.recommendations || "Öneriler", items: [] };
-          }
-        }
+        picked = picked.concat(uniqById(byG, seen)).slice(0, LIMIT);
       }
+
+      if (picked.length < LIMIT) {
+        const byP = await fetchMoviesByPeople(item.People || [], { signal: _abort.signal, limit: LIMIT * 2 });
+        if (!_open || _abort.signal.aborted) return;
+        picked = picked.concat(uniqById(byP, seen)).slice(0, LIMIT);
+      }
+
+      recos = { title: similarTitle, items: picked };
     } catch (e) {
       if (!_abort.signal.aborted) console.warn("reco build error:", e);
       recos = { title: config.languageLabels.recommendations || "Öneriler", items: [] };
@@ -1841,16 +2129,26 @@ export async function openDetailsModal({ itemId, serverId = "", preferBackdropIn
           const e = ep.IndexNumber ?? "";
           const num = (s !== "" && e !== "") ? `S${s} · E${e}` : String((page - 1) * perPage + i + 1);
           const epName = safeText(ep.Name, config.languageLabels.episode || "Bölüm");
+          const img = getEpisodeImageUrlMini(ep, { maxWidth: 260 });
           const epOver = safeText(ep.Overview, "");
           return `
-            <div class="jmsdm-ep" data-epid="${ep.Id}">
-              <div class="jmsdm-ep-num">${num}</div>
-              <div class="jmsdm-ep-main">
-                <div class="jmsdm-ep-name">${epName}</div>
-                <div class="jmsdm-ep-over">${epOver}</div>
-              </div>
+          <div class="jmsdm-ep" data-epid="${ep.Id}">
+            <div class="jmsdm-ep-thumb">
+              ${
+                img
+                  ? `<img src="${img}" alt="${escapeHtml(epName)}" loading="lazy" decoding="async">`
+                  : `<div class="jmsdm-skeleton" style="width:100%;height:100%;"></div>`
+              }
             </div>
-          `;
+
+            <div class="jmsdm-ep-num">${num}</div>
+
+            <div class="jmsdm-ep-main">
+              <div class="jmsdm-ep-name">${epName}</div>
+              <div class="jmsdm-ep-over">${epOver}</div>
+            </div>
+          </div>
+        `;
         }).join("")}
       </div>
     `;
@@ -1858,10 +2156,27 @@ export async function openDetailsModal({ itemId, serverId = "", preferBackdropIn
 
   function renderRightPanelHtml() {
     if (isMovie) {
+      const similarTitle = safeText(recos.title, config.languageLabels.similarItems || "Benzer İçerikler");
+
+      const collectionLabel =
+        config.languageLabels.collectionTitle ||
+        config.languageLabels.collection ||
+        "Koleksiyon";
+
       return `
-        <div class="jmsdm-section-title">${safeText(recos.title, config.languageLabels.recommendations || "Öneriler")}</div>
-        <div class="jmsdm-epwrap">
+        <div class="jmsdm-section-title">${similarTitle}</div>
+        <div class="jmsdm-epwrap jmsdm-recos-wrap">
           ${renderMiniCards(recos.items)}
+        </div>
+
+        <div class="jmsdm-section-title" style="margin-top:16px;">
+          ${collectionLabel}
+        </div>
+        <div class="jmsdm-epwrap jmsdm-collection-wrap">
+          <div class="jmsdm-collection-host">
+            <div class="jmsdm-skeleton" style="width:55%;height:12px;margin-top:6px;"></div>
+            <div class="jmsdm-skeleton" style="width:100%;height:86px;margin-top:10px;"></div>
+          </div>
         </div>
       `;
     }
@@ -1914,6 +2229,10 @@ export async function openDetailsModal({ itemId, serverId = "", preferBackdropIn
             <div class="jmsdm-topbar">
               <button class="jmsdm-close" aria-label="${config.languageLabels.closeButton || "Kapat"}">✕</button>
             </div>
+
+            <div class="jmsdm-heroTitleWrap" aria-hidden="true">
+              <div class="jmsdm-heroTitle">${escapeHtml(name)}</div>
+            </div>
           </div>
 
           <div class="jmsdm-body">
@@ -1958,6 +2277,10 @@ export async function openDetailsModal({ itemId, serverId = "", preferBackdropIn
   try { root.style.visibility = "visible"; root.style.opacity = "1"; } catch {}
 
   await __animateInFromOrigin(root);
+
+  if (isMovie) {
+    startCollectionLoad(root, baseItem, { signal: _abort.signal });
+  }
 
   wireOverviewToggle(root);
   startHeroTrailer(root, displayItem, { signal: _abort.signal }).catch(() => {});
@@ -2192,4 +2515,5 @@ export async function openDetailsModal({ itemId, serverId = "", preferBackdropIn
   }
 
   focusFirst(root);
+  window.__lastModalItemId = itemId;
 }

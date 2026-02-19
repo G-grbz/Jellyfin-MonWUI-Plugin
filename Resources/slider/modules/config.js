@@ -1,5 +1,68 @@
 import { getLanguageLabels, getDefaultLanguage } from '../language/index.js';
 
+let __globalOverride = null;
+let __globalApplied = false;
+
+async function __fetchGlobalOverride(force = false) {
+  if (!force && __globalOverride !== null) return __globalOverride;
+  try {
+    const r = await fetch(`/Plugins/JMSFusion/UserSettings?ts=${Date.now()}`, {
+      cache: "no-store"
+    });
+    if (!r.ok) throw new Error();
+    __globalOverride = await r.json();
+  } catch {
+    __globalOverride = { forceGlobal: false };
+  }
+  return __globalOverride;
+}
+
+function _takeBackupOnce(keys) {
+  try {
+    const key = "jf:globalBackup:v2";
+    if (localStorage.getItem(key)) return;
+    const snap = {};
+    (keys || []).forEach(k => {
+      snap[k] = localStorage.getItem(k);
+    });
+    localStorage.setItem(key, JSON.stringify(snap));
+  } catch {}
+}
+
+function _restoreBackupIfAny() {
+  try {
+    const key = "jf:globalBackup:v2";
+    const raw = localStorage.getItem(key);
+    if (!raw) return false;
+    const snap = JSON.parse(raw || "{}");
+
+    for (const [k, v] of Object.entries(snap)) {
+      if (v === null || v === undefined) localStorage.removeItem(k);
+      else localStorage.setItem(k, String(v));
+    }
+
+    localStorage.removeItem(key);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function _setLsSmart(k, v) {
+  if (String(k).startsWith("jf:")) return;
+
+  if (v === undefined) return;
+  if (v === null) {
+    localStorage.removeItem(k);
+    return;
+  }
+  if (typeof v === "object") {
+    localStorage.setItem(k, JSON.stringify(v));
+  } else {
+    localStorage.setItem(k, String(v));
+  }
+}
+
 function _num(v, d=0){ const n = Number(v); return Number.isFinite(n) ? n : d; }
 function _bool(v, d=false){ return v === 'true' ? true : (v === 'false' ? false : d); }
 function _trimSlashesEnd(s){ return String(s || '').replace(/\/+$/, ''); }
@@ -41,6 +104,11 @@ function readSmartAutoPause() {
 }
 
 export function getConfig() {
+  const forceGlobal = __globalOverride?.forceGlobal === true;
+  if (window.__JMS_GLOBAL_CONFIG__) {
+    return window.__JMS_GLOBAL_CONFIG__;
+  }
+
   function readPeakSlider() {
   const variant = (localStorage.getItem('cssVariant') || 'normalslider').toLowerCase();
   const isPeakLike = ['peak', 'peakslider', 'peak-skin'].includes(variant);
@@ -611,7 +679,65 @@ export function getConfig() {
       } catch {}
       return false;
     })(),
+    forceGlobalUserSettings: forceGlobal
   };
+}
+
+function pruneGlobalConfig(cfg) {
+  const deny = new Set([
+    "languageLabels",
+    "currentUserIsAdmin",
+    "version",
+    "historySize",
+    "updateInterval",
+    "listLimit"
+  ]);
+
+  const out = {};
+  for (const [k, v] of Object.entries(cfg || {})) {
+    if (deny.has(k)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+export async function publishAdminSnapshotIfForced() {
+  try {
+    const cfg = getConfig();
+    if (!cfg?.currentUserIsAdmin) return;
+
+    const r = await fetch(`/Plugins/JMSFusion/UserSettings?ts=${Date.now()}`, {
+      cache: "no-store"
+    });
+    const j = r.ok ? await r.json() : null;
+    if (!j?.forceGlobal) return;
+
+    const globalConfig = pruneGlobalConfig(cfg);
+    const token =
+      window.ApiClient?.accessToken?.() ||
+      window.ApiClient?._accessToken ||
+      "";
+
+    if (!token) {
+      console.warn("[JMSFusion] Auto publish skipped (no token).");
+      return;
+    }
+
+    const pr = await fetch(`/Plugins/JMSFusion/UserSettings/Publish?ts=${Date.now()}`, {
+      method: "POST",
+      cache: "no-store",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Emby-Token": token
+      },
+      body: JSON.stringify({ global: globalConfig })
+    });
+
+    if (!pr.ok) console.warn("[JMSFusion] Auto publish failed:", pr.status);
+    else console.log("[JMSFusion] Auto publish success.");
+  } catch (e) {
+    console.warn("[JMSFusion] Auto publish error:", e);
+  }
 }
 
 export function getServerAddress() {
@@ -654,3 +780,36 @@ export function buildJfUrl(pathOrUrl) {
   if (p.startsWith('/')) return `${base}${p}`;
   return `${base}/${p}`;
 }
+
+(async () => {
+  try {
+    const data = await __fetchGlobalOverride(true);
+    window.__JMS_GLOBAL_OVERRIDE__ = data;
+
+    if (!data?.forceGlobal) {
+      if (_restoreBackupIfAny()) console.log("[JMSFusion] Restored user settings (global off).");
+      return;
+    }
+
+    const isAdmin =
+      window.ApiClient?._currentUser?.Policy?.IsAdministrator === true;
+
+    if (isAdmin) {
+      console.log("[JMSFusion] Admin user – skipping forced global apply.");
+      return;
+    }
+
+    if (!data?.global || __globalApplied) return;
+
+    const g = data.global;
+    const keys = Object.keys(g || {});
+    _takeBackupOnce(keys);
+
+    for (const k of keys) {
+      _setLsSmart(k, g[k]);
+    }
+
+    __globalApplied = true;
+    console.log("[JMSFusion] Global user settings applied (forced).");
+  } catch {}
+})();

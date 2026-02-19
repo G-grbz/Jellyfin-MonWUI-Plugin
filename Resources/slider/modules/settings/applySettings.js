@@ -1,8 +1,9 @@
-import { getConfig } from "../config.js";
+import { getConfig, publishAdminSnapshotIfForced } from "../config.js";
 import { loadCSS } from "../player/main.js";
 import { updateSlidePosition } from '../positionUtils.js';
 import { createCheckbox, createImageTypeSelect, bindCheckboxKontrol, bindTersCheckboxKontrol, updateConfig } from "../settings.js";
 import { updateHeaderUserAvatar, updateAvatarStyles, clearAvatarCache } from "../userAvatar.js";
+import { showNotification } from "../player/ui/notification.js";
 
 const _intOr = (v, def) => {
   const n = parseInt(v, 10);
@@ -19,7 +20,80 @@ const _DEFAULT_OFFSCREEN_MS = 10000;
 const _MIN_MIN = 0.1;
 const _MAX_MIN = 1000;
 
-    export function applySettings(reload = false) {
+let __isAdminCached_apply = null;
+
+function getJfRootFromLocation_apply() {
+  const path = window.location.pathname || "/";
+  const split = path.split("/web/");
+  return split.length > 1 ? split[0] : "";
+}
+
+function getEmbyTokenSafe_apply() {
+  try {
+    return window.ApiClient?.accessToken?.() || window.ApiClient?._accessToken || "";
+  } catch {
+    return "";
+  }
+}
+
+async function isAdminUser_apply() {
+  if (__isAdminCached_apply !== null) return __isAdminCached_apply;
+
+  try {
+    const token = getEmbyTokenSafe_apply();
+    if (!token) return (__isAdminCached_apply = false);
+
+    const jfRoot = getJfRootFromLocation_apply();
+    const r = await fetch(`${jfRoot}/Users/Me`, {
+      cache: "no-store",
+      headers: { "Accept": "application/json", "X-Emby-Token": token }
+    });
+    if (!r.ok) return (__isAdminCached_apply = false);
+
+    const me = await r.json();
+    const pol = me?.Policy || {};
+    return (__isAdminCached_apply = !!(pol.IsAdministrator || pol.IsAdmin || pol.IsAdminUser));
+  } catch {
+    return (__isAdminCached_apply = false);
+  }
+}
+
+function pick(obj, keys) {
+  const out = {};
+  keys.forEach(k => { if (obj && Object.prototype.hasOwnProperty.call(obj, k)) out[k] = obj[k]; });
+  return out;
+}
+
+const USER_ONLY_KEYS = [
+  "createAvatar",
+  "avatarWidth",
+  "avatarHeight",
+  "avatarFontSize",
+  "avatarTextShadow",
+  "avatarColorMethod",
+  "avatarSolidColor",
+  "avatarGradient",
+  "avatarFontFamily",
+  "avatarStyle",
+  "dicebearStyle",
+  "dicebearBackgroundColor",
+  "dicebearRadius",
+  "avatarScale",
+  "dicebearBackgroundEnabled",
+  "dicebearPosition",
+  "autoRefreshAvatar",
+  "avatarRefreshTime",
+  "randomDicebearAvatar",
+  "dicebearParams",
+  "playerTheme"
+];
+
+  export async function applySettings(reload = false) {
+    const cfgGuard = getConfig();
+        let isAdmin = true;
+    if (cfgGuard?.forceGlobalUserSettings) {
+      isAdmin = await isAdminUser_apply();
+    }
         const form = document.querySelector('#settings-modal form');
         if (!form) return;
         const formData = new FormData(form);
@@ -515,7 +589,16 @@ const _MAX_MIN = 1000;
           localStorage.setItem('pauseOverlay', JSON.stringify(updatedConfig.pauseOverlay));
         } catch {}
 
-        updateConfig(updatedConfig);
+        const toSave =
+          (cfgGuard?.forceGlobalUserSettings && !isAdmin)
+            ? pick(updatedConfig, USER_ONLY_KEYS)
+            : updatedConfig;
+
+        updateConfig(toSave);
+
+        if (!(cfgGuard?.forceGlobalUserSettings && !isAdmin)) {
+          publishAdminSnapshotIfForced();
+        }
         updateSlidePosition();
         updateHeaderUserAvatar();
 
@@ -529,9 +612,15 @@ const _MAX_MIN = 1000;
         loadCSS();
     }
 
-    if (reload) {
-        location.reload();
+    if (cfgGuard?.forceGlobalUserSettings && !isAdmin) {
+      showNotification(
+        `<i class="fas fa-user" style="margin-right:8px;"></i> ${cfgGuard?.languageLabels?.settingsSavedModal || "Avatar/tema ayarların kullanıcıya özel kaydedildi."}`,
+        2500,
+        "info"
+      );
     }
+
+    if (reload) location.reload();
 
     const avatarSettingsChanged =
         config.createAvatar !== updatedConfig.createAvatar ||
@@ -553,9 +642,7 @@ const _MAX_MIN = 1000;
         updateAvatarStyles();
     }
 
-        if (reload) {
-            location.reload();
-        }
+        if (reload) location.reload();
     }
 
 export function applyRawConfig(config) {

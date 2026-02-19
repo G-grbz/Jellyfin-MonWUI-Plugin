@@ -1,4 +1,7 @@
 export const languageLabels = {
+  forceGlobalLockedTitle: "Эти настройки были принудительно применены администратором на этом сервере.",
+  collectionNotFound: "Не входит в коллекцию.",
+  collectionTitle: "Коллекция",
   enableSlider: "Включить слайдер",
   onlyShowSliderOnHomeTab: "Показывать только на вкладке «Главная»",
   avatarSec: "Выбрать аватар",

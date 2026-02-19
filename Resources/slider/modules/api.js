@@ -844,12 +844,13 @@ export function goToDetailsPage(itemId) {
    }
  }
 
- const ITEM_FULL_FIELDS = [
+const ITEM_FULL_FIELDS = [
   "Type","Name","SeriesId","SeriesName","ParentId","ParentIndexNumber","IndexNumber",
   "Overview","Genres","RunTimeTicks","OfficialRating","ProductionYear",
   "CommunityRating","CriticRating",
   "ImageTags","BackdropImageTags",
-  "UserData","MediaStreams","Series"
+  "UserData","MediaStreams","Series", "CollectionIds",
+  "ProviderIds", "People", "RemoteTrailers", "Studios", "Taglines",
 ];
 
 export async function fetchItemDetailsFull(itemId, { signal } = {}) {

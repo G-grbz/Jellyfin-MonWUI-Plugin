@@ -358,6 +358,7 @@ async function scheduleSliderRebuild(reason = "cycle-complete") {
   try {
     try {
       window.__jmsLoadingScreen?.show?.();
+      try { window.__jmsLoadingHiddenOnce = false; } catch {}
       window.__jmsLoadingScreen?.updateProgress?.(
         5,
         L(["loadingMsgRebuilding", "loadingRebuilding"], "Yeniden hazırlanıyor...")
@@ -1479,6 +1480,14 @@ export async function slidesInit() {
     } catch {}
 
     initializeSlider();
+    try {
+      if (!window.__jmsLoadingHiddenOnce) {
+        window.__jmsLoadingHiddenOnce = true;
+        requestAnimationFrame(() => {
+          try { window.__jmsLoadingScreen?.hide?.(); } catch {}
+        });
+      }
+    } catch {}
     const rest = items.slice(1);
     idle(() => {
       (async () => {

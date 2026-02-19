@@ -1,4 +1,4 @@
-import { getConfig } from "./config.js";
+import { getConfig, publishAdminSnapshotIfForced } from "./config.js";
 import { loadCSS } from "./player/main.js";
 import { getLanguageLabels, getDefaultLanguage } from '../language/index.js';
 import { showNotification } from "./player/ui/notification.js";
@@ -254,24 +254,33 @@ themeToggleBtn.onclick = () => {
   setSettingsThemeToggleVisuals();
 
   const labels = cfg.languageLabels || {};
-  showNotification(
-    `<i class="fas fa-${newTheme === 'light' ? 'sun' : 'moon'}"></i> ${
-      newTheme === 'light'
-        ? (labels.lightThemeEnabled || 'Aydınlık tema etkin')
-        : (labels.darkThemeEnabled || 'Karanlık tema etkin')
-    }`,
-    2000,
-    'info'
-  );
-  try {
-    window.dispatchEvent(new CustomEvent('app:theme-changed', { detail: { theme: newTheme } }));
-    const themeSelect = document.getElementById('themeSelect');
-    if (themeSelect) themeSelect.value = newTheme;
-  } catch {}
-};
+    showNotification(
+      `<i class="fas fa-${newTheme === 'light' ? 'sun' : 'moon'}"></i> ${
+        newTheme === 'light'
+          ? (labels.lightThemeEnabled || 'Aydınlık tema etkin')
+          : (labels.darkThemeEnabled || 'Karanlık tema etkin')
+      }`,
+      2000,
+      'info'
+    );
+    try {
+      window.dispatchEvent(new CustomEvent('app:theme-changed', { detail: { theme: newTheme } }));
+      const themeSelect = document.getElementById('themeSelect');
+      if (themeSelect) themeSelect.value = newTheme;
+    } catch {}
+    publishAdminSnapshotIfForced();
+  };
 
     setSettingsThemeToggleVisuals();
     btnDiv.append(themeToggleBtn);
+
+    applyGlobalSettingsLockUI({
+      labels,
+      saveBtn,
+      applyBtn,
+      resetBtn,
+      themeToggleBtn
+    });
 
     modalContent.append(closeBtn, title, form);
     modal.appendChild(modalContent);
@@ -861,6 +870,21 @@ export function isLocalStorageAvailable() {
 }
 
 export function updateConfig(updatedConfig) {
+  const cfg = getConfig();
+
+  if (cfg?.forceGlobalUserSettings && !cfg?.currentUserIsAdmin) {
+    const allowedKeys = new Set([
+      "playerTheme"
+    ]);
+
+    const onlyAllowed =
+      Object.keys(updatedConfig || {}).every(k => allowedKeys.has(k));
+
+    if (!onlyAllowed) {
+      console.warn("[JMSFusion] Global settings forced - update blocked (non-admin).");
+      return;
+    }
+  }
   const existingDicebearParams = localStorage.getItem('dicebearParams');
 
   const isPlainObject = (v) =>
@@ -1100,6 +1124,119 @@ export function toggleSettingsModal(defaultTab = 'slider') {
       api.open(defaultTab);
     });
   }
+}
+
+let __isAdminCached = null;
+
+function getJfRootFromLocation() {
+  const path = window.location.pathname || "/";
+  const split = path.split("/web/");
+  return split.length > 1 ? split[0] : "";
+}
+
+function getEmbyTokenSafe() {
+  try {
+    return window.ApiClient?.accessToken?.() || window.ApiClient?._accessToken || "";
+  } catch {
+    return "";
+  }
+}
+
+async function isAdminUser() {
+  if (__isAdminCached !== null) return __isAdminCached;
+
+  try {
+    const token = getEmbyTokenSafe();
+    if (!token) {
+      __isAdminCached = false;
+      return false;
+    }
+
+    const jfRoot = getJfRootFromLocation();
+    const r = await fetch(`${jfRoot}/Users/Me`, {
+      cache: "no-store",
+      headers: {
+        "Accept": "application/json",
+        "X-Emby-Token": token
+      }
+    });
+
+    if (!r.ok) {
+      __isAdminCached = false;
+      return false;
+    }
+
+    const me = await r.json();
+    const pol = me?.Policy || {};
+    __isAdminCached = !!(pol.IsAdministrator || pol.IsAdmin || pol.IsAdminUser);
+    return __isAdminCached;
+  } catch {
+    __isAdminCached = false;
+    return false;
+  }
+}
+
+export function isGlobalSettingsLockedForUser() {
+  const cfg = getConfig();
+  const forced = !!cfg?.forceGlobalUserSettings;
+
+  if (!forced) return false;
+  return true;
+}
+
+async function applyGlobalSettingsLockUI({
+  labels,
+  saveBtn,
+  applyBtn,
+  resetBtn,
+  themeToggleBtn
+}) {
+  const cfg = getConfig();
+  if (!cfg?.forceGlobalUserSettings) return;
+
+  const admin = await isAdminUser();
+  if (admin) return;
+
+  const lockMsg =
+    labels?.forceGlobalLockedTitle ||
+    "Bu sunucuda ayarlar yönetici tarafından global olarak zorlandı.";
+
+  [saveBtn, applyBtn, resetBtn].forEach(btn => {
+    if (!btn) return;
+    btn.disabled = true;
+    btn.style.pointerEvents = "none";
+    btn.style.opacity = "0.5";
+  });
+  if (themeToggleBtn) {
+    themeToggleBtn.disabled = false;
+    themeToggleBtn.style.pointerEvents = "";
+    themeToggleBtn.style.opacity = "";
+  }
+
+  const modal = document.getElementById('settings-modal');
+  if (modal) {
+    const avatarPanel = modal.querySelector('#avatar-panel');
+    const avatarAllowed = new Set();
+    if (avatarPanel) {
+      avatarPanel.querySelectorAll('input, select, textarea, button').forEach(el => avatarAllowed.add(el));
+    }
+
+    if (themeToggleBtn) avatarAllowed.add(themeToggleBtn);
+
+    modal.querySelectorAll('input, select, textarea, button').forEach(el => {
+      if (el.classList.contains('settings-close')) return;
+      if (avatarAllowed.has(el)) return;
+      el.disabled = true;
+      el.style.pointerEvents = "none";
+      el.style.opacity = "0.6";
+    });
+  }
+
+  showNotification(
+    `<i class="fas fa-lock" style="margin-right:8px;"></i> ${lockMsg}`,
+    5000,
+    "warning"
+  );
 }
 
 export function installSettingsHotkey(defaultTab = 'slider') {
