@@ -13,6 +13,15 @@
     </div>
 
     <form id="configForm" onsubmit="return false;">
+    <div class="inputContainer">
+        <label class="inputLabel" style="display:flex; align-items:center; gap:8px;">
+          <input id="forceGlobal" type="checkbox">
+          Force Global User Settings (override all users)
+        </label>
+        <div class="fieldDescription">
+          Enabled: all users receive admin snapshot automatically. Disabled: users use their own local settings.
+        </div>
+      </div>
       <div class="inputContainer">
         <label class="inputLabel" for="scriptDir">Script Directory</label>
         <input id="scriptDir" type="text" class="emby-input" placeholder="/home/gkhng/slider">
@@ -26,6 +35,7 @@
 
       <div class="buttonContainer" data-jf-no-translate="1" style="margin-top:16px; display:flex; gap:8px; flex-wrap:wrap;">
         <button id="saveBtn" type="button" class="raised button-submit">Save</button>
+        <button id="publishGlobalBtn" type="button" class="raised"> Publish Admin Settings Globally </button>
         <button id="refreshEnvBtn" type="button" class="raised">Refresh Web Path & Permissions</button>
         <button id="copyAclBtn" type="button" class="raised">Copy Permission Commands</button>
         <button id="patchBtn" type="button" class="raised">Patch (Inject into index.html)</button>

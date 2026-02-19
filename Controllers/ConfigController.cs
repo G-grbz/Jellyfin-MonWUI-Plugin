@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
+using System;
+
 namespace Jellyfin.Plugin.JMSFusion.Controllers;
 
 public class ConfigUpdateDto
@@ -30,7 +32,10 @@ public class ConfigController : ControllerBase
     {
         var cfg = JMSFusionPlugin.Instance?.Configuration
                   ?? throw new InvalidOperationException("Config not available.");
-        return Ok(cfg);
+        Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
+        Response.Headers["Pragma"] = "no-cache";
+        Response.Headers["Expires"] = "0";
+        return Ok(new { rev = cfg.GlobalUserSettingsRevision, cfg });
     }
 
     [HttpPost]
@@ -66,8 +71,13 @@ public class ConfigController : ControllerBase
         if (incoming.SleepSecs.HasValue)                       cfg.SleepSecs    = incoming.SleepSecs.Value;
         if (!string.IsNullOrWhiteSpace(incoming.JFUserId))     cfg.JFUserId     = incoming.JFUserId!;
 
+        cfg.GlobalUserSettingsRevision = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         plugin.UpdateConfiguration(cfg);
 
-        return Ok(new { ok = true, saved = true, cfg });
+        Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
+        Response.Headers["Pragma"] = "no-cache";
+        Response.Headers["Expires"] = "0";
+
+        return Ok(new { ok = true, saved = true, rev = cfg.GlobalUserSettingsRevision, cfg });
     }
 }

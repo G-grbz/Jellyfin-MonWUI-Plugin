@@ -28,6 +28,7 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
         {
             [JsonPropertyName("scriptDirectory")] public string? ScriptDirectory { get; set; }
             [JsonPropertyName("playerSubdir")]    public string? PlayerSubdir { get; set; }
+            [JsonPropertyName("forceGlobalUserSettings")] public bool? ForceGlobalUserSettings { get; set; }
         }
 
         [HttpPost("Configuration")]
@@ -40,6 +41,8 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
 
                 if (req.ScriptDirectory != null) cfg.ScriptDirectory = req.ScriptDirectory.Trim();
                 if (req.PlayerSubdir != null)    cfg.PlayerSubdir    = req.PlayerSubdir.Trim();
+                if (req.ForceGlobalUserSettings.HasValue)
+                    cfg.ForceGlobalUserSettings = req.ForceGlobalUserSettings.Value;
 
                 plugin.UpdateConfiguration(cfg);
                 _logger.LogInformation("[JMSFusion] CFG SAVED: dir='{dir}', player='{sub}'", cfg.ScriptDirectory, cfg.PlayerSubdir);

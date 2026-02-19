@@ -9,6 +9,15 @@ namespace Jellyfin.Plugin.JMSFusion
         [JsonPropertyName("scriptDirectory")]
         public string ScriptDirectory { get; set; } = string.Empty;
 
+        [JsonPropertyName("forceGlobalUserSettings")]
+        public bool ForceGlobalUserSettings { get; set; } = false;
+
+        [JsonPropertyName("globalUserSettingsJson")]
+        public string GlobalUserSettingsJson { get; set; } = "{}";
+
+        [JsonPropertyName("globalUserSettingsRevision")]
+        public long GlobalUserSettingsRevision { get; set; } = 0;
+
         [JsonPropertyName("allowScriptExecution")]
         public bool AllowScriptExecution { get; set; } = true;
 

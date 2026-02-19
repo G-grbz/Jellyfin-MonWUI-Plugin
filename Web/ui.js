@@ -22,13 +22,16 @@
     const cfg = await r.json();
     view.querySelector('#scriptDir').value = cfg.scriptDirectory || '';
     view.querySelector('#playerSub').value = cfg.playerSubdir || 'modules/player';
+    const fg = view.querySelector('#forceGlobal');
+    if (fg) fg.checked = !!cfg.forceGlobalUserSettings;
     return cfg;
   }
 
   async function saveConfig(view) {
     const body = {
       scriptDirectory: view.querySelector('#scriptDir').value.trim(),
-      playerSubdir: view.querySelector('#playerSub').value.trim()
+      playerSubdir: view.querySelector('#playerSub').value.trim(),
+      forceGlobalUserSettings: !!view.querySelector('#forceGlobal')?.checked
     };
     const r = await fetch(api('Configuration'), {
       method: 'POST',
@@ -130,6 +133,14 @@
     await showStatus(view);
   }
 
+  function authHeaders() {
+  try {
+    const token = window.ApiClient?.accessToken?.() || window.ApiClient?._accessToken;
+    if (token) return { 'X-Emby-Token': token };
+  } catch {}
+  return {};
+}
+
   async function initView(view) {
     if (view.__jms_initialized) return;
     view.__jms_initialized = true;
@@ -145,6 +156,32 @@
         showMessage(view, e.message || String(e), 'err');
       }
     });
+
+    view.querySelector('#publishGlobalBtn')?.addEventListener('click', async () => {
+  try {
+    const snapshot = {};
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      snapshot[key] = localStorage.getItem(key);
+    }
+
+    const r = await fetch(api('UserSettings/Publish'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ global: snapshot })
+    });
+
+    if (!r.ok) throw new Error('Publish failed');
+
+    const chk = await fetch('/Plugins/JMSFusion/UserSettings', { cache: 'no-store' });
+const j = await chk.json();
+console.log('[JMSFusion] UserSettings after publish:', j);
+
+    showMessage(view, 'Global settings published successfully', 'ok');
+  } catch (e) {
+    showMessage(view, e.message || String(e), 'err');
+  }
+});
 
     view.querySelector('#refreshEnvBtn')?.addEventListener('click', async () => {
       try { await refreshEnv(view); }

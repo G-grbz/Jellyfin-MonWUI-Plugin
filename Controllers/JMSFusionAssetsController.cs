@@ -13,6 +13,13 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
         private readonly ILogger<JMSFusionAssetsController> _logger;
         public JMSFusionAssetsController(ILogger<JMSFusionAssetsController> logger) => _logger = logger;
 
+        private void NoCache()
+        {
+            Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
+            Response.Headers["Pragma"] = "no-cache";
+            Response.Headers["Expires"] = "0";
+        }
+
         [HttpGet("UiJs")]
         public IActionResult GetUiJs()
         {
@@ -27,7 +34,8 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
 
                 using var ms = new MemoryStream();
                 stream.CopyTo(ms);
-                return File(ms.ToArray(), "application/javascript");
+                NoCache();
+                return File(ms.ToArray(), "application/javascript; charset=utf-8");
             }
             catch (Exception ex)
             {
