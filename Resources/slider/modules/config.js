@@ -399,6 +399,33 @@ export function getConfig() {
     enableRecentEpisodesRow: (localStorage.getItem('enableRecentEpisodesRow') || 'true') !== 'false',
     recentEpisodesCardCount: parseInt(localStorage.getItem('recentEpisodesCardCount'), 10) || 10,
 
+    recentRowsSplitTvLibs: (localStorage.getItem('recentRowsSplitTvLibs') || 'true') !== 'false',
+
+    recentSeriesTvLibIds: (() => {
+      try {
+        const raw = localStorage.getItem('recentSeriesTvLibIds');
+        if (!raw || raw === '[object Object]') return [];
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr.map(x=>String(x||'').trim()).filter(Boolean) : [];
+      } catch { return []; }
+    })(),
+    recentEpisodesTvLibIds: (() => {
+      try {
+        const raw = localStorage.getItem('recentEpisodesTvLibIds');
+        if (!raw || raw === '[object Object]') return [];
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr.map(x=>String(x||'').trim()).filter(Boolean) : [];
+      } catch { return []; }
+    })(),
+    continueSeriesTvLibIds: (() => {
+      try {
+        const raw = localStorage.getItem('continueSeriesTvLibIds');
+        if (!raw || raw === '[object Object]') return [];
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr.map(x=>String(x||'').trim()).filter(Boolean) : [];
+      } catch { return []; }
+    })(),
+
     enableBecauseYouWatched: (localStorage.getItem('enableBecauseYouWatched') || 'true') !== 'false',
     becauseYouWatchedRowCount: parseInt(localStorage.getItem('becauseYouWatchedRowCount'), 10) || 10,
     becauseYouWatchedCardCount: parseInt(localStorage.getItem('becauseYouWatchedCardCount'), 10) || 10,
