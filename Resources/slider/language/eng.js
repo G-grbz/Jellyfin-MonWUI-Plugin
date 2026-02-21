@@ -1,4 +1,11 @@
 export const languageLabels = {
+  recentRowsSplitTvLibs: "Show TV Libraries in Separate Sections",
+  tvLibSelectHeading: "TV Libraries to Display",
+  tvLibSelectHint: "If left empty, all TV libraries will be considered active.",
+  tvLibSelectNoLibs: "No TV libraries found.",
+  tvLibRowRecentSeries: "Select the libraries to display for Recently Added Series.",
+  tvLibRowRecentEpisodes: "Select the libraries to display for Recently Added Episodes.",
+  tvLibRowContinueSeries: "Select the libraries to display for Continue Watching cards.",
   hizliyiKaldir: "Forget",
   profileChooserHeader: "Who’s watching ?",
   enableProfileChooser: "Enable profile chooser (Who’s watching?)",

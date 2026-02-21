@@ -1,4 +1,11 @@
 export const languageLabels = {
+  recentRowsSplitTvLibs: "Показывать ТВ-библиотеки в отдельных разделах",
+  tvLibSelectHeading: "ТВ-библиотеки для отображения",
+  tvLibSelectHint: "Если ничего не выбрано, все ТВ-библиотеки будут считаться активными.",
+  tvLibSelectNoLibs: "ТВ-библиотеки не найдены.",
+  tvLibRowRecentSeries: "Выберите библиотеки для отображения недавно добавленных сериалов.",
+  tvLibRowRecentEpisodes: "Выберите библиотеки для отображения недавно добавленных эпизодов.",
+  tvLibRowContinueSeries: "Выберите библиотеки для отображения карточек «Продолжить просмотр».",
   hizliyiKaldir: "Забыть",
   profileChooserHeader: "Кто смотрит ?",
   enableProfileChooser: "Включить выбор профиля (Кто смотрит?)",

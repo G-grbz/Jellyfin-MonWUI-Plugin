@@ -1,4 +1,11 @@
 export const languageLabels = {
+  recentRowsSplitTvLibs: "Dizi Kütüphanelerini Ayrı Bölümlerde Göster",
+  tvLibSelectHeading: "Gösterilecek Dizi Kütüphaneleri",
+  tvLibSelectHint: "Hiç seçim yapmazsan tüm Dizi kütüphaneleri aktif kabul edilir.",
+  tvLibSelectNoLibs: "Hiç Dizi kütüphanesi bulunamadı.",
+  tvLibRowRecentSeries: "Son eklenen diziler için görüntülenecek kütüphaneleri seçin.",
+  tvLibRowRecentEpisodes: "Son eklenen bölümler için görüntülenecek kütüphaneleri seçin.",
+  tvLibRowContinueSeries: "İzlemeye Devam kartları için görüntülenecek kütüphaneleri seçin.",
   hizliyiKaldir: "Unut",
   profileChooserHeader: "Kim izliyor ?",
   enableProfileChooser: "Profil seçiciyi (Kim izliyor?) etkinleştir",
