@@ -31,28 +31,47 @@ An all-in-one JavaScript toolkit for Jellyfin, featuring a customizable Media Sl
 | <div class="card"><img src="https://github.com/user-attachments/assets/b67e7acd-39a5-420b-b341-379d4d471a69" width="100%"/><br/><sub><b>GMMP Music Player</b></sub></div>  | <div class="card"><img src="https://github.com/user-attachments/assets/03acc238-92fa-4149-a3ad-5a32d792075f" width="100%"/><br/><sub><b>Age Badge</b></sub></div>              |
 | <div class="card"><img src="https://github.com/user-attachments/assets/13549ae1-6afc-42e3-a6bd-73efc902f5d2" width="100%"/><br/><sub><b>HoverTrailers</b></sub></div>      | <div class="card"><img src="https://github.com/user-attachments/assets/7247488f-0b2a-47e6-8972-3be7f7e7c992" width="100%"/><br/><sub><b>Popovers</b></sub></div>               |   | <div class="card"><img src="https://github.com/user-attachments/assets/13549ae1-6afc-42e3-a6bd-73efc902f5d2" width="100%"/><br/><sub><b>HoverTrailers</b></sub></div>      | <div class="card"><img src="https://github.com/user-attachments/assets/7247488f-0b2a-47e6-8972-3be7f7e7c992" width="100%"/><br/><sub><b>Popovers</b></sub></div>               |
 
----
-
-
----
 
 <a id="features"></a>
 
 ## ✨ Features
 
-* Per-user list creation
-* Automatic list updates
-* Customizable Jellyfin API integration
-* Manual positioning for theme compatibility
+* User-specific slider lists (per-profile row configuration)
+
+* Automatic slider list refresh (keeps rows up to date without manual reloads)
+
+* Customizable Jellyfin API integration for sliders (endpoint/behavior tuning)
+
+* Manual positioning controls for better theme compatibility
+
 * GMMP Music Player
-* Pause Screen
-* Avatar Generator (DiceBear supported)
-* Advanced settings management
-* Global Quality Labels in Jellyfin
-* Netflix-like Hover Video Previews
-* Newly Added Content & Notifications Module
-* StudioHubs (Disney+ style)
-* Trailer Fetching Scripts
+
+* Pause Screen + Smart Pause, including Netflix-style age rating badges
+
+* Avatar Generator (DiceBear-powered)
+
+* 600+ pre-made avatars with a built-in avatar picker
+
+* Netflix-style “Who’s Watching?” profile chooser
+
+* Global Quality Badges across Jellyfin (consistent quality labels)
+
+* Netflix-style hover trailer module (or a lighter popover alternative)
+
+* Newly Added Content & Notifications module
+
+* Studio Hubs (Disney+ style)
+
+* Enhanced Home Screen cards
+
+* Trailer & theme video downloader / NFO helper (trailers sourced from TMDB)
+
+* Lyrics downloader module
+
+* Netflix-style details overlay used by the enhanced home cards
+
+* Advanced Settings Panel to enable/disable and manage all modules in one place
+
 
 ---
 
