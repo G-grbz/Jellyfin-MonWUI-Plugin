@@ -269,6 +269,25 @@ const USER_ONLY_KEYS = [
             continueMoviesCardCount: parseInt(formData.get('continueMoviesCardCount'), 10) || config.continueMoviesCardCount || 10,
             enableContinueSeries: formData.get('enableContinueSeries') === 'on',
             continueSeriesCardCount: parseInt(formData.get('continueSeriesCardCount'), 10) || config.continueSeriesCardCount || 10,
+
+            recentRowsSplitTvLibs: formData.get('recentRowsSplitTvLibs') === 'on',
+
+            recentSeriesTvLibIds: (() => {
+              const raw = formData.get('recentSeriesTvLibIds');
+              if (!raw) return config.recentSeriesTvLibIds || [];
+              try { const a = JSON.parse(raw); return Array.isArray(a) ? a : []; } catch { return config.recentSeriesTvLibIds || []; }
+            })(),
+            recentEpisodesTvLibIds: (() => {
+              const raw = formData.get('recentEpisodesTvLibIds');
+              if (!raw) return config.recentEpisodesTvLibIds || [];
+              try { const a = JSON.parse(raw); return Array.isArray(a) ? a : []; } catch { return config.recentEpisodesTvLibIds || []; }
+            })(),
+            continueSeriesTvLibIds: (() => {
+              const raw = formData.get('continueSeriesTvLibIds');
+              if (!raw) return config.continueSeriesTvLibIds || [];
+              try { const a = JSON.parse(raw); return Array.isArray(a) ? a : []; } catch { return config.continueSeriesTvLibIds || []; }
+            })(),
+
             enableStudioHubs: formData.get('enableStudioHubs') === 'on',
             enablePersonalRecommendations: formData.get('enablePersonalRecommendations') === 'on',
             personalRecsCacheTtlMs: parseInt(formData.get('personalRecsCacheTtlMs'), 10) || 360,
