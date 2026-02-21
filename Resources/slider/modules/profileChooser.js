@@ -164,12 +164,65 @@ function forgetRememberedToken(userId) {
   return false;
 }
 
+function clearAllRememberedTokensForServer() {
+  const purge = (storage) => {
+    try {
+      const keys = [];
+      for (let i = 0; i < storage.length; i++) {
+        const k = storage.key(i);
+        if (!k) continue;
+        if (k.includes("jf_profile_tokens") || k.includes("jf_profile_tokens_rev")) {
+          keys.push(k);
+        }
+      }
+      for (const k of keys) {
+        try { storage.removeItem(k); } catch {}
+      }
+    } catch {}
+  };
+
+  purge(localStorage);
+  purge(sessionStorage);
+
+  try { localStorage.setItem(tokenStoreKey(), "{}"); } catch {}
+  try { localStorage.removeItem(tokenStoreRevKey()); } catch {}
+}
+
 function pickCredsStorageKey() {
   try {
     if (localStorage.getItem("jellyfin_credentials")) return "jellyfin_credentials";
     if (localStorage.getItem("emby_credentials")) return "emby_credentials";
   } catch {}
   return "jellyfin_credentials";
+}
+
+function hardClearJellyfinWebAuth() {
+  const key = pickCredsStorageKey();
+  try { localStorage.removeItem(key); } catch {}
+  try { sessionStorage.removeItem(key); } catch {}
+
+  try { localStorage.removeItem("accessToken"); } catch {}
+  try { sessionStorage.removeItem("accessToken"); } catch {}
+
+  try { localStorage.removeItem("embyToken"); } catch {}
+  try { sessionStorage.removeItem("embyToken"); } catch {}
+
+  try { localStorage.removeItem("userId"); } catch {}
+  try { sessionStorage.removeItem("userId"); } catch {}
+
+  try { localStorage.removeItem("serverId"); } catch {}
+  try { sessionStorage.removeItem("serverId"); } catch {}
+}
+
+async function tryServerLogout() {
+  try {
+    const ac = window.ApiClient || window.apiClient || null;
+    if (ac && typeof ac.logout === "function") {
+      await ac.logout();
+      return true;
+    }
+  } catch {}
+  return false;
 }
 
 function safeParse(raw) {
@@ -966,10 +1019,17 @@ export function initProfileChooser(options = {}) {
         return;
       }
       if (action === "signout") {
-        try { clearCredentials?.(); } catch {}
-        try { localStorage.removeItem(LAST_PICK_KEY); sessionStorage.removeItem(AUTOOPEN_FLAG); } catch {}
-        close();
-        try { location.reload(); } catch {}
+        try { e.preventDefault(); e.stopPropagation(); } catch {}
+        (async () => {
+          await tryServerLogout().catch(() => {});
+          try { clearCredentials?.(); } catch {}
+          hardClearJellyfinWebAuth();
+          clearAllRememberedTokensForServer();
+          try { localStorage.removeItem(LAST_PICK_KEY); } catch {}
+          try { sessionStorage.removeItem(AUTOOPEN_FLAG); } catch {}
+          close();
+          try { location.reload(); } catch {}
+        })();
         return;
       }
       return;
