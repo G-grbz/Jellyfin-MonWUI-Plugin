@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/G-grbz/Jellyfin-MonWUI-Plugin/main/img/icon.png",
     "versions": [
     {
+        "version": "1.9.0.0",
+        "changelog": "Added a Netflix-Style ‘Who’s Watching?’ Module",
+        "targetAbi": "10.10.0.0",
+        "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v1.9.0/JMSFusion-1.9.0.0-server.zip",
+        "checksum": "98c6d2136f945b0e94856f8196518e8e",
+        "timestamp": "2026-02-21T11:21:10.2608970Z"
+      },
+    {
         "version": "1.8.1.0",
         "changelog": "Optionally prevent non-admin users from modifying monWUI settings. / https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/tag/v1.8.0",
         "targetAbi": "10.10.0.0",
