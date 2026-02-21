@@ -3,13 +3,13 @@
   "description": "JMSFusion injects your custom JS modules into the Jellyfin web UI (response rewrite) and serves them from an external directory or embedded /Resources/slider.",
   "name": "JMSFusion",
   "owner": "G-Grbz",
-  "version": "1.8.1.0",
+  "version": "1.9.0.0",
   "status": "Active",
   "autoUpdate": true,
   "targetAbi": "10.10.0.0",
   "sourceUrl": "https://github.com/G-grbz/Jellyfin-Media-Slider",
-  "imagePathLinux": "/var/lib/jellyfin/plugins/JMSFusion_1.8.1.0/icon.png",
-  "imagePathWindows": "%ProgramData%/Jellyfin/Server/plugins/JMSFusion_1.8.1.0/icon.png",
-  "timestamp": "2026-02-19T18:30:20.6014226Z",
+  "imagePathLinux": "/var/lib/jellyfin/plugins/JMSFusion_1.9.0.0/icon.png",
+  "imagePathWindows": "%ProgramData%/Jellyfin/Server/plugins/JMSFusion_1.9.0.0/icon.png",
+  "timestamp": "2026-02-21T10:55:02.7802663Z",
   "guid": "c0b4a5e0-2f6a-4e70-9c5f-1e7c2d0b7f12"
 }

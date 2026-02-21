@@ -12,6 +12,18 @@ namespace Jellyfin.Plugin.JMSFusion
         [JsonPropertyName("forceGlobalUserSettings")]
         public bool ForceGlobalUserSettings { get; set; } = false;
 
+        [JsonPropertyName("globalUserSettingsJsonDesktop")]
+        public string GlobalUserSettingsJsonDesktop { get; set; } = "{}";
+
+        [JsonPropertyName("globalUserSettingsJsonMobile")]
+        public string GlobalUserSettingsJsonMobile { get; set; } = "{}";
+
+        [JsonPropertyName("globalUserSettingsRevisionDesktop")]
+        public long GlobalUserSettingsRevisionDesktop { get; set; } = 0;
+
+        [JsonPropertyName("globalUserSettingsRevisionMobile")]
+        public long GlobalUserSettingsRevisionMobile { get; set; } = 0;
+
         [JsonPropertyName("globalUserSettingsJson")]
         public string GlobalUserSettingsJson { get; set; } = "{}";
 
