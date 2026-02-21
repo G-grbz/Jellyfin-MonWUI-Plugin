@@ -13,8 +13,8 @@
         "changelog": "Added a Netflix-Style ‘Who’s Watching?’ Module",
         "targetAbi": "10.10.0.0",
         "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v1.9.0/JMSFusion-1.9.0.0-server.zip",
-        "checksum": "934ff7da8c4e7753f17a8a859f8dd342",
-        "timestamp": "2026-02-21T14:14:40.0406122Z"
+        "checksum": "81388092d4de664ec620ae4c602e5142",
+        "timestamp": "2026-02-21T18:41:04.6490679Z"
       },
     {
         "version": "1.8.1.0",
