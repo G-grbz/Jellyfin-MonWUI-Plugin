@@ -22,10 +22,11 @@ import { mountDirectorRowsLazy } from "./modules/directorRows.js";
 import { setupHoverForAllItems  } from "./modules/hoverTrailerModal.js";
 import { teardownAnimations } from "./modules/animations.js";
 import { mountRecentRowsLazy, cleanupRecentRows } from "./modules/recentRows.js";
-import { initLoadingScreen } from "./modules/loadingScreen.js";
 import { withServer } from "./modules/jfUrl.js";
 import { initUserProfileAvatarPicker } from "./modules/avatarPicker.js";
 import { startGlobalDbFullscanScheduler } from "./modules/player/ui/artistModal.js";
+import { startBackgroundCollectionIndexer } from "./modules/collectionIndexer.js";
+import { initProfileChooser } from "./modules/profileChooser.js"
 
 const idle = window.requestIdleCallback || ((cb) => setTimeout(cb, 0));
 
@@ -204,6 +205,7 @@ window.__peakBooting = true;
   addCSS('/slider/src/detailsModal.css', 'jms-css-detailsModal');
   addCSS('/slider/src/studioHubsMini.css', 'jms-css-studioHubsMini');
   addCSS('/slider/src/avatarPicker.css', 'jms-css-avatarPicker');
+  addCSS('/slider/src/profileChooser.css', 'jms-css-profileChooser');
 
   const vmap = {
     peakslider: '/slider/src/peakslider.css',
@@ -356,14 +358,6 @@ async function scheduleSliderRebuild(reason = "cycle-complete") {
   if (window.__rebuildingSlider) return;
   window.__rebuildingSlider = true;
   try {
-    try {
-      window.__jmsLoadingScreen?.show?.();
-      try { window.__jmsLoadingHiddenOnce = false; } catch {}
-      window.__jmsLoadingScreen?.updateProgress?.(
-        5,
-        L(["loadingMsgRebuilding", "loadingRebuilding"], "Yeniden hazırlanıyor...")
-      );
-    } catch {}
     clearCycleArm();
     window.__cycleExpired = false;
     try { teardownAnimations(); } catch {}
@@ -511,6 +505,8 @@ window.cleanupAvatarPicker = cleanupAvatarPicker;
 const NOTIF_ENABLED = !!(config && config.enableNotifications);
  forcejfNotifBtnPointerEvents();
  updateHeaderUserAvatar();
+ const cleanupProfileChooser = initProfileChooser();
+  window.cleanupProfileChooser = cleanupProfileChooser;
  if (NOTIF_ENABLED) {
    initNotifications();
  } else {
@@ -1023,12 +1019,8 @@ function warmUpcomingBackdrops(count = 3) {
 export async function slidesInit() {
   if (!isSliderEnabled()) {
     console.debug("[JMS] slidesInit() skipped (slider disabled)");
-    try { window.__jmsLoadingScreen?.hide?.(); } catch {}
     return;
   }
-  window.__jmsLoadingScreen?.updateProgress(
-    10, L(["loadingMsgAuthWarmup", "loadingMsgPreparingSession"], "Kullanıcı oturumu hazırlanıyor...")
-  );
   if (window.__slidesInitRunning) {
     console.debug("[JMS] slidesInit() skipped (already running)");
     return;
@@ -1480,14 +1472,6 @@ export async function slidesInit() {
     } catch {}
 
     initializeSlider();
-    try {
-      if (!window.__jmsLoadingHiddenOnce) {
-        window.__jmsLoadingHiddenOnce = true;
-        requestAnimationFrame(() => {
-          try { window.__jmsLoadingScreen?.hide?.(); } catch {}
-        });
-      }
-    } catch {}
     const rest = items.slice(1);
     idle(() => {
       (async () => {
@@ -1527,13 +1511,6 @@ export async function slidesInit() {
   } finally {
     window.sliderResetInProgress = false;
     window.__slidesInitRunning = false;
-    window.__jmsLoadingScreen?.updateProgress(
-      50, L(["loadingMsgLoadingContent", "loadingMsgContent"], "İçerikler yükleniyor...")
-    );
-
-    window.__jmsLoadingScreen?.updateProgress(
-      90, L(["loadingMsgPreparingSlider", "loadingMsgSlider"], "Slider hazırlanıyor...")
-    );
   }
 }
 
@@ -1769,7 +1746,6 @@ function initializeSliderOnHome() {
     try { cleanupSlider(); } catch {}
     try { stopSlideTimer?.(); } catch {}
     try { clearCycleArm(); } catch {}
-    try { window.__jmsLoadingScreen?.hide?.(); } catch {}
 
     try {
       const cfg = (typeof getConfig === 'function' ? getConfig() : {}) || {};
@@ -1791,9 +1767,6 @@ function initializeSliderOnHome() {
     return;
   }
 
-  window.__jmsLoadingScreen?.updateProgress(
-    20, L(["loadingMsgBootHome", "loadingMsgHome"], "Ana sayfa başlatılıyor...")
-  );
   const hasContainer = !!document.querySelector('#indexPage:not(.hide) #slides-container, #homePage:not(.hide) #slides-container');
   const willEarlyReturn = (window.__initOnHomeOnce && hasContainer);
 
@@ -1943,16 +1916,121 @@ function observeWhenHomeReady(cb, maxMs = 20000) {
 
 (async function robustBoot() {
   try {
-    const loadingScreen = initLoadingScreen();
-    document.addEventListener("jms:all-slides-ready", () => {
-      try { window.__jmsLoadingScreen?.hide?.(); } catch {}
-    }, { once: true });
+    async function bootIndexerOnce() {
+      if (window.__JMS_INDEXER_BOOTED__) return;
+      window.__JMS_INDEXER_BOOTED__ = true;
+
+      console.log("[JMS][INDEXER] boot requested…");
+
+      try { await waitAuthWarmupFallback(5000); } catch {}
+
+      try {
+        const s = getSessionInfo?.();
+        console.log("[JMS][INDEXER] session after auth=", {
+          userId: s?.userId,
+          hasToken: !!s?.accessToken,
+        });
+      } catch (e) {
+        console.warn("[JMS][INDEXER] session read failed:", e);
+      }
+
+      try {
+        await new Promise(r => setTimeout(r, 2000));
+
+        const ret = startBackgroundCollectionIndexer({
+          mode: "boxsetFirst",
+          aggressive: true,
+          boxsetThrottleMs: 120,
+        });
+        console.log("[JMS][INDEXER] started ✅ return=", ret);
+        window.__JMS_INDEXER_STARTED__ = true;
+      } catch (e) {
+        console.error("[JMS][INDEXER] crashed ❌", e);
+        window.__JMS_INDEXER_STARTED__ = false;
+      }
+    }
+
+    function getIndexerGateKey() {
+      try {
+        const s = getSessionInfo?.() || {};
+        const uid = s?.userId || "anon";
+        return `jms_indexer_lastRun_v1::${uid}`;
+      } catch {
+        return `jms_indexer_lastRun_v1::anon`;
+      }
+    }
+
+    function shouldRunIndexerNow(intervalMs) {
+      const key = getIndexerGateKey();
+      const now = Date.now();
+      const last = parseInt(localStorage.getItem(key) || "0", 10);
+      return !Number.isFinite(last) || last <= 0 || (now - last) >= intervalMs;
+    }
+
+    function markIndexerRunNow() {
+      const key = getIndexerGateKey();
+      try { localStorage.setItem(key, String(Date.now())); } catch {}
+    }
+
+    async function runIndexerIfDue({ intervalMs = 2 * 60 * 60 * 1000, reason = "scheduled" } = {}) {
+      try {
+        if (!shouldRunIndexerNow(intervalMs)) {
+          console.log("[JMS][INDEXER] skip (not due) reason=", reason);
+          return false;
+        }
+        markIndexerRunNow();
+
+        console.log("[JMS][INDEXER] due ✅ reason=", reason);
+
+        try { await waitAuthWarmupFallback(5000); } catch {}
+        await new Promise(r => setTimeout(r, 1500));
+
+        try {
+          const ret = startBackgroundCollectionIndexer({
+            mode: "boxsetFirst",
+            aggressive: true,
+            boxsetThrottleMs: 120,
+          });
+          console.log("[JMS][INDEXER] started ✅ return=", ret);
+          window.__JMS_INDEXER_STARTED__ = true;
+          return true;
+        } catch (e) {
+          console.error("[JMS][INDEXER] crashed ❌", e);
+          window.__JMS_INDEXER_STARTED__ = false;
+          return false;
+        }
+      } catch (e) {
+        console.warn("[JMS][INDEXER] runIndexerIfDue error:", e);
+        return false;
+      }
+    }
+
     try {
       await waitAuthWarmupFallback(1000);
     } catch {}
     try {
       startGlobalDbFullscanScheduler();
     } catch (e) { console.warn("startGlobalDbFullscanScheduler hata:", e); }
+
+    try { window.__jmsBootIndexer = bootIndexerOnce; } catch {}
+
+    (function scheduleIndexerStart() {
+      const INTERVAL_MS = 2 * 60 * 60 * 1000;
+
+      const onReady = () => {
+        runIndexerIfDue({ intervalMs: INTERVAL_MS, reason: "all-slides-ready" });
+      };
+
+      document.addEventListener("jms:all-slides-ready", onReady, { once: true });
+
+      setTimeout(() => {
+        runIndexerIfDue({ intervalMs: INTERVAL_MS, reason: "fallback-timeout" });
+      }, 10_000);
+
+      setInterval(() => {
+        runIndexerIfDue({ intervalMs: INTERVAL_MS, reason: "interval-tick" });
+      }, 5 * 60 * 1000);
+    })();
 
     const fastIndex = document.querySelector("#indexPage:not(.hide), #homePage:not(.hide)");
     if (fastIndex) {
@@ -2032,19 +2110,45 @@ window.cleanupAvatarSystem = cleanupAvatarSystem;
 (function installCardOverlayFixEverywhere(){
   const KEY = "jms-cardOverlay-after-fix";
   const CSS = `
-html body .cardOverlayContainer.cardOverlayContainer::after {
-  content: none !important;
-  background: transparent !important;
-  top: 0 !important;
-  bottom: 0 !important;
-  left: 0 !important;
-  right: 0 !important;
-  transition: none !important;
-  transform: none !important;
-}
-`.trim();
+  html body .cardOverlayContainer.cardOverlayContainer::after {
+    content: none !important;
+    background: transparent !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    transition: none !important;
+    transform: none !important;
+  }
+  `.trim();
 
   const injectedRoots = new WeakSet();
+
+  function lockLayoutInlineImportant() {
+    try {
+      const sels = [
+        "#genre-hubs .genre-row",
+        "#personal-recommendations .personal-recs-row",
+        ".genre-hub-section .genre-row",
+        ".itemsContainer.personal-recs-row",
+        ".personal-recs-section .personal-recs-row",
+      ];
+      const nodes = document.querySelectorAll(sels.join(","));
+      nodes.forEach((el) => {
+        el.style.setProperty("display", "grid", "important");
+        el.style.setProperty("gap", "16px", "important");
+        el.style.setProperty("grid-auto-columns", "minmax(195px,210px)", "important");
+        el.style.setProperty("grid-auto-flow", "column", "important");
+        el.style.setProperty("min-width", "0", "important");
+        el.style.setProperty("overflow-x", "auto", "important");
+        el.style.setProperty("width", "100%", "important");
+        el.style.setProperty("-webkit-overflow-scrolling", "touch", "important");
+        el.style.setProperty("box-sizing", "border-box", "important");
+        el.style.setProperty("scroll-snap-type", "x mandatory", "important");
+        el.style.setProperty("scrollbar-width", "none", "important");
+      });
+    } catch {}
+  }
 
   function injectIntoRoot(root) {
     if (!root || injectedRoots.has(root)) return;
@@ -2082,9 +2186,11 @@ html body .cardOverlayContainer.cardOverlayContainer::after {
   }
 
   scanAndInject();
+  lockLayoutInlineImportant();
 
   const mo = new MutationObserver(() => {
-    scanAndInject();
+  scanAndInject();
+  lockLayoutInlineImportant();
   });
   mo.observe(document.documentElement, { childList: true, subtree: true });
 })();

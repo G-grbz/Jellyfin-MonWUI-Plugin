@@ -1,4 +1,6 @@
-import { getConfig, publishAdminSnapshotIfForced } from "./config.js";
+//settings.js
+
+import { getConfig, publishAdminSnapshotIfForced, getAdminTargetProfile, getDeviceProfileAuto } from "./config.js";
 import { loadCSS } from "./player/main.js";
 import { getLanguageLabels, getDefaultLanguage } from '../language/index.js';
 import { showNotification } from "./player/ui/notification.js";
@@ -18,6 +20,7 @@ import { createNotificationsPanel } from './settings/notificationsPage.js';
 import { createStudioHubsPanel } from './settings/studioHubsPage.js';
 import { createHoverTrailerPanel } from './settings/hoverTrailerPage.js';
 import { createTrailersPanel } from './settings/trailersPage.js';
+import { createProfileChooserPanel } from './settings/profileChooserPage.js';
 
 let settingsModal = null;
 
@@ -61,6 +64,57 @@ export function createSettingsModal() {
     const title = document.createElement('h2');
     title.textContent = labels.sliderSettings || 'Slider Ayarları';
 
+    function createProfileSelector(labels) {
+      const wrap = document.createElement("div");
+      wrap.className = "setting-item";
+      wrap.style.marginBottom = "10px";
+
+      const lab = document.createElement("label");
+      lab.textContent = labels?.profileTarget || "Ayar Profili";
+      lab.style.marginRight = "10px";
+
+      const select = document.createElement("select");
+      select.id = "jmsProfileTarget";
+
+      const autoProfile = getDeviceProfileAuto();
+      const opts = [
+        { v: "auto", t: `${labels?.profileAuto || "Bu cihaz (auto)"} (${autoProfile})` },
+        { v: "desktop", t: labels?.profileDesktop || "Desktop profili" },
+        { v: "mobile", t: labels?.profileMobile || "Mobile profili" }
+      ];
+
+      opts.forEach(o => {
+        const opt = document.createElement("option");
+        opt.value = o.v;
+        opt.textContent = o.t;
+        select.appendChild(opt);
+      });
+
+      select.value = localStorage.getItem("jms:settingsTargetProfile") || "auto";
+
+      select.addEventListener("change", () => {
+        localStorage.setItem("jms:settingsTargetProfile", select.value);
+        showNotification(
+          `<i class="fas fa-layer-group" style="margin-right:8px;"></i> ${
+            labels?.profileChanged || "Profil seçildi. Kaydettiğinde bu profile publish edilecek."
+          }`,
+          2500,
+          "info"
+        );
+      });
+
+      wrap.append(lab, select);
+      return wrap;
+    }
+
+    // Admin only: allow selecting publish target (desktop/mobile)
+    if (config?.currentUserIsAdmin) {
+      try {
+        const profSel = createProfileSelector(labels);
+        modalContent.appendChild(profSel);
+      } catch {}
+    }
+
     const tabContainer = document.createElement('div');
     tabContainer.className = 'settings-tabs';
 
@@ -69,6 +123,7 @@ export function createSettingsModal() {
 
     const sliderTab = createTab('slider', 'fa-sliders', labels.sliderSettings || 'Slider Ayarları', true);
     const animationTab = createTab('animation', 'fa-film', labels.animationSettings || 'Animasyon Ayarları', true);
+    const profileChooserTab = createTab( 'profile-chooser', 'fa-user-group', labels.profileChooserHeader || 'Kim izliyor?', true);
     const musicTab = createTab('music', 'fa-music', labels.gmmpSettings || 'GMMP Ayarları', true);
     const pauseTab = createTab('pause', 'fa-pause', labels.pauseSettings || 'Durdurma Ekranı', true);
     const positionTab = createTab('position', 'fa-arrows-up-down-left-right', labels.positionSettings || 'Konumlandırma Ayarları', true);
@@ -91,7 +146,7 @@ export function createSettingsModal() {
     const aboutTab = createTab('about', 'fa-circle-info', labels.aboutHeader || 'Hakkında', true);
 
     tabContainer.append(
-        sliderTab, animationTab, musicTab, pauseTab, positionTab,
+        sliderTab, animationTab, profileChooserTab, musicTab, pauseTab, positionTab,
         queryTab, studioTab, hoverTab, trailersTab, avatarTab, notificationsTab, statusRatingTab, actorTab, directorTab,
         languageTab, logoTitleTab, descriptionTab, providerTab,
         buttonsTab, infoTab, exporterTab, aboutTab
@@ -99,6 +154,7 @@ export function createSettingsModal() {
 
     const sliderPanel = createSliderPanel(config, labels);
     const animationPanel = createAnimationPanel(config, labels);
+    const profileChooserPanel = createProfileChooserPanel(config, labels);
     const musicPanel = createMusicPanel(config, labels);
     const pausePanel = createPausePanel(config, labels);
     const positionPanel = createPositionPanel(config, labels);
@@ -124,21 +180,21 @@ export function createSettingsModal() {
          hoverPanel, trailersPanel, studioPanel, avatarPanel, notificationsPanel, statusRatingPanel,
         actorPanel, directorPanel, languagePanel, logoTitlePanel,
         descriptionPanel, providerPanel, buttonsPanel, infoPanel,
-        pausePanel, exporterPanel, aboutPanel
+        pausePanel, exporterPanel, aboutPanel, profileChooserPanel
     ].forEach(panel => {
         panel.style.display = 'none';
     });
     sliderPanel.style.display = 'block';
 
     tabContent.append(
-        sliderPanel, animationPanel, musicPanel, statusRatingPanel, actorPanel,
+        sliderPanel, animationPanel, profileChooserPanel, musicPanel, statusRatingPanel, actorPanel,
         directorPanel, queryPanel, hoverPanel, trailersPanel, studioPanel, avatarPanel, languagePanel, logoTitlePanel,
         descriptionPanel, providerPanel, buttonsPanel, infoPanel,
         pausePanel, positionPanel, aboutPanel, exporterPanel, notificationsPanel
     );
 
     [
-        sliderTab, animationTab, musicTab, queryTab, hoverTab,
+        sliderTab, animationTab, profileChooserTab, musicTab, queryTab, hoverTab,
         trailersTab, studioTab, avatarTab, notificationsTab, statusRatingTab,
         actorTab, directorTab, languageTab, logoTitleTab,
         descriptionTab, providerTab, buttonsTab, infoTab,
@@ -146,7 +202,7 @@ export function createSettingsModal() {
     ].forEach(tab => {
         tab.addEventListener('click', () => {
             [
-                sliderTab, animationTab, musicTab, queryTab, hoverTab,
+                sliderTab, animationTab, profileChooserTab, musicTab, queryTab, hoverTab,
                 trailersTab, studioTab, avatarTab, notificationsTab, statusRatingTab,
                 actorTab, directorTab, languageTab, logoTitleTab,
                 descriptionTab, providerTab, buttonsTab, infoTab,
@@ -155,7 +211,7 @@ export function createSettingsModal() {
                 t.classList.remove('active');
             });
             [
-                sliderPanel, animationPanel, statusRatingPanel, actorPanel, directorPanel,
+                sliderPanel, animationPanel, profileChooserPanel, statusRatingPanel, actorPanel, directorPanel,
                 musicPanel, queryPanel, hoverPanel, trailersPanel, studioPanel, avatarPanel, languagePanel, logoTitlePanel,
                 descriptionPanel, providerPanel, buttonsPanel, infoPanel,
                 positionPanel, aboutPanel, exporterPanel, pausePanel, notificationsPanel

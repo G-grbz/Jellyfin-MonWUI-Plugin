@@ -3,11 +3,28 @@ import { getLanguageLabels, getDefaultLanguage } from '../language/index.js';
 let __globalOverride = null;
 let __globalApplied = false;
 
+export function getDeviceProfileAuto() {
+  try {
+    const coarse = window.matchMedia?.("(pointer: coarse)")?.matches === true;
+    const small = window.matchMedia?.("(max-width: 900px)")?.matches === true;
+    const uaMobile = /Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    return (coarse || (small && uaMobile)) ? "mobile" : "desktop";
+  } catch {
+    return "desktop";
+  }
+}
+
+export function getAdminTargetProfile() {
+  const v = (localStorage.getItem("jms:settingsTargetProfile") || "auto").toLowerCase();
+  if (v === "mobile" || v === "desktop") return v;
+  return getDeviceProfileAuto();
+}
+
 async function __fetchGlobalOverride(force = false) {
   if (!force && __globalOverride !== null) return __globalOverride;
   try {
-    const r = await fetch(`/Plugins/JMSFusion/UserSettings?ts=${Date.now()}`, {
-      cache: "no-store"
+    const profile = getDeviceProfileAuto();
+    const r = await fetch(`/Plugins/JMSFusion/UserSettings?ts=${Date.now()}&profile=${profile}`, {
     });
     if (!r.ok) throw new Error();
     __globalOverride = await r.json();
@@ -272,7 +289,7 @@ export function getConfig() {
     useRandomContent: localStorage.getItem('useRandomContent') !== 'false',
     fullscreenMode: localStorage.getItem('fullscreenMode') === 'true' ? true : false,
     listLimit: 20,
-    version: "v1.8.0",
+    version: "v1.9.0",
     historySize: 20,
     updateInterval: 300000,
     nextTracksSource: localStorage.getItem('nextTracksSource') || 'playlist',
@@ -386,10 +403,9 @@ export function getConfig() {
     becauseYouWatchedRowCount: parseInt(localStorage.getItem('becauseYouWatchedRowCount'), 10) || 10,
     becauseYouWatchedCardCount: parseInt(localStorage.getItem('becauseYouWatchedCardCount'), 10) || 10,
 
-    enableLoadingScreen: localStorage.getItem('enableLoadingScreen') === 'true' ? true : false,
-    loadingScreenSimulateProgress: localStorage.getItem('loadingScreenSimulateProgress') === 'true' ? true : false,
-    loadingScreenShowTips: localStorage.getItem('loadingScreenShowTips') === 'true' ? true : false,
-    loadingScreenTipIntervalMs: parseInt(localStorage.getItem('loadingScreenTipIntervalMs'), 10) || 6000,
+    enableProfileChooser: localStorage.getItem('enableProfileChooser') !== 'false',
+    profileChooserAutoOpen: localStorage.getItem('profileChooserAutoOpen') !== 'false',
+    profileChooserRememberTokens: localStorage.getItem('profileChooserRememberTokens') !== 'false',
 
     enablePersonalRecommendations: localStorage.getItem('enablePersonalRecommendations') !== 'false',
     personalRecsCacheTtlMs: parseInt(localStorage.getItem('personalRecsCacheTtlMs'), 10) || 3600000,
@@ -706,7 +722,8 @@ export async function publishAdminSnapshotIfForced() {
     const cfg = getConfig();
     if (!cfg?.currentUserIsAdmin) return;
 
-    const r = await fetch(`/Plugins/JMSFusion/UserSettings?ts=${Date.now()}`, {
+    const targetProfile = getAdminTargetProfile();
+    const r = await fetch(`/Plugins/JMSFusion/UserSettings?ts=${Date.now()}&profile=${targetProfile}`, {
       cache: "no-store"
     });
     const j = r.ok ? await r.json() : null;
@@ -723,14 +740,14 @@ export async function publishAdminSnapshotIfForced() {
       return;
     }
 
-    const pr = await fetch(`/Plugins/JMSFusion/UserSettings/Publish?ts=${Date.now()}`, {
+    const pr = await fetch(`/Plugins/JMSFusion/UserSettings/Publish?ts=${Date.now()}&profile=${targetProfile}`, {
       method: "POST",
       cache: "no-store",
       headers: {
         "Content-Type": "application/json",
         "X-Emby-Token": token
       },
-      body: JSON.stringify({ global: globalConfig })
+      body: JSON.stringify({ global: globalConfig, profile: targetProfile })
     });
 
     if (!pr.ok) console.warn("[JMSFusion] Auto publish failed:", pr.status);

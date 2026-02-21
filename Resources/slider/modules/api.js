@@ -1,3 +1,5 @@
+//modules/api.js
+
 import { getConfig, getServerAddress } from "./config.js";
 import { clearCredentials, getWebClientHints, getStoredServerBase } from "../auth.js";
 import { withServer, withServerSrcset, invalidateServerBaseCache, resolveServerBase } from "./jfUrl.js";

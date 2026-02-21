@@ -227,10 +227,9 @@ const USER_ONLY_KEYS = [
             becauseYouWatchedCardCount: parseInt(formData.get('becauseYouWatchedCardCount'), 10),
             enableBecauseYouWatched: formData.get('enableBecauseYouWatched') === 'on',
 
-            enableLoadingScreen: formData.get('enableLoadingScreen') === 'on',
-            loadingScreenSimulateProgress: formData.get('loadingScreenSimulateProgress') === 'on',
-            loadingScreenShowTips: formData.get('loadingScreenShowTips') === 'on',
-            loadingScreenTipIntervalMs: parseInt(formData.get('loadingScreenTipIntervalMs'), 10) || 6000,
+            enableProfileChooser: formData.get('enableProfileChooser') === 'on',
+            profileChooserAutoOpen: formData.get('profileChooserAutoOpen') === 'on',
+            profileChooserRememberTokens: formData.get('profileChooserRememberTokens') === 'on',
 
             enableRecentRows: formData.get('enableRecentRows') === 'on',
             enableRecentMoviesRow: (() => {

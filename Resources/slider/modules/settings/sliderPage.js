@@ -782,103 +782,12 @@ export function createSliderPanel(config, labels) {
   dotopacityDiv.append(dotopacityLabel, dotopacityInput, dotopacityValue);
   sliderDiv.appendChild(dotopacityDiv);
 
-  const loadingScreenDiv = document.createElement('div');
-  loadingScreenDiv.className = 'fsetting-item';
-
-  const loadingScreenTitle = document.createElement('h3');
-  loadingScreenTitle.textContent = labels.loadingScreenSettings || 'Loading Screen Ayarları';
-
-  const loadingScreenEnableCheckbox = createCheckbox(
-    'enableLoadingScreen',
-    labels.enableLoadingScreen || 'Loading Screen’i Etkinleştir',
-    (config.enableLoadingScreen !== false)
-  );
-
-  const loadingScreenSimulateCheckbox = createCheckbox(
-    'loadingScreenSimulateProgress',
-    labels.loadingScreenSimulateProgress || 'Progress simülasyonu (yükleniyor efekti)',
-    (config.loadingScreenSimulateProgress !== false)
-  );
-
-  const loadingScreenTipsCheckbox = createCheckbox(
-    'loadingScreenShowTips',
-    labels.loadingScreenShowTips || 'İpucu mesajlarını göster',
-    (config.loadingScreenShowTips !== false)
-  );
-
-    const loadingScreenTipIntervalInputWrap = document.createElement('div');
-  loadingScreenTipIntervalInputWrap.className = 'fsetting-item';
-
-  const loadingScreenTipIntervalLabel = document.createElement('label');
-  loadingScreenTipIntervalLabel.textContent =
-    labels.loadingScreenTipIntervalMs || 'İpucu Değişim Süresi (ms):';
-  loadingScreenTipIntervalLabel.htmlFor = 'loadingScreenTipIntervalMs';
-
-  const loadingScreenTipIntervalInput = document.createElement('input');
-  loadingScreenTipIntervalInput.type = 'number';
-  loadingScreenTipIntervalInput.id = 'loadingScreenTipIntervalMs';
-  loadingScreenTipIntervalInput.name = 'loadingScreenTipIntervalMs';
-  loadingScreenTipIntervalInput.min = 1500;
-  loadingScreenTipIntervalInput.max = 20000;
-  loadingScreenTipIntervalInput.step = 250;
-  loadingScreenTipIntervalInput.value = config.loadingScreenTipIntervalMs ?? 4000;
-
-  const loadingScreenTipIntervalDesc = document.createElement('div');
-  loadingScreenTipIntervalDesc.className = 'description-text';
-  loadingScreenTipIntervalDesc.textContent =
-    labels.loadingScreenTipIntervalDesc ||
-    'İpucu mesajlarının kaç ms aralıkla değişeceğini belirler. (Örn: 4000)';
-
-  loadingScreenTipIntervalInputWrap.append(
-    loadingScreenTipIntervalLabel,
-    loadingScreenTipIntervalDesc,
-    loadingScreenTipIntervalInput
-  );
-
-  function syncLoadingScreenChildren() {
-    const enabled = !!loadingScreenEnableCheckbox.querySelector('input')?.checked;
-    const tipsOn = !!loadingScreenTipsCheckbox.querySelector('input')?.checked;
-
-    loadingScreenTipIntervalInputWrap.style.display = (enabled && tipsOn) ? '' : 'none';
-
-    const children = [
-      loadingScreenSimulateCheckbox,
-      loadingScreenTipsCheckbox,
-      loadingScreenTipIntervalInputWrap,
-    ];
-
-    children.forEach(ch => {
-      ch.style.opacity = enabled ? 1 : 0.6;
-      ch.querySelectorAll('input, select').forEach(el => {
-        el.disabled = !enabled;
-      });
-    });
-  }
-
-  loadingScreenEnableCheckbox.querySelector('input')?.addEventListener('change', syncLoadingScreenChildren);
-  loadingScreenTipsCheckbox.querySelector('input')?.addEventListener('change', syncLoadingScreenChildren);
-  requestAnimationFrame(syncLoadingScreenChildren);;
-
-  loadingScreenDiv.append(
-    loadingScreenTitle,
-    loadingScreenEnableCheckbox,
-    loadingScreenSimulateCheckbox,
-    loadingScreenTipsCheckbox,
-    loadingScreenTipIntervalInputWrap
-  );
-
-  const loadingScreenDesc = document.createElement('div');
-  loadingScreenDesc.className = 'description-text';
-  loadingScreenDesc.textContent =
-    labels.loadingScreenDesc;
-  loadingScreenDiv.appendChild(loadingScreenDesc);
 
   panel.append(
     languageDiv,
     tmdbWrap,
     cssDiv,
     sliderDiv,
-    loadingScreenDiv,
   );
 
   requestAnimationFrame(() => {

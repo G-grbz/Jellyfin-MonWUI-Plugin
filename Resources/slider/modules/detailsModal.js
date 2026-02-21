@@ -10,6 +10,7 @@ import {
 import { withServer } from "./jfUrl.js";
 import { getConfig } from "./config.js";
 import { getLanguageLabels } from "../language/index.js";
+import { CollectionCacheDB } from "./collectionCacheDb.js";
 
 const config = getConfig();
 const labels =
@@ -24,6 +25,7 @@ let _closeListeners = [];
 let _open = false;
 let _lastFocus = null;
 let _abort = null;
+let _bgAbort = null;
 let _restore = null;
 let _scrollSnap = null;
 let _unbindKeyHandler = null;
@@ -31,6 +33,14 @@ let _currentListeners = [];
 let _closing = false;
 let _openOrigin = null;
 let _ytApiPromise = null;
+const _boxSetCache = new Map();
+const TTL_MOVIE_BOXSET = 7 * 24 * 60 * 60 * 1000;
+
+function isStale(ts, maxAgeMs) {
+  const t = Number(ts || 0);
+  if (!t) return true;
+  return (Date.now() - t) > maxAgeMs;
+}
 
 function __prefersReducedMotion() {
   try { return window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches; }
@@ -1533,8 +1543,8 @@ function renderMiniCards(items = []) {
         const title = safeText(it.Name, "");
         const year = it.ProductionYear ? `(${it.ProductionYear})` : "";
         const rating = it.CommunityRating
-          ? `<span style="color:#ffd700;font-size:11px;">★ ${it.CommunityRating.toFixed(1)}</span>`
-          : "";
+          ? true
+          : false;
 
         return `
           <div class="jmsdm-minicard" data-itemid="${it.Id}" title="${escapeHtml(title)}">
@@ -1553,9 +1563,12 @@ function renderMiniCards(items = []) {
             </div>
 
             <div class="jmsdm-minicard-title">
-              ${escapeHtml(title)}
-              ${year ? `<span class="jmsdm-minicard-year">${escapeHtml(year)}</span>` : ""}
-              ${rating}
+              <div class="jmsdm-minicard-name">${escapeHtml(title)}</div>
+
+              <div class="jmsdm-minicard-meta">
+                ${year ? `<span class="jmsdm-minicard-year">${escapeHtml(year)}</span>` : ""}
+                ${rating ? `<span class="jmsdm-minicard-rating">★ ${it.CommunityRating.toFixed(1)}</span>` : ""}
+              </div>
             </div>
           </div>
         `;
@@ -1589,7 +1602,7 @@ async function fetchEpisodesFor(seriesId, seasonId, { signal } = {}) {
       "Overview,IndexNumber,ParentIndexNumber,UserData,Id,Name,ImageTags,PrimaryImageAspectRatio,SeriesPrimaryImageTag,ParentBackdropImageTags"
     );
     qp.set("UserId", userId);
-    qp.set("Limit", "200");
+    qp.set("Limit", "1000");
     if (seasonId) qp.set("SeasonId", seasonId);
 
     const r = await makeApiRequest(
@@ -1804,10 +1817,47 @@ function uniqById(items = [], seen = new Set()) {
   return out;
 }
 
+async function getBoxSetForMovieCached(movieId, { signal } = {}) {
+  const cached = await CollectionCacheDB.getMovieBoxset(movieId).catch(() => null);
+
+  if (cached && !isStale(cached.updatedAt, TTL_MOVIE_BOXSET)) {
+    CollectionCacheDB.idle(async () => {
+      try {
+        const live = await getBoxSetForMovie(movieId, { signal: _bgAbort?.signal || null });
+        await CollectionCacheDB.setMovieBoxset(movieId, live?.id || "", live?.name || "");
+      } catch {}
+    });
+    return cached.boxsetId ? { id: cached.boxsetId, name: cached.boxsetName } : null;
+  }
+
+  const live = await getBoxSetForMovie(movieId, { signal });
+  await CollectionCacheDB.setMovieBoxset(movieId, live?.id || "", live?.name || "");
+  return live;
+}
+
 async function getBoxSetForMovie(movieId, { signal } = {}) {
   try {
+    const cacheKey = String(movieId || "");
+    if (cacheKey && _boxSetCache.has(cacheKey)) return _boxSetCache.get(cacheKey);
+
     const userId = ApiClient.getCurrentUserId();
     if (!userId || !movieId) return null;
+
+    try {
+      const anc = await makeApiRequest(
+        `/Items/${encodeURIComponent(movieId)}/Ancestors?UserId=${encodeURIComponent(userId)}`,
+        { signal }
+      );
+      const list = Array.isArray(anc) ? anc : (anc?.Items || []);
+      const box = (list || []).find(x => String(x?.Type || "").toLowerCase() === "boxset");
+      if (box?.Id) {
+        const hit = { id: box.Id, name: box.Name };
+        if (cacheKey) _boxSetCache.set(cacheKey, hit);
+        return hit;
+      }
+    } catch (e) {
+      if (!signal?.aborted) console.debug("getBoxSetForMovie: ancestors fallback:", e);
+    }
 
     const movieName = (() => {
       try { return (window.__jms_lastDisplayItemName || "").toString().trim(); }
@@ -1827,7 +1877,7 @@ async function getBoxSetForMovie(movieId, { signal } = {}) {
 
     if (!candidates.length) {
       qp.delete("SearchTerm");
-      qp.set("Limit", "200");
+      qp.set("Limit", "1000");
       res = await ApiClient.getJSON(`/Items?${qp.toString()}`);
       candidates = res?.Items || [];
     }
@@ -1835,10 +1885,13 @@ async function getBoxSetForMovie(movieId, { signal } = {}) {
     for (const s of (candidates || []).filter(x => (x?.ChildCount ?? 1) > 0)) {
       const children = await ApiClient.getJSON(`/Items?UserId=${userId}&ParentId=${s.Id}`);
       if ((children?.Items || []).some(x => String(x.Id) === String(movieId))) {
-        return { id: s.Id, name: s.Name };
+        const hit = { id: s.Id, name: s.Name };
+        if (cacheKey) _boxSetCache.set(cacheKey, hit);
+        return hit;
       }
     }
 
+    if (cacheKey) _boxSetCache.set(cacheKey, null);
     return null;
   } catch (e) {
     console.warn("getBoxSetForMovie error:", e);
@@ -1854,7 +1907,6 @@ async function fetchCollectionItems(boxsetId, { signal, limit = 12 } = {}) {
     const qp = new URLSearchParams();
     qp.set("UserId", userId);
     qp.set("ParentId", String(boxsetId));
-    qp.set("Recursive", "true");
     qp.set("IncludeItemTypes", "Movie");
     qp.set("Limit", String(limit));
     qp.set("Fields", "Id,Name,ProductionYear,ImageTags,PrimaryImageAspectRatio,UserData");
@@ -1886,15 +1938,66 @@ function renderCollectionHtml({ title = "", items = [] } = {}) {
   `;
 }
 
+const TTL_BOXSET_ITEMS = 2 * 24 * 60 * 60 * 1000;
+
+function minimizeItems(items = []) {
+  return (items || []).map(x => ({
+    Id: x.Id,
+    Name: x.Name,
+    ProductionYear: x.ProductionYear,
+    CommunityRating: x.CommunityRating,
+    ImageTags: x.ImageTags,
+    PrimaryImageAspectRatio: x.PrimaryImageAspectRatio,
+    UserData: x.UserData,
+  }));
+}
+
+async function fetchCollectionItemsAll(boxsetId, { signal } = {}) {
+  const userId = (window.ApiClient?.getCurrentUserId?.() || window.ApiClient?._currentUserId) || "";
+  if (!userId || !boxsetId) return [];
+
+  const out = [];
+  const seen = new Set();
+  let start = 0;
+  const PAGE = 200;
+
+  while (true) {
+    const qp = new URLSearchParams();
+    qp.set("UserId", userId);
+    qp.set("ParentId", String(boxsetId));
+    qp.set("IncludeItemTypes", "Movie");
+    qp.set("Fields", "Id,Name,ProductionYear,ImageTags,PrimaryImageAspectRatio,UserData,CommunityRating");
+    qp.set("SortBy", "ProductionYear,SortName");
+    qp.set("SortOrder", "Ascending");
+    qp.set("Limit", String(PAGE));
+    qp.set("StartIndex", String(start));
+
+    const r = await makeApiRequest(`/Items?${qp.toString()}`, { signal });
+    const items = Array.isArray(r?.Items) ? r.Items : [];
+
+    for (const it of items) {
+      const id = it?.Id ? String(it.Id) : "";
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      out.push(it);
+    }
+
+    if (items.length < PAGE) break;
+    start += PAGE;
+  }
+
+  return out;
+}
+
 function startCollectionLoad(root, movieItem, { signal } = {}) {
   (async () => {
     try {
       if (!root || !movieItem?.Id) return;
-
       const host = root.querySelector(".jmsdm-collection-host");
       if (!host) return;
 
-      const box = await getBoxSetForMovie(movieItem.Id, { signal });
+      const collectionLabel = config.languageLabels.collectionTitle || "Koleksiyon";
+      const box = await getBoxSetForMovieCached(movieItem.Id, { signal });
       if (!_open || signal?.aborted) return;
 
       if (!box?.id) {
@@ -1902,25 +2005,102 @@ function startCollectionLoad(root, movieItem, { signal } = {}) {
         return;
       }
 
-      const LIMIT = 12;
-      const items = await fetchCollectionItems(box.id, { signal, limit: LIMIT + 2 });
+      const cachedItemsRow = await CollectionCacheDB.getBoxsetItems(box.id).catch(() => null);
+      const cachedOk = cachedItemsRow && cachedItemsRow.items?.length && !isStale(cachedItemsRow.updatedAt, TTL_BOXSET_ITEMS);
+
+      if (cachedOk) {
+        const filtered = (cachedItemsRow.items || [])
+          .filter(x => x?.Id && String(x.Id) !== String(movieItem.Id))
+          .slice(0, 12);
+
+        host.innerHTML = renderCollectionHtml({
+          title: box.name ? `${collectionLabel}: ${box.name}` : collectionLabel,
+          items: filtered
+        });
+
+        CollectionCacheDB.idle(async () => {
+          try {
+            const liveItems = await fetchCollectionItemsAll(box.id, { signal: _bgAbort?.signal || null });
+            const minimized = minimizeItems(liveItems);
+            await CollectionCacheDB.setBoxsetItems(box.id, minimized);
+
+            const filtered2 = minimized
+              .filter(x => x?.Id && String(x.Id) !== String(movieItem.Id))
+              .slice(0, 12);
+
+            if (_open && !signal?.aborted && root?.isConnected) {
+              host.innerHTML = renderCollectionHtml({
+                title: box.name ? `${collectionLabel}: ${box.name}` : collectionLabel,
+                items: filtered2
+              });
+            }
+          } catch {}
+        });
+
+        return;
+      }
+
+      const liveItems = await fetchCollectionItemsAll(box.id, { signal });
       if (!_open || signal?.aborted) return;
 
-      const filtered = (items || []).filter(x => x?.Id && String(x.Id) !== String(movieItem.Id)).slice(0, LIMIT);
+      const minimized = minimizeItems(liveItems);
+      await CollectionCacheDB.setBoxsetItems(box.id, minimized);
 
-      const collectionLabel =
-        config.languageLabels.collectionTitle ||
-        "Koleksiyon";
+      const filtered = minimized
+        .filter(x => x?.Id && String(x.Id) !== String(movieItem.Id))
+        .slice(0, 12);
 
-      const title = box.name ? `${collectionLabel}: ${box.name}` : collectionLabel;
-
-      host.innerHTML = renderCollectionHtml({ title, items: filtered });
+      host.innerHTML = renderCollectionHtml({
+        title: box.name ? `${collectionLabel}: ${box.name}` : collectionLabel,
+        items: filtered
+      });
     } catch (e) {
       if (!signal?.aborted) console.warn("collection load error:", e);
       try {
         const host = root?.querySelector?.(".jmsdm-collection-host");
         if (host) host.innerHTML = renderCollectionHtml({ title: "", items: [] });
       } catch {}
+    }
+  })();
+}
+
+function startRecoLoad(root, movieItem, { signal } = {}) {
+  (async () => {
+    try {
+      if (!root || !movieItem?.Id) return;
+      const wrap = root.querySelector(".jmsdm-recos-wrap");
+      if (!wrap) return;
+
+      const LIMIT = 12;
+      const seen = new Set([String(movieItem.Id)]);
+      const picked = [];
+
+      try {
+        const sim = await fetchSimilarItems(movieItem.Id, { signal, limit: LIMIT * 2 });
+        if (!_open || signal?.aborted) return;
+        picked.push(...uniqById(sim, seen));
+      } catch {}
+
+      if (picked.length < LIMIT) {
+        try {
+          const byG = await fetchMoviesByGenres(movieItem.Genres || [], { signal, limit: LIMIT * 2 });
+          if (!_open || signal?.aborted) return;
+          picked.push(...uniqById(byG, seen));
+        } catch {}
+      }
+
+      if (picked.length < LIMIT) {
+        try {
+          const byP = await fetchMoviesByPeople(movieItem.People || [], { signal, limit: LIMIT * 2 });
+          if (!_open || signal?.aborted) return;
+          picked.push(...uniqById(byP, seen));
+        } catch {}
+      }
+
+      const final = picked.slice(0, LIMIT);
+      wrap.innerHTML = renderMiniCards(final);
+    } catch (e) {
+      if (!signal?.aborted) console.warn("reco load error:", e);
     }
   })();
 }
@@ -1939,6 +2119,7 @@ export async function openDetailsModal({ itemId, serverId = "", preferBackdropIn
   _open = true;
   _lastFocus = document.activeElement;
   _abort = new AbortController();
+  _bgAbort = new AbortController();
   _restore = capturePreviewState();
   if (_restore) pausePreviewNow(_restore);
 
@@ -2084,39 +2265,6 @@ export async function openDetailsModal({ itemId, serverId = "", preferBackdropIn
 
 wireMiniCardDelegation();
 
-
-  if (isMovie) {
-    try {
-      const LIMIT = 12;
-      const seen = new Set([String(item.Id)]);
-
-      const similarTitle = config.languageLabels.similarItems || "Benzer İçerikler";
-
-      let picked = [];
-
-      const sim = await fetchSimilarItems(item.Id, { signal: _abort.signal, limit: LIMIT * 2 });
-      if (!_open || _abort.signal.aborted) return;
-      picked = picked.concat(uniqById(sim, seen)).slice(0, LIMIT);
-
-      if (picked.length < LIMIT) {
-        const byG = await fetchMoviesByGenres(item.Genres || [], { signal: _abort.signal, limit: LIMIT * 2 });
-        if (!_open || _abort.signal.aborted) return;
-        picked = picked.concat(uniqById(byG, seen)).slice(0, LIMIT);
-      }
-
-      if (picked.length < LIMIT) {
-        const byP = await fetchMoviesByPeople(item.People || [], { signal: _abort.signal, limit: LIMIT * 2 });
-        if (!_open || _abort.signal.aborted) return;
-        picked = picked.concat(uniqById(byP, seen)).slice(0, LIMIT);
-      }
-
-      recos = { title: similarTitle, items: picked };
-    } catch (e) {
-      if (!_abort.signal.aborted) console.warn("reco build error:", e);
-      recos = { title: config.languageLabels.recommendations || "Öneriler", items: [] };
-    }
-  }
-
   function renderEpisodesHtml() {
     const items = pageSlice();
     if (!items.length) {
@@ -2166,7 +2314,14 @@ wireMiniCardDelegation();
       return `
         <div class="jmsdm-section-title">${similarTitle}</div>
         <div class="jmsdm-epwrap jmsdm-recos-wrap">
-          ${renderMiniCards(recos.items)}
+          ${
+            (recos?.items && recos.items.length)
+              ? renderMiniCards(recos.items)
+              : `
+                <div class="jmsdm-skeleton" style="width:55%;height:12px;margin-top:6px;"></div>
+                <div class="jmsdm-skeleton" style="width:100%;height:86px;margin-top:10px;"></div>
+              `
+          }
         </div>
 
         <div class="jmsdm-section-title" style="margin-top:16px;">
@@ -2279,6 +2434,7 @@ wireMiniCardDelegation();
   await __animateInFromOrigin(root);
 
   if (isMovie) {
+    startRecoLoad(root, baseItem, { signal: _abort.signal });
     startCollectionLoad(root, baseItem, { signal: _abort.signal });
   }
 
