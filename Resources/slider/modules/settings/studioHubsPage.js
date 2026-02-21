@@ -460,6 +460,198 @@ export function createStudioHubsPanel(config, labels) {
   );
   section.appendChild(continueSeriesCountWrap);
 
+  const splitTvLibRows = createCheckbox(
+    'recentRowsSplitTvLibs',
+    labels?.recentRowsSplitTvLibs || 'Dizi Kütüphanelerini Ayrı Bölümle',
+    config.recentRowsSplitTvLibs !== false
+  );
+  section.appendChild(splitTvLibRows);
+
+  const tvLibBox = document.createElement("div");
+  tvLibBox.className = "setting-item tvshows";
+  tvLibBox.style.paddingLeft = "8px";
+  tvLibBox.style.borderLeft = "2px solid #0002";
+  tvLibBox.style.marginBottom = "10px";
+  section.appendChild(tvLibBox);
+
+  const splitCb = splitTvLibRows?.querySelector?.('input[type="checkbox"]');
+  function syncTvLibBoxVisibility() {
+    const splitOn = !!splitCb?.checked;
+    tvLibBox.style.display = splitOn ? "" : "none";
+  }
+  syncTvLibBoxVisibility();
+  splitTvLibRows.addEventListener("change", syncTvLibBoxVisibility, { passive: true });
+
+  const tvLibTitle = document.createElement("div");
+  tvLibTitle.style.fontWeight = "700";
+  tvLibTitle.style.margin = "6px 0";
+  tvLibTitle.textContent = labels?.tvLibSelectHeading || "Gösterilecek Dizi Kütüphaneleri";
+  tvLibBox.appendChild(tvLibTitle);
+
+  function readJsonArr(k) {
+    try {
+      const raw = localStorage.getItem(k);
+      if (!raw || raw === "[object Object]") return [];
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr.map(x=>String(x||"").trim()).filter(Boolean) : [];
+    } catch { return []; }
+  }
+  function writeJsonArr(k, arr) {
+    try { localStorage.setItem(k, JSON.stringify((arr||[]).filter(Boolean))); } catch {}
+  }
+  function mkHidden(k, initialArr) {
+    const inp = document.createElement("input");
+    inp.type = "hidden";
+    inp.id = k;
+    inp.name = k;
+    inp.value = JSON.stringify((initialArr||[]).filter(Boolean));
+    return inp;
+  }
+
+  const hiddenRecentSeries   = mkHidden("recentSeriesTvLibIds",   readJsonArr("recentSeriesTvLibIds"));
+  const hiddenRecentEpisodes = mkHidden("recentEpisodesTvLibIds", readJsonArr("recentEpisodesTvLibIds"));
+  const hiddenContinueSeries = mkHidden("continueSeriesTvLibIds", readJsonArr("continueSeriesTvLibIds"));
+  tvLibBox.appendChild(hiddenRecentSeries);
+  tvLibBox.appendChild(hiddenRecentEpisodes);
+  tvLibBox.appendChild(hiddenContinueSeries);
+
+  const tvLibHint = document.createElement("div");
+  tvLibHint.style.opacity = "0.85";
+  tvLibHint.style.fontSize = "0.95em";
+  tvLibHint.style.marginBottom = "6px";
+  tvLibHint.textContent = labels?.tvLibSelectHint || "Boş bırakırsan: tüm Dizi kütüphaneleri aktif sayılır.";
+  tvLibBox.appendChild(tvLibHint);
+
+  const tvLibGrid = document.createElement("div");
+  tvLibGrid.style.display = "grid";
+  tvLibGrid.style.gridTemplateColumns = "1fr";
+  tvLibGrid.style.gap = "8px";
+  tvLibBox.appendChild(tvLibGrid);
+
+  async function fetchTvLibs() {
+    try {
+      const me = await makeApiRequest(`/Users/Me`);
+      const uid = me?.Id;
+      if (!uid) return [];
+      const v = await makeApiRequest(`/Users/${uid}/Views`);
+      const items = Array.isArray(v?.Items) ? v.Items : [];
+      return items.filter(x => x?.CollectionType === "tvshows" && x?.Id).map(x => ({
+        Id: x.Id,
+        Name: x.Name || "TV"
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  (async () => {
+    const libs = await fetchTvLibs();
+    if (!libs.length) {
+      const warn = document.createElement("div");
+      warn.style.opacity = "0.85";
+      warn.textContent = labels?.tvLibSelectNoLibs || "Dizi kütüphanesi bulunamadı.";
+      tvLibGrid.appendChild(warn);
+      return;
+    }
+
+    const makeRow = (title, key, hiddenInp) => {
+      const box = document.createElement("div");
+      box.style.border = "1px solid #0002";
+      box.style.borderRadius = "8px";
+      box.style.padding = "8px";
+
+      const h = document.createElement("div");
+      h.style.fontWeight = "700";
+      h.style.marginBottom = "6px";
+      h.textContent = title;
+      box.appendChild(h);
+
+      const selected = new Set(readJsonArr(key));
+      const list = document.createElement("div");
+      list.style.display = "grid";
+      list.style.gridTemplateColumns = "1fr";
+      list.style.gap = "6px";
+
+      const sync = () => {
+        const arr = Array.from(selected);
+        hiddenInp.value = JSON.stringify(arr);
+        writeJsonArr(key, arr);
+      };
+
+      for (const lib of libs) {
+        const line = document.createElement("label");
+        line.style.display = "flex";
+        line.style.alignItems = "center";
+        line.style.gap = "8px";
+
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = selected.has(lib.Id);
+        cb.addEventListener("change", () => {
+          if (cb.checked) selected.add(lib.Id);
+          else selected.delete(lib.Id);
+          sync();
+        }, { passive: true });
+
+        const t = document.createElement("span");
+        t.textContent = lib.Name;
+
+        line.appendChild(cb);
+        line.appendChild(t);
+        list.appendChild(line);
+      }
+
+      const actions = document.createElement("div");
+      actions.style.display = "flex";
+      actions.style.gap = "8px";
+      actions.style.marginTop = "8px";
+
+      const btnAll = document.createElement("button");
+      btnAll.type = "button";
+      btnAll.textContent = labels?.selectAll || "Hepsini seç";
+      btnAll.addEventListener("click", () => {
+        selected.clear();
+        libs.forEach(l => selected.add(l.Id));
+        [...list.querySelectorAll("input[type=checkbox]")].forEach(i => i.checked = true);
+        sync();
+      });
+
+      const btnNone = document.createElement("button");
+      btnNone.type = "button";
+      btnNone.textContent = labels?.selectNone || "Hepsini kaldır";
+      btnNone.addEventListener("click", () => {
+        selected.clear();
+        [...list.querySelectorAll("input[type=checkbox]")].forEach(i => i.checked = false);
+        sync();
+      });
+
+      actions.appendChild(btnAll);
+      actions.appendChild(btnNone);
+
+      box.appendChild(list);
+      box.appendChild(actions);
+
+      sync();
+      return box;
+    };
+
+    tvLibGrid.appendChild(makeRow(
+      labels?.tvLibRowRecentSeries || "Görüntülemek istediğiniz son eklenen diziler için kütüphane seçin",
+      "recentSeriesTvLibIds",
+      hiddenRecentSeries
+    ));
+    tvLibGrid.appendChild(makeRow(
+      labels?.tvLibRowRecentEpisodes || "Görüntülemek istediğiniz son eklenen bölüm kartları için kütüphane seçin",
+      "recentEpisodesTvLibIds",
+      hiddenRecentEpisodes
+    ));
+    tvLibGrid.appendChild(makeRow(
+      labels?.tvLibRowContinueSeries || "Görüntülemek istediğiniz İzlemeye devam kartları için kütüphane seçin",
+      "continueSeriesTvLibIds",
+      hiddenContinueSeries
+    ));
+  })();
+
   const becauseYouWatchedSection = createSection(
     labels?.becauseYouWatchedSettings ||
     config.languageLabels?.becauseYouWatchedSettings ||
