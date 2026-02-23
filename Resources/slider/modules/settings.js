@@ -1,5 +1,3 @@
-//settings.js
-
 import { getConfig, publishAdminSnapshotIfForced, getAdminTargetProfile, getDeviceProfileAuto } from "./config.js";
 import { loadCSS } from "./player/main.js";
 import { getLanguageLabels, getDefaultLanguage } from '../language/index.js';
@@ -107,7 +105,6 @@ export function createSettingsModal() {
       return wrap;
     }
 
-    // Admin only: allow selecting publish target (desktop/mobile)
     if (config?.currentUserIsAdmin) {
       try {
         const profSel = createProfileSelector(labels);

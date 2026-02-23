@@ -1,16 +1,9 @@
-import {
-  makeApiRequest,
-  fetchItemDetailsFull,
-  getDetailsUrl,
-  playNow,
-  fetchLocalTrailers,
-  pickBestLocalTrailer,
-  getVideoStreamUrl,
-} from "./api.js";
+import { makeApiRequest, fetchItemDetailsFull, getDetailsUrl, playNow, fetchLocalTrailers, pickBestLocalTrailer, getVideoStreamUrl } from "./api.js";
 import { withServer } from "./jfUrl.js";
 import { getConfig } from "./config.js";
 import { getLanguageLabels } from "../language/index.js";
 import { CollectionCacheDB } from "./collectionCacheDb.js";
+import { getYoutubeEmbedUrl } from "./utils.js";
 
 const config = getConfig();
 const labels =
@@ -862,69 +855,6 @@ async function loadTmdbReviewsInto(root, displayItem, { signal } = {}) {
     }
 }
 
-function getYoutubeEmbedUrlLite(input) {
-  if (!input || typeof input !== "string") return "";
-
-  const origin = (() => {
-    try { return window.location.origin || ""; } catch { return ""; }
-  })();
-
-  if (/^[a-zA-Z0-9_-]{10,}$/.test(input) && !/youtu\.?be|youtube\.com/i.test(input)) {
-    const params = new URLSearchParams({
-      autoplay: "1",
-      mute: "0",
-      rel: "0",
-      modestbranding: "1",
-      iv_load_policy: "3",
-      playsinline: "1",
-      controls: "1",
-      enablejsapi: "1",
-      ...(origin ? { origin } : {}),
-    });
-    return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(input)}?${params.toString()}`;
-  }
-
-  const ensureUrl = (raw) => {
-    if (/^https?:\/\//i.test(raw)) return raw;
-    const scheme = (() => {
-      try { return window.location.protocol === "https:" ? "https:" : "http:"; } catch { return "http:"; }
-    })();
-    return `${scheme}//${raw}`;
-  };
-
-  let u;
-  try { u = new URL(ensureUrl(input)); } catch { return ""; }
-  const host = u.hostname.replace(/^www\./, "").toLowerCase();
-  const isYT = host === "youtu.be" || host.endsWith("youtube.com");
-  if (!isYT) return "";
-
-  let videoId = "";
-  if (host === "youtu.be") {
-    videoId = u.pathname.split("/").filter(Boolean)[0] || "";
-  } else if (u.pathname.startsWith("/embed/")) {
-    videoId = u.pathname.split("/").filter(Boolean)[1] || "";
-  } else if (u.pathname.startsWith("/shorts/")) {
-    videoId = u.pathname.split("/").filter(Boolean)[1] || "";
-  } else {
-    videoId = u.searchParams.get("v") || "";
-  }
-  if (!videoId) return "";
-
-  const params = new URLSearchParams({
-    autoplay: "1",
-    mute: "0",
-    rel: "0",
-    modestbranding: "1",
-    iv_load_policy: "3",
-    playsinline: "1",
-    controls: "1",
-    enablejsapi: "1",
-    ...(origin ? { origin } : {}),
-  });
-
-  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?${params.toString()}`;
-}
-
 function stopHeroMedia(root) {
   try {
     const v = root?.querySelector?.(".jmsdm-hero video[data-jms-hero-preview='1']");
@@ -1093,7 +1023,7 @@ async function startHeroTrailer(root, item, { signal } = {}) {
 
   try {
     const r = Array.isArray(item.RemoteTrailers) ? item.RemoteTrailers[0] : null;
-    const embed = r?.Url ? getYoutubeEmbedUrlLite(r.Url) : "";
+    const embed = r?.Url ? getYoutubeEmbedUrl(r.Url) : "";
     if (!embed || signal?.aborted) return;
 
     const f = document.createElement("iframe");
