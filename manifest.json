@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/G-grbz/Jellyfin-MonWUI-Plugin/main/img/icon.png",
     "versions": [
     {
+        "version": "1.9.1.0",
+        "changelog": "All libraries in Jellyfin can now be optionally added to the Home screen.",
+        "targetAbi": "10.10.0.0",
+        "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v1.9.0/JMSFusion-1.9.1.0-server.zip",
+        "checksum": "f5df3096ce9b70269781a38d607701d4",
+        "timestamp": "2026-02-23T17:36:56.2087102Z"
+      },
+    {
         "version": "1.9.0.0",
         "changelog": "Added a Netflix-Style ‘Who’s Watching?’ Module",
         "targetAbi": "10.10.0.0",
