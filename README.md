@@ -1,6 +1,9 @@
-## Jellyfin MonWUI Plugin
+<h1 align="center">Jellyfin MonWUI Plugin</h1>
 
-<img width="1920" height="931" alt="vt" src="https://github.com/user-attachments/assets/b67e7acd-39a5-420b-b341-379d4d471a69" />
+<p align="center">
+  <img width="180" height="180" alt="monwui" src="https://github.com/user-attachments/assets/29947627-b2ff-4ecd-8a2b-4df932aca657" />
+</p>
+
 
 An all-in-one JavaScript toolkit for Jellyfin, featuring a customizable Media Slider builder, music player, Netflix-style pause screen, Netflix-like HoverVideo, quality labels on cards, DiceBear avatar generator, and a sleek notification panel.
 
