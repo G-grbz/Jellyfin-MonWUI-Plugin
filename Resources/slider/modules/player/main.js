@@ -1,5 +1,5 @@
 import { initPlayer, togglePlayerVisibility, isPlayerInitialized } from "./utils/mainIndex.js";
-import { refreshPlaylist } from "./core/playlist.js";
+import { refreshPlaylist, playTrackById, playAlbumById } from "./core/playlist.js";
 import { updateProgress, updateDuration } from "./player/progress.js";
 import { syncDbIncremental, syncDbFullscan, startGlobalDbFullscanScheduler } from "./ui/artistModal.js";
 import { loadJSMediaTags } from "./lyrics/id3Reader.js";
@@ -7,6 +7,27 @@ import { getConfig } from "../config.js";
 import { initializeControlStates } from "./ui/controls.js";
 
 const config = getConfig();
+
+export async function ensureGmmpInit({ show = true } = {}) {
+  try {
+    initializeControlStates?.();
+    if (!isPlayerInitialized()) {
+      await loadJSMediaTags?.();
+      await initPlayer();
+      await new Promise(r => setTimeout(r, 50));
+    }
+    if (show) {
+      const visible = !!document.querySelector(".gmmp-player.visible, .modernPlayer.visible");
+      if (!visible) {
+        try { togglePlayerVisibility(); } catch {}
+      }
+    }
+    return true;
+  } catch (e) {
+    console.warn("ensureGmmpInit failed:", e);
+    return false;
+  }
+}
 
 let stylesInjected = false;
 function ensurePointerStylesInjected() {
@@ -187,4 +208,14 @@ if (document.readyState === "loading") {
 } else {
   forceSkinHeaderPointerEvents();
   addPlayerButton();
+}
+
+
+if (typeof window !== "undefined") {
+  window.__GMMP = window.__GMMP || {};
+  Object.assign(window.__GMMP, {
+    playTrackById,
+    playAlbumById,
+    ensureInit: ensureGmmpInit
+  });
 }
