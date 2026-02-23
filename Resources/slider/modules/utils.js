@@ -379,12 +379,13 @@ export function createTrailerIframe({ config, RemoteTrailers, slide, backdropImg
     if (enterTimeout) { clearTimeout(enterTimeout); enterTimeout = null; }
     try { fullCleanup(); } catch {}
     const backdropIndex = localStorage.getItem("jms_backdrop_index") || "0";
+    const origin = backdropImg || slide;
 
     await openDetailsModal({
       itemId,
       serverId,
       preferBackdropIndex: backdropIndex,
-      originEvent: e
+      originEl: origin
     });
   } catch (err) {
     console.error("openDetailsModal error:", err);
@@ -508,6 +509,44 @@ function clearPreviewPlaybackFlag() {
   let enterTimeout = null;
   let detachGuards = null;
 
+  const _detailsCache = new Map();
+
+  async function getDetailsCached(id, { signal } = {}) {
+    if (!id) return null;
+    if (_detailsCache.has(id)) return _detailsCache.get(id);
+    try {
+      const d = await fetchItemDetails(id, { signal });
+      _detailsCache.set(id, d || null);
+      return d || null;
+    } catch {
+      _detailsCache.set(id, null);
+      return null;
+    }
+  }
+
+  function ticksToSeconds(ticks) {
+    const n = Number(ticks) || 0;
+    return n > 0 ? (n / 10_000_000) : 0;
+  }
+
+  async function getSmartStartSeconds(id, { signal } = {}) {
+    const LEGACY = 600;
+    const d = await getDetailsCached(id, { signal });
+    const type = (d?.Type || "").toString();
+
+    if (type === "Audio" || type === "MusicAlbum" || type === "AudioBook") return 0;
+
+    const durSec =
+      ticksToSeconds(d?.RunTimeTicks) ||
+      ticksToSeconds(d?.CumulativeRunTimeTicks) ||
+      0;
+
+    if (durSec > 0 && durSec < 12 * 60) return 0;
+    if (durSec > 0) return Math.max(0, Math.min(LEGACY, Math.max(0, durSec - 30)));
+
+    return LEGACY;
+  }
+
   const enableHls = config.enableHls === true;
   const delayRaw = config && (config.gecikmeSure ?? config.gecikmesure);
   const delay = Number.isFinite(+delayRaw) ? +delayRaw : 500;
@@ -593,6 +632,7 @@ function clearPreviewPlaybackFlag() {
       { signal: abortController.signal }
     );
     if (!isMouseOver || hoverId !== latestHoverId) throw new Error("HoverAbortError");
+    if (!introUrl || introUrl === "null") return false;
 
     if (
       enableHls &&
@@ -641,6 +681,7 @@ function clearPreviewPlaybackFlag() {
       };
       videoElement.addEventListener("loadedmetadata", onMeta, { once: true });
     }
+    return true;
   }
 
   async function tryPlayLocalTrailer(hoverId) {
@@ -714,7 +755,12 @@ function clearPreviewPlaybackFlag() {
     slide.classList.add("video-active", "intro-active", "trailer-active");
     playingKind = "video";
     setPreviewPlaybackFlag("videoPreview", itemId);
-    await loadStreamFor(itemId, hoverId, 600);
+    const startSeconds = await getSmartStartSeconds(itemId, { signal: abortController.signal });
+    const ok = await loadStreamFor(itemId, hoverId, startSeconds);
+    if (!ok) {
+      fullCleanup();
+      return false;
+    }
     return true;
   }
 
