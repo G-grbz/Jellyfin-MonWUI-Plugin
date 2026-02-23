@@ -669,7 +669,7 @@ function createCardFor(item) {
   const typeLabel = isSeries
     ? ((cfg.languageLabels && cfg.languageLabels.dizi) || "Dizi")
     : ((cfg.languageLabels && cfg.languageLabels.film) || "Film");
-  const typeIcon = isSeries ? '🎬' : '🎞️';
+  const typeIcon = isSeries ? 'live_tv' : 'movie';
 
   const ageChip = normalizeAgeChip(item.OfficialRating || "");
   const year = item.ProductionYear || "";
@@ -696,7 +696,7 @@ function createCardFor(item) {
         <div class="prc-top-badges">
           ${community}
           <div class="prc-type-badge">
-            <span class="prc-type-icon">${typeIcon}</span>${typeLabel}
+            <span class="prc-type-icon material-icons">${typeIcon}</span>
           </div>
         </div>
         <div class="prc-gradient"></div>
