@@ -1,5 +1,3 @@
-//modules/api.js
-
 import { getConfig, getServerAddress } from "./config.js";
 import { clearCredentials, getWebClientHints, getStoredServerBase } from "../auth.js";
 import { withServer, withServerSrcset, invalidateServerBaseCache, resolveServerBase } from "./jfUrl.js";
@@ -17,6 +15,21 @@ const MAX_ITEM_CACHE = 600;
 const MAX_DOT_GENRE_CACHE = 1200;
 const MAX_PREVIEW_CACHE = 200;
 const MAX_TOMBSTONES = 2000;
+
+async function __getGmmp() {
+  try {
+    if (typeof window !== "undefined" && window.__GMMP?.playTrackById) return window.__GMMP;
+  } catch {}
+  try {
+    await import("../player/main.js");
+  } catch (e) {
+  }
+  try {
+    return (typeof window !== "undefined") ? (window.__GMMP || null) : null;
+  } catch {
+    return null;
+  }
+}
 
 let __lastAuthSnapshot = null;
 let __authWarmupStart = Date.now();
@@ -721,6 +734,16 @@ async function makeApiRequest(url, options = {}) {
       signal: options.signal,
     });
 
+    async function readErrorPayload(res) {
+      const ct = (res.headers.get("content-type") || "").toLowerCase();
+      if (ct.includes("application/json")) {
+        const j = await res.json().catch(() => null);
+        if (j) return { json: j, text: "" };
+      }
+      const t = await res.text().catch(() => "");
+      return { json: null, text: t };
+    }
+
     if (response.status === 404) {
       const canFix =
         !options.__skipUserFix &&
@@ -759,15 +782,18 @@ async function makeApiRequest(url, options = {}) {
       throw err;
     }
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
+      const { json, text } = await readErrorPayload(response);
+      const errorData = json || {};
+      const fallbackText = (text || "").trim();
       const errorMsg =
         errorData.message ||
         (errorData.Title && errorData.Description
           ? `${errorData.Title}: ${errorData.Description}`
-          : `API isteği başarısız oldu (durum: ${response.status})`);
+          : (fallbackText ? fallbackText.slice(0, 500) : `API isteği başarısız oldu (durum: ${response.status})`));
 
       const err = new Error(errorMsg);
       err.status = response.status;
+      err._url = fullUrl;
       throw err;
     }
 
@@ -789,7 +815,10 @@ async function makeApiRequest(url, options = {}) {
     const is403 = error?.status === 403 || msg.includes("403");
     const is404 = error?.status === 404 || msg.includes("404");
     const is401 = error?.status === 401 || msg.includes("401");
-    if (!is403 && !is404 && !is401) {
+    const is500 = error?.status === 500 || msg.includes("500");
+    const quiet = options?.__quiet === true;
+    const preview = options?.__preview === true;
+    if (!quiet && !preview && !is403 && !is404 && !is401 && !is500) {
       console.error(`${options?.method || "GET"} ${url} için API isteği hatası:`, error);
     }
     throw error;
@@ -809,6 +838,9 @@ export async function isCurrentUserAdmin() {
 
 export function getDetailsUrl(itemId) {
   const serverId =
+    (getSessionInfo()?.serverId) ||
+    localStorage.getItem("persist_server_id") ||
+    sessionStorage.getItem("persist_server_id") ||
     localStorage.getItem("serverId") ||
     sessionStorage.getItem("serverId") ||
     "";
@@ -1074,6 +1106,50 @@ export async function playNow(itemId) {
 
     let item = await fetchItemDetails(itemId);
     if (!item) throw new Error("Öğe bulunamadı");
+
+    const type = String(item?.Type || "");
+    const mediaType = String(item?.MediaType || "");
+    const isMusicLeaf =
+      type === "Audio" ||
+      type === "MusicVideo" ||
+      mediaType === "Audio";
+
+    const isMusicContainer =
+      type === "MusicAlbum" ||
+      type === "MusicArtist" ||
+      type === "Playlist" ||
+      type === "Folder";
+
+  if (isMusicLeaf || isMusicContainer) {
+    const gmmp = await __getGmmp();
+      if (gmmp?.ensureInit) {
+        await gmmp.ensureInit({ show: true }).catch(() => false);
+      }
+      if (isMusicLeaf && gmmp?.playTrackById) {
+        const ok = await gmmp.playTrackById(itemId, { revealPlayer: true }).catch(() => false);
+        if (ok) return true;
+      }
+      if (isMusicContainer) {
+        if (type === "MusicAlbum" && gmmp?.playAlbumById) {
+          const ok = await gmmp.playAlbumById(itemId, { revealPlayer: true }).catch(() => false);
+          if (ok) return true;
+        }
+        if (type === "MusicArtist" && gmmp?.playArtistById) {
+          const ok = await gmmp.playArtistById(itemId, { revealPlayer: true }).catch(() => false);
+          if (ok) return true;
+        }
+        if (type === "Playlist" && gmmp?.playPlaylistById) {
+          const ok = await gmmp.playPlaylistById(itemId, { revealPlayer: true }).catch(() => false);
+          if (ok) return true;
+        }
+        if (type === "Folder" && gmmp?.playFolderById) {
+          const ok = await gmmp.playFolderById(itemId, { revealPlayer: true }).catch(() => false);
+          if (ok) return true;
+        }
+      }
+      console.warn("playNow(music): GMMP handler yok", { type });
+      return false;
+    }
     if (item.Type === "Series") {
       const best = await getBestEpisodeIdForSeries(item.Id, self.userId);
       if (!best) throw new Error("Bölüm bulunamadı");
@@ -1181,7 +1257,6 @@ async function getRandomEpisodeId(seriesId) {
   return allEpisodes[randomIndex].Id;
 }
 
-
 export async function getVideoStreamUrl(
   itemId,
   maxHeight = 360,
@@ -1191,7 +1266,8 @@ export async function getVideoStreamUrl(
   preferredAudioCodecs = ["eac3", "ac3", "opus", "aac"],
   enableHdr = true,
   forceDirectPlay = false,
-  enableHls = config.enableHls
+  enableHls = config.enableHls,
+  { signal } = {}
 ) {
   if (!isAuthReadyStrict()) {
     await waitForAuthReadyStrict(3000);
@@ -1218,7 +1294,7 @@ export async function getVideoStreamUrl(
     return type === "Video" ? "h264" : "aac";
   };
 
-   try {
+  try {
     let item = await fetchItemDetails(itemId);
     if (!item) {
       return null;
@@ -1246,13 +1322,19 @@ export async function getVideoStreamUrl(
     const playbackInfo = await makeApiRequest(`/Items/${itemId}/PlaybackInfo`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal,
         body: JSON.stringify({
           UserId: userId,
           EnableDirectPlay: true,
           EnableDirectStream: true,
           EnableTranscoding: true
-        })
-      });
+       }),
+      __quiet: true,
+      __preview: true
+     });
+
+    if (!playbackInfo) {
+    }
 
       const source = playbackInfo?.MediaSources?.[0];
       if (!source) {
@@ -1298,18 +1380,46 @@ export async function getVideoStreamUrl(
       return withServer(`/Videos/${itemId}/stream.${container}?${buildQueryParams(streamParams)}`);
     }
 
-    const playbackInfo = await makeApiRequest(`/Items/${itemId}/PlaybackInfo`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        UserId: userId,
-        MaxStreamingBitrate: 100000000,
-        StartTimeTicks: startTimeTicks,
-        EnableDirectPlay: forceDirectPlay,
-        EnableDirectStream: true,
-        EnableTranscoding: true
-      })
-    });
+    let playbackInfo = null;
+    try {
+      playbackInfo = await makeApiRequest(`/Items/${itemId}/PlaybackInfo`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          UserId: userId,
+          MaxStreamingBitrate: 100000000,
+          StartTimeTicks: startTimeTicks,
+          EnableDirectPlay: forceDirectPlay,
+          EnableDirectStream: true,
+          EnableTranscoding: true
+        }),
+        __quiet: true,
+        __preview: true
+      });
+    } catch (e) {
+      const st = e?.status;
+      if (st === 500 || st === 400 || st === 415) {
+        try {
+          playbackInfo = await makeApiRequest(`/Items/${itemId}/PlaybackInfo`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              MaxStreamingBitrate: 100000000,
+              StartTimeTicks: startTimeTicks,
+              EnableDirectPlay: forceDirectPlay,
+              EnableDirectStream: true,
+              EnableTranscoding: true
+            }),
+            __quiet: true,
+            __preview: true
+          }).catch(() => null);
+        } catch {}
+      } else {
+        throw e;
+      }
+    }
+
+    if (!playbackInfo) return null;
 
     const videoSource = playbackInfo?.MediaSources?.[0];
     if (!videoSource) {
@@ -1392,7 +1502,10 @@ export async function getVideoStreamUrl(
     return withServer(`/Videos/${itemId}/stream.${container}?${buildQueryParams(streamParams)}`);
 
   } catch (error) {
-    console.error("Stream URL oluşturma hatası:", error);
+    const st = error?.status;
+    if (st === 404 || st === 400 || st === 415 || st === 500) return null;
+    if (error?.name === "AbortError" || error?.isAbort) return null;
+    console.warn("Stream URL oluşturma hatası:", error);
     return null;
   }
 }
