@@ -394,9 +394,32 @@ export function createStudioHubsPanel(config, labels) {
   );
   recentSubWrap.appendChild(recentSeriesCountWrap);
 
+  const enableRecentMusicRow = createCheckbox(
+    'enableRecentMusicRow',
+    labels?.enableRecentMusicRow || 'Son eklenen Albüm Bölümü',
+    config.enableRecentMusicRow !== false
+  );
+  recentSubWrap.appendChild(enableRecentMusicRow);
+
+  const enableRecentMusicTracksRow = createCheckbox(
+    'enableRecentMusicTracksRow',
+    labels?.enableRecentMusicTracksRow || 'Son Dinlenen Parçalar',
+    config.enableRecentMusicTracksRow !== false
+  );
+  recentSubWrap.appendChild(enableRecentMusicTracksRow);
+
+  const recentMusicCountWrap = createNumberInput(
+    'recentMusicCardCount',
+    labels?.recentMusicCardCount || 'Son eklenen müzikler kart sayısı',
+    Number.isFinite(config.recentMusicCardCount) ? config.recentMusicCardCount : 10,
+    1,
+    20
+  );
+  recentSubWrap.appendChild(recentMusicCountWrap);
+
   const enableRecentEpisodesRow = createCheckbox(
     'enableRecentEpisodesRow',
-    labels?.enableRecentEpisodesRow || 'Son eklenen bölümler satırı',
+    labels?.enableRecentEpisodesRow || 'Son eklenen bölümler',
     config.enableRecentEpisodesRow !== false
   );
   recentSubWrap.appendChild(enableRecentEpisodesRow);
@@ -414,6 +437,8 @@ export function createStudioHubsPanel(config, labels) {
   const masterCb = getCb(enableRecentRows);
   const recMovCb = getCb(enableRecentMoviesRow);
   const recSerCb = getCb(enableRecentSeriesRow);
+  const recMusicCb = getCb(enableRecentMusicRow);
+  const recTracksCb = getCb(enableRecentMusicTracksRow);
   const recEpCb  = getCb(enableRecentEpisodesRow);
 
   function syncRecentSubState() {
@@ -422,6 +447,8 @@ export function createStudioHubsPanel(config, labels) {
     if (!on) {
       if (recMovCb) recMovCb.checked = false;
       if (recSerCb) recSerCb.checked = false;
+      if (recMusicCb) recMusicCb.checked = false;
+      if (recTracksCb) recTracksCb.checked = false;
       if (recEpCb)  recEpCb.checked  = false;
     }
   }
@@ -528,6 +555,21 @@ export function createStudioHubsPanel(config, labels) {
   tvLibGrid.style.gap = "8px";
   tvLibBox.appendChild(tvLibGrid);
 
+  const OTHER_CT_EXCLUDE = new Set(["movies","tvshows","music"]);
+
+  function readJsonArrGeneric(k) {
+    try {
+      const raw = localStorage.getItem(k);
+      if (!raw || raw === "[object Object]") return [];
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr.map(x=>String(x||"").trim()).filter(Boolean) : [];
+    } catch { return []; }
+  }
+
+  function writeJsonArrGeneric(k, arr) {
+    try { localStorage.setItem(k, JSON.stringify((arr||[]).filter(Boolean))); } catch {}
+  }
+
   async function fetchTvLibs() {
     try {
       const me = await makeApiRequest(`/Users/Me`);
@@ -542,6 +584,23 @@ export function createStudioHubsPanel(config, labels) {
     } catch {
       return [];
     }
+  }
+
+  async function fetchAllViews() {
+    try {
+      const me = await makeApiRequest(`/Users/Me`);
+      const uid = me?.Id;
+      if (!uid) return [];
+      const v = await makeApiRequest(`/Users/${uid}/Views`);
+      const items = Array.isArray(v?.Items) ? v.Items : [];
+      return items
+        .filter(x => x?.Id)
+        .map(x => ({
+          Id: x.Id,
+          Name: x.Name || "Library",
+          CollectionType: (x.CollectionType || "").toString()
+        }));
+    } catch { return []; }
   }
 
   (async () => {
@@ -650,6 +709,167 @@ export function createStudioHubsPanel(config, labels) {
       "continueSeriesTvLibIds",
       hiddenContinueSeries
     ));
+  })();
+
+  const otherLibsHeading = document.createElement("div");
+  otherLibsHeading.style.fontWeight = "800";
+  otherLibsHeading.style.margin = "14px 0 6px";
+  otherLibsHeading.textContent = labels?.otherLibrariesHeading || "Diğer Kütüphaneler";
+  section.appendChild(otherLibsHeading);
+
+  const enableOtherLibRows = createCheckbox(
+    "enableOtherLibRows",
+    labels?.enableOtherLibRows || "Diğer kütüphane bölümleirni göster (Son Eklenen / Devam / Bölüm)",
+    !!config.enableOtherLibRows
+  );
+  section.appendChild(enableOtherLibRows);
+
+  const otherLibBox = document.createElement("div");
+  otherLibBox.style.paddingLeft = "8px";
+  otherLibBox.style.borderLeft = "2px solid #0002";
+  otherLibBox.style.marginBottom = "10px";
+  section.appendChild(otherLibBox);
+
+  const otherRecentCountWrap = createNumberInput(
+    "otherLibrariesRecentCardCount",
+    labels?.otherLibrariesRecentCardCount || "Diğer kütüphaneler • Son eklenen kart sayısı",
+    Number.isFinite(config.otherLibrariesRecentCardCount) ? config.otherLibrariesRecentCardCount : 10,
+    1,
+    20
+  );
+  otherLibBox.appendChild(otherRecentCountWrap);
+
+  const otherContinueCountWrap = createNumberInput(
+    "otherLibrariesContinueCardCount",
+    labels?.otherLibrariesContinueCardCount || "Diğer kütüphaneler • İzlemeye devam kart sayısı",
+    Number.isFinite(config.otherLibrariesContinueCardCount) ? config.otherLibrariesContinueCardCount : 10,
+    1,
+    20
+  );
+  otherLibBox.appendChild(otherContinueCountWrap);
+
+  const otherEpisodesCountWrap = createNumberInput(
+    "otherLibrariesEpisodesCardCount",
+    labels?.otherLibrariesEpisodesCardCount || "Diğer kütüphaneler • Son eklenen bölüm kart sayısı",
+    Number.isFinite(config.otherLibrariesEpisodesCardCount) ? config.otherLibrariesEpisodesCardCount : 10,
+    1,
+    20
+  );
+  otherLibBox.appendChild(otherEpisodesCountWrap);
+
+  const hiddenOtherLibIds = (() => {
+    const inp = document.createElement("input");
+    inp.type = "hidden";
+    inp.id = "otherLibrariesIds";
+    inp.name = "otherLibrariesIds";
+    inp.value = JSON.stringify(readJsonArrGeneric("otherLibrariesIds"));
+    return inp;
+  })();
+  otherLibBox.appendChild(hiddenOtherLibIds);
+
+  const otherHint = document.createElement("div");
+  otherHint.style.opacity = "0.85";
+  otherHint.style.fontSize = "0.95em";
+  otherHint.style.margin = "6px 0";
+  otherHint.textContent = labels?.otherLibrariesHint || "Boş bırakırsan: tüm diğer kütüphaneler aktif sayılır.";
+  otherLibBox.appendChild(otherHint);
+
+  const otherGrid = document.createElement("div");
+  otherGrid.style.display = "grid";
+  otherGrid.style.gridTemplateColumns = "1fr";
+  otherGrid.style.gap = "6px";
+  otherLibBox.appendChild(otherGrid);
+
+  const otherActions = document.createElement("div");
+  otherActions.style.display = "flex";
+  otherActions.style.gap = "8px";
+  otherActions.style.marginTop = "8px";
+  otherLibBox.appendChild(otherActions);
+
+  const btnOtherAll = document.createElement("button");
+  btnOtherAll.type = "button";
+  btnOtherAll.textContent = labels?.selectAll || "Hepsini seç";
+  otherActions.appendChild(btnOtherAll);
+
+  const btnOtherNone = document.createElement("button");
+  btnOtherNone.type = "button";
+  btnOtherNone.textContent = labels?.selectNone || "Hepsini kaldır";
+  otherActions.appendChild(btnOtherNone);
+
+  const otherMasterCb = enableOtherLibRows?.querySelector?.('input[type="checkbox"]');
+  function syncOtherBoxVisibility() {
+    const on = !!otherMasterCb?.checked;
+    otherLibBox.style.display = on ? "" : "none";
+    if (!on) {
+      hiddenOtherLibIds.value = "[]";
+      writeJsonArrGeneric("otherLibrariesIds", []);
+      [...otherGrid.querySelectorAll('input[type="checkbox"]')].forEach(i => (i.checked = false));
+    }
+  }
+  syncOtherBoxVisibility();
+  enableOtherLibRows.addEventListener("change", syncOtherBoxVisibility, { passive: true });
+
+  (async () => {
+    const all = await fetchAllViews();
+    const others = all.filter(v => {
+      const ct = (v.CollectionType || "").toLowerCase();
+      return !OTHER_CT_EXCLUDE.has(ct);
+    });
+
+    if (!others.length) {
+      const warn = document.createElement("div");
+      warn.style.opacity = "0.85";
+      warn.textContent = labels?.otherLibrariesNone || "Diğer kütüphane bulunamadı.";
+      otherGrid.appendChild(warn);
+      return;
+    }
+
+    const selected = new Set(readJsonArrGeneric("otherLibrariesIds"));
+    const sync = () => {
+      const arr = Array.from(selected);
+      hiddenOtherLibIds.value = JSON.stringify(arr);
+      writeJsonArrGeneric("otherLibrariesIds", arr);
+    };
+
+    for (const lib of others) {
+      const line = document.createElement("label");
+      line.style.display = "flex";
+      line.style.alignItems = "center";
+      line.style.gap = "8px";
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = selected.has(lib.Id);
+      cb.addEventListener("change", () => {
+        if (cb.checked) selected.add(lib.Id);
+        else selected.delete(lib.Id);
+        sync();
+      }, { passive: true });
+
+      const t = document.createElement("span");
+      const ct = (lib.CollectionType || "").toLowerCase();
+      const ctLabel = ct ? ` (${ct})` : "";
+      t.textContent = `${lib.Name}${ctLabel}`;
+
+      line.appendChild(cb);
+      line.appendChild(t);
+      otherGrid.appendChild(line);
+    }
+
+    btnOtherAll.addEventListener("click", () => {
+      selected.clear();
+      others.forEach(l => selected.add(l.Id));
+      [...otherGrid.querySelectorAll('input[type="checkbox"]')].forEach(i => (i.checked = true));
+      sync();
+    });
+
+    btnOtherNone.addEventListener("click", () => {
+      selected.clear();
+      [...otherGrid.querySelectorAll('input[type="checkbox"]')].forEach(i => (i.checked = false));
+      sync();
+    });
+
+    sync();
   })();
 
   const becauseYouWatchedSection = createSection(
