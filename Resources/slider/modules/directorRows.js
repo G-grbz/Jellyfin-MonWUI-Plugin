@@ -494,7 +494,7 @@ function createRecommendationCard(item, serverId, aboveFold = false) {
   const typeLabel = isSeries
     ? ((config.languageLabels && config.languageLabels.dizi) || "Dizi")
     : ((config.languageLabels && config.languageLabels.film) || "Film");
-  const typeIcon = isSeries ? '🎬' : '🎞️';
+  const typeIcon = isSeries ? 'live_tv' : 'movie';
   const community = Number.isFinite(item.CommunityRating)
     ? `<div class="community-rating" title="Community Rating">⭐ ${item.CommunityRating.toFixed(1)}</div>`
     : "";
@@ -511,12 +511,15 @@ function createRecommendationCard(item, serverId, aboveFold = false) {
           <div class="prc-top-badges">
             ${community}
             <div class="prc-type-badge">
-              <span class="prc-type-icon">${typeIcon}</span>
+              <span class="prc-type-icon material-icons">${typeIcon}</span>
               ${typeLabel}
             </div>
           </div>
           <div class="prc-gradient"></div>
           <div class="prc-overlay">
+          <div class="prc-titleline">
+            ${escapeHtml(clampText(item.Name, 42))}
+          </div>
             <div class="prc-meta">
               ${ageChip ? `<span class="prc-age">${ageChip}</span><span class="prc-dot">•</span>` : ""}
               ${year ? `<span class="prc-year">${year}</span><span class="prc-dot">•</span>` : ""}
