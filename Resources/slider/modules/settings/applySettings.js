@@ -242,6 +242,16 @@ const USER_ONLY_KEYS = [
               if (!master) return false;
               return formData.get('enableRecentSeriesRow') === 'on';
             })(),
+            enableRecentMusicRow: (() => {
+              const master = formData.get('enableRecentRows') === 'on';
+              if (!master) return false;
+              return formData.get('enableRecentMusicRow') === 'on';
+            })(),
+            enableRecentMusicTracksRow: (() => {
+              const master = formData.get('enableRecentRows') === 'on';
+              if (!master) return false;
+              return formData.get('enableRecentMusicTracksRow') === 'on';
+            })(),
             enableRecentEpisodesRow: (() => {
               const master = formData.get('enableRecentRows') === 'on';
               if (!master) return false;
@@ -257,6 +267,12 @@ const USER_ONLY_KEYS = [
               const v = parseInt(formData.get('recentSeriesCardCount'), 10);
               if (Number.isFinite(v) && v > 0) return v;
               if (Number.isFinite(config.recentSeriesCardCount) && config.recentSeriesCardCount > 0) return config.recentSeriesCardCount;
+            })(),
+            recentMusicCardCount: (() => {
+              const v = parseInt(formData.get('recentMusicCardCount'), 10);
+              if (Number.isFinite(v) && v > 0) return v;
+              if (Number.isFinite(config.recentMusicCardCount) && config.recentMusicCardCount > 0) return config.recentMusicCardCount;
+              return 10;
             })(),
             recentEpisodesCardCount: (() => {
               const v = parseInt(formData.get('recentEpisodesCardCount'), 10);
@@ -286,6 +302,31 @@ const USER_ONLY_KEYS = [
               const raw = formData.get('continueSeriesTvLibIds');
               if (!raw) return config.continueSeriesTvLibIds || [];
               try { const a = JSON.parse(raw); return Array.isArray(a) ? a : []; } catch { return config.continueSeriesTvLibIds || []; }
+            })(),
+
+            enableOtherLibRows: formData.get('enableOtherLibRows') === 'on',
+            otherLibrariesRecentCardCount: (() => {
+              const v = parseInt(formData.get('otherLibrariesRecentCardCount'), 10);
+              if (Number.isFinite(v) && v > 0) return v;
+              if (Number.isFinite(config.otherLibrariesRecentCardCount) && config.otherLibrariesRecentCardCount > 0) return config.otherLibrariesRecentCardCount;
+              return 10;
+            })(),
+            otherLibrariesContinueCardCount: (() => {
+              const v = parseInt(formData.get('otherLibrariesContinueCardCount'), 10);
+              if (Number.isFinite(v) && v > 0) return v;
+              if (Number.isFinite(config.otherLibrariesContinueCardCount) && config.otherLibrariesContinueCardCount > 0) return config.otherLibrariesContinueCardCount;
+              return 10;
+            })(),
+            otherLibrariesEpisodesCardCount: (() => {
+              const v = parseInt(formData.get('otherLibrariesEpisodesCardCount'), 10);
+              if (Number.isFinite(v) && v > 0) return v;
+              if (Number.isFinite(config.otherLibrariesEpisodesCardCount) && config.otherLibrariesEpisodesCardCount > 0) return config.otherLibrariesEpisodesCardCount;
+              return 10;
+            })(),
+            otherLibrariesIds: (() => {
+              const raw = formData.get('otherLibrariesIds');
+              if (!raw) return config.otherLibrariesIds || [];
+              try { const a = JSON.parse(raw); return Array.isArray(a) ? a : []; } catch { return config.otherLibrariesIds || []; }
             })(),
 
             enableStudioHubs: formData.get('enableStudioHubs') === 'on',
