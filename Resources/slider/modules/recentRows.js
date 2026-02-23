@@ -6,13 +6,7 @@ import { REOPEN_COOLDOWN_MS, OPEN_HOVER_DELAY_MS } from "./hoverTrailerModal.js"
 import { createTrailerIframe, ensureJmsDetailsOverlay } from "./utils.js";
 import { setupScroller } from "./personalRecommendations.js";
 import { openDetailsModal } from "./detailsModal.js";
-import {
-  openDirRowsDB,
-  makeScope,
-  upsertItem,
-  getMeta,
-  setMeta,
-} from "./dirRowsDb.js";
+import { openDirRowsDB, makeScope, upsertItemsBatchIdle, getMeta, setMeta, getItemsByIds, } from "./recentRowsDb.js";
 import { withServer, withServerSrcset } from "./jfUrl.js";
 
 const config = getConfig();
@@ -23,7 +17,13 @@ const ENABLE_RECENT_MASTER = (config.enableRecentRows !== false);
 const ENABLE_RECENT_MOVIES   = ENABLE_RECENT_MASTER && (config.enableRecentMoviesRow !== false);
 const ENABLE_RECENT_SERIES   = ENABLE_RECENT_MASTER && (config.enableRecentSeriesRow !== false);
 const ENABLE_RECENT_EPISODES = ENABLE_RECENT_MASTER && (config.enableRecentEpisodesRow !== false);
+const ENABLE_RECENT_MUSIC    = ENABLE_RECENT_MASTER && (config.enableRecentMusicRow !== false);
+const ENABLE_RECENT_TRACKS   = ENABLE_RECENT_MASTER && (config.enableRecentMusicTracksRow !== false);
 const DEFAULT_RECENT_ROWS_COUNT = 15;
+const ENABLE_OTHER_LIB_ROWS = !!config.enableOtherLibRows;
+const OTHER_RECENT_CARD_COUNT   = Number.isFinite(config.otherLibrariesRecentCardCount) ? Math.max(1, config.otherLibrariesRecentCardCount|0) : 10;
+const OTHER_CONTINUE_CARD_COUNT = Number.isFinite(config.otherLibrariesContinueCardCount) ? Math.max(1, config.otherLibrariesContinueCardCount|0) : 10;
+const OTHER_EP_CARD_COUNT       = Number.isFinite(config.otherLibrariesEpisodesCardCount) ? Math.max(1, config.otherLibrariesEpisodesCardCount|0) : 10;
 const RECENT_MOVIES_CARD_COUNT =
   Number.isFinite(config.recentMoviesCardCount) ? Math.max(1, config.recentMoviesCardCount|0)
   : DEFAULT_RECENT_ROWS_COUNT;
@@ -36,6 +36,14 @@ const RECENT_EP_CARD_COUNT =
   Number.isFinite(config.recentEpisodesCardCount) ? Math.max(1, config.recentEpisodesCardCount|0)
   : 10;
 
+const RECENT_MUSIC_CARD_COUNT =
+  Number.isFinite(config.recentMusicCardCount) ? Math.max(1, config.recentMusicCardCount|0)
+  : DEFAULT_RECENT_ROWS_COUNT;
+
+const RECENT_TRACKS_CARD_COUNT =
+  Number.isFinite(config.recentTracksCardCount) ? Math.max(1, config.recentTracksCardCount|0)
+  : DEFAULT_RECENT_ROWS_COUNT;
+
 const ENABLE_CONTINUE_MOVIES  = (config.enableContinueMovies !== false);
 const CONT_MOVIES_CARD_COUNT  = Number.isFinite(config.continueMoviesCardCount) ? Math.max(1, config.continueMoviesCardCount|0) : 10;
 const ENABLE_CONTINUE_SERIES  = (config.enableContinueSeries !== false);
@@ -45,21 +53,28 @@ const EFFECTIVE_RECENT_SERIES_COUNT = IS_MOBILE ? Math.min(RECENT_SERIES_CARD_CO
 const EFFECTIVE_CONT_MOV_CNT  = IS_MOBILE ? Math.min(CONT_MOVIES_CARD_COUNT, 8) : Math.min(CONT_MOVIES_CARD_COUNT, 12);
 const EFFECTIVE_CONT_SER_CNT  = IS_MOBILE ? Math.min(CONT_SERIES_CARD_COUNT, 8) : Math.min(CONT_SERIES_CARD_COUNT, 12);
 const EFFECTIVE_RECENT_EP_CNT = IS_MOBILE ? Math.min(RECENT_EP_CARD_COUNT, 8) : Math.min(RECENT_EP_CARD_COUNT, 12);
+const EFFECTIVE_RECENT_MUSIC_COUNT = IS_MOBILE ? Math.min(RECENT_MUSIC_CARD_COUNT, 8) : Math.min(RECENT_MUSIC_CARD_COUNT, 12);
+const EFFECTIVE_RECENT_TRACKS_COUNT = IS_MOBILE ? Math.min(RECENT_TRACKS_CARD_COUNT, 8) : Math.min(RECENT_TRACKS_CARD_COUNT, 12);
+const EFFECTIVE_OTHER_RECENT_CNT   = IS_MOBILE ? Math.min(OTHER_RECENT_CARD_COUNT, 8) : Math.min(OTHER_RECENT_CARD_COUNT, 12);
+const EFFECTIVE_OTHER_CONTINUE_CNT = IS_MOBILE ? Math.min(OTHER_CONTINUE_CARD_COUNT, 8) : Math.min(OTHER_CONTINUE_CARD_COUNT, 12);
+const EFFECTIVE_OTHER_EP_CNT       = IS_MOBILE ? Math.min(OTHER_EP_CARD_COUNT, 8) : Math.min(OTHER_EP_CARD_COUNT, 12);
 
 const HOVER_MODE = (config.recentRowsHoverPreviewMode === "studioMini" || config.recentRowsHoverPreviewMode === "modal")
   ? config.recentRowsHoverPreviewMode
   : "inherit";
 
 const STATE = {
-  started: false,
-  wrapEl: null,
-  serverId: null,
-  userId: null,
-  defaultTvHash: null,
-  defaultMoviesHash: null,
-  tvLibs: [],
-  db: null,
-  scope: null,
+    started: false,
+    wrapEl: null,
+    serverId: null,
+    userId: null,
+    defaultTvHash: null,
+    defaultMoviesHash: null,
+    defaultMusicHash: null,
+    tvLibs: [],
+    otherLibs: [],
+    db: null,
+    scope: null,
 };
 
 let __wrapInserted = false;
@@ -170,16 +185,19 @@ const COMMON_FIELDS = [
   "ParentIndexNumber"
 ].join(",");
 
-function buildPosterUrl(item, height = 540, quality = 72) {
-  const tag = item?.ImageTags?.Primary || item?.PrimaryImageTag;
+ function buildPosterUrl(item, height = 540, quality = 72) {
+  if (!item?.Id) return null;
+  const tag = item?.ImageTags?.Primary || item?.PrimaryImageTag || null;
   if (!tag) return null;
 
-  const path =
-    `/Items/${item.Id}/Images/Primary?tag=${encodeURIComponent(tag)}` +
+  const base = `/Items/${item.Id}/Images/Primary`;
+  const qs =
+    (tag ? `?tag=${encodeURIComponent(tag)}` : `?`) +
     `&maxHeight=${height}&quality=${quality}&EnableImageEnhancers=false`;
+  const path = base + qs;
 
-  return withServer(path);
-}
+   return withServer(path);
+ }
 
 function buildPosterUrlHQ(item){ return buildPosterUrl(item, 540, 72); }
 
@@ -193,11 +211,14 @@ function buildLogoUrl(item, width = 220, quality = 80) {
     item.LogoImageTag ||
     null;
 
+  if (!item?.Id) return null;
   if (!tag) return null;
 
-  const path =
-    `/Items/${item.Id}/Images/Logo?tag=${encodeURIComponent(tag)}` +
+  const base = `/Items/${item.Id}/Images/Logo`;
+  const qs =
+    (tag ? `?tag=${encodeURIComponent(tag)}` : `?`) +
     `&maxWidth=${width}&quality=${quality}&EnableImageEnhancers=false`;
+  const path = base + qs;
 
   return withServer(path);
 }
@@ -210,11 +231,13 @@ function buildBackdropUrl(item, width = 1920, quality = 80) {
     item.BackdropImageTag ||
     (item.ImageTags && item.ImageTags.Backdrop);
 
+  if (!item?.Id) return null;
   if (!tag) return null;
-
-  const path =
-    `/Items/${item.Id}/Images/Backdrop?tag=${encodeURIComponent(tag)}` +
+  const base = `/Items/${item.Id}/Images/Backdrop`;
+  const qs =
+    (tag ? `?tag=${encodeURIComponent(tag)}` : `?`) +
     `&maxWidth=${width}&quality=${quality}&EnableImageEnhancers=false`;
+  const path = base + qs;
 
   return withServer(path);
 }
@@ -227,7 +250,7 @@ function withCacheBust(url) {
   return `${url}${sep}cb=${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
 }
 
-function scheduleImgRetry(img, phase /* "lq"|"hi" */, delayMs) {
+function scheduleImgRetry(img, phase, delayMs) {
   if (!img) return;
   const st = (img.__retryState ||= { lq: { tries: 0 }, hi: { tries: 0 } });
   const slot = st[phase] || (st[phase] = { tries: 0 });
@@ -264,14 +287,18 @@ function buildPosterSrcSet(item) {
   const hs = [240, 360, 540];
   const q  = 50;
   const ar = Number(item.PrimaryImageAspectRatio) || 0.6667;
+  if (!item?.Id) return "";
+  const tag0 = item?.ImageTags?.Primary || item?.PrimaryImageTag || null;
+  if (!tag0) return "";
 
   const raw = hs
     .map(h => {
-      const tag = item?.ImageTags?.Primary || item?.PrimaryImageTag;
-      if (!tag) return "";
-      const path =
-        `/Items/${item.Id}/Images/Primary?tag=${encodeURIComponent(tag)}` +
+      const tag = tag0;
+      const base = `/Items/${item.Id}/Images/Primary`;
+      const qs =
+        (tag ? `?tag=${encodeURIComponent(tag)}` : `?`) +
         `&maxHeight=${h}&quality=${q}&EnableImageEnhancers=false`;
+      const path = base + qs;
       return `${path} ${Math.round(h * ar)}w`;
     })
     .filter(Boolean)
@@ -636,12 +663,24 @@ function attachPreviewByMode(cardEl, itemLike, mode) {
 }
 
 function gotoHash(hash) {
-  try { window.location.hash = hash; }
-  catch { try { window.location.href = hash; } catch {} }
+  const sid = (STATE.serverId || getSessionInfo()?.serverId || "").toString();
+  const fixed = ensureServerIdInHash(hash, sid);
+  try { window.location.hash = fixed; }
+  catch { try { window.location.href = fixed; } catch {} }
+}
+
+function ensureServerIdInHash(hash, serverId) {
+  if (!hash) return hash;
+  if (!serverId) return hash;
+  if (/\bserverId=/.test(hash)) return hash;
+  if (!hash.startsWith("#/")) return hash;
+  const sep = hash.includes("?") ? "&" : "?";
+  return `${hash}${sep}serverId=${encodeURIComponent(serverId)}`;
 }
 
 const DEFAULT_TV_PAGE = "#/tv";
 const DEFAULT_MOVIES_PAGE = "#/movies";
+const DEFAULT_MUSIC_PAGE = "#/music";
 
 async function resolveDefaultPages(userId) {
   try {
@@ -655,14 +694,31 @@ async function resolveDefaultPages(userId) {
     })).filter(x => x.Id);
     STATE.tvLibs = tvLibs;
 
+    const other = items
+      .filter(x => x?.Id)
+      .map(x => ({
+        Id: x.Id,
+        Name: x.Name || "",
+        CollectionType: (x.CollectionType || "").toString()
+      }))
+      .filter(x => {
+        const ct = (x.CollectionType || "").toLowerCase();
+        return ct !== "movies" && ct !== "tvshows" && ct !== "music";
+      });
+    STATE.otherLibs = other;
+
     const tvLib = tvLibs[0] || null;
     const movLib = items.find(x => (x?.CollectionType === "movies")) || null;
+    const musicLib = items.find(x => (x?.CollectionType === "music")) || null;
 
     if (tvLib?.Id) {
       STATE.defaultTvHash = `#/tv?topParentId=${encodeURIComponent(tvLib.Id)}&collectionType=tvshows&tab=1`;
     }
     if (movLib?.Id) {
       STATE.defaultMoviesHash = `#/movies?topParentId=${encodeURIComponent(movLib.Id)}&collectionType=movies&tab=1`;
+    }
+    if (musicLib?.Id) {
+      STATE.defaultMusicHash = `#/music?topParentId=${encodeURIComponent(musicLib.Id)}&collectionType=music&tab=1`;
     }
   } catch (e) {
     console.warn("recentRows: resolveDefaultPages error:", e);
@@ -709,6 +765,22 @@ function resolveTvLibSelection(kind) {
   return filtered.length ? filtered : all;
 }
 
+function getSelectedOtherLibIds() {
+  const fromLs = readJsonArrayLs("otherLibrariesIds");
+  if (fromLs && fromLs.length) return fromLs;
+  const cfg = getConfig?.() || {};
+  const fromCfg = cfg.otherLibrariesIds || cfg.otherLibIds || null;
+  return Array.isArray(fromCfg) ? fromCfg.map(x => String(x||"").trim()).filter(Boolean) : [];
+}
+
+function resolveOtherLibSelection() {
+  const all = (STATE.otherLibs || []).map(x => x.Id).filter(Boolean);
+  if (!all.length) return [];
+  const sel = getSelectedOtherLibIds();
+  const filtered = sel.filter(id => all.includes(id));
+  return filtered.length ? filtered : all;
+}
+
 function getTvHashFallback() {
   return (
     config.latestSeriesHash ||
@@ -727,15 +799,27 @@ function getMoviesHashFallback() {
   );
 }
 
-function openLatestPage(type /* Movie|Series|Episode */) {
+function getMusicHashFallback() {
+  return (
+    config.latestMusicHash ||
+    STATE.defaultMusicHash ||
+    DEFAULT_MUSIC_PAGE
+  );
+}
+
+function openLatestPage(type) {
   if (type === "Series" || type === "Episode") {
     gotoHash(getTvHashFallback());
+    return;
+  }
+  if (type === "MusicAlbum" || type === "Audio") {
+    gotoHash(getMusicHashFallback());
     return;
   }
   gotoHash(getMoviesHashFallback());
 }
 
-function openResumePage(type /* Movie|Series|Episode */) {
+function openResumePage(type) {
   if (type === "Series" || type === "Episode") {
     gotoHash(getTvHashFallback());
     return;
@@ -767,16 +851,35 @@ function createRecommendationCard(item, serverId, { aboveFold=false, showProgres
   const genres = Array.isArray(posterSource.Genres) ? posterSource.Genres.slice(0, 2).join(", ") : "";
   const isSeries = item.Type === "Series";
   const isEpisode = item.Type === "Episode";
+  const isSeason  = item.Type === "Season";
+  const isMusicAlbum = item.Type === "MusicAlbum";
+  const isAudio = item.Type === "Audio";
+  const isPhoto = item.Type === "Photo";
+  const isPhotoAlbum = item.Type === "PhotoAlbum";
+  const isVideo = item.Type === "Video";
+  const isFolder = item.Type === "Folder";
 
   const typeLabel =
+    isPhoto ? (config.languageLabels.photo || "Fotoğraf") :
+    isPhotoAlbum ? (config.languageLabels.photoAlbum || "Albüm") :
+    isVideo ? (config.languageLabels.video || "Video") :
+    isFolder ? (config.languageLabels.folder || "Klasör") :
     isEpisode ? (config.languageLabels.episode || "Bölüm") :
+    isSeason  ? (config.languageLabels.season  || "Sezon") :
     isSeries ? (config.languageLabels.dizi || "Dizi") :
+    isMusicAlbum ? (config.languageLabels.album || "Albüm") :
+    isAudio ? (config.languageLabels.track || "Parça") :
     (config.languageLabels.film || "Film");
 
   const typeIcon =
-    isEpisode ? "🎞️" :
-    isSeries ? "🎬" :
-    "🎞️";
+    (isPhoto || isPhotoAlbum) ? "photo" :
+    isVideo ? "videocam" :
+    isFolder ? "folder" :
+    (isMusicAlbum || isAudio) ? "library_music" :
+    isEpisode ? "tv" :
+    isSeason  ? "collections" :
+    isSeries ? "live_tv" :
+    "movie";
 
   const community = Number.isFinite(posterSource.CommunityRating)
     ? `<div class="community-rating" title="Community Rating">⭐ ${posterSource.CommunityRating.toFixed(1)}</div>`
@@ -789,8 +892,15 @@ function createRecommendationCard(item, serverId, { aboveFold=false, showProgres
        </div>`
     : "";
 
-  const mainTitle = isEpisode ? (item.SeriesName || posterSource.Name || item.Name) : (item.Name || "");
-  const subTitle = isEpisode ? formatEpisodeLabel(item) : "";
+  const mainTitle =
+    (isEpisode || isSeason)
+      ? (item.Name || posterSource.Name || item.SeriesName || "")
+      : (item.Name || "");
+
+  const subTitle =
+    isEpisode ? formatEpisodeSubline(item) :
+    isSeason  ? formatSeasonSubline(item) :
+    "";
 
   card.innerHTML = `
     <div class="cardBox">
@@ -804,23 +914,25 @@ function createRecommendationCard(item, serverId, { aboveFold=false, showProgres
           <div class="prc-top-badges">
             ${community}
             <div class="prc-type-badge">
-              <span class="prc-type-icon">${typeIcon}</span>
+              <span class="prc-type-icon material-icons">${typeIcon}</span>
               ${typeLabel}
             </div>
           </div>
           <div class="prc-gradient"></div>
           <div class="prc-overlay">
+            <div class="prc-titleline">
+              ${escapeHtml(clampText(mainTitle, 42))}
+              ${isEpisode && subTitle ? `<div class="prc-subtitleline">${escapeHtml(subTitle)}</div>` : ``}
+            </div>
+
             <div class="prc-meta">
               ${ageChip ? `<span class="prc-age">${ageChip}</span><span class="prc-dot">•</span>` : ""}
               ${year ? `<span class="prc-year">${year}</span><span class="prc-dot">•</span>` : ""}
               ${runtime ? `<span class="prc-runtime">${getRuntimeWithIcons(runtime)}</span>` : ""}
             </div>
+
             <div class="prc-genres">
-              ${isEpisode
-                ? `<div style="font-weight:800;">${escapeHtml(clampText(mainTitle, 42))}</div>
-                   ${subTitle ? `<div style="opacity:.9;">${escapeHtml(subTitle)}</div>` : ``}`
-                : (genres ? escapeHtml(genres) : "")
-              }
+              ${(!isEpisode && genres) ? escapeHtml(genres) : ""}
             </div>
           </div>
           ${progressHtml}
@@ -907,6 +1019,49 @@ function formatEpisodeLabel(ep) {
   return se && name ? `${se} • ${name}` : (se || name || "");
 }
 
+function formatSeasonLabel(season) {
+  if (!season) return "";
+  const s = Number(season.IndexNumber);
+  const sTxt = Number.isFinite(s) && s > 0 ? `S${String(s).padStart(2,"0")}` : "";
+  const name = season.Name ? clampText(season.Name, 38) : "";
+  return sTxt && name ? `${sTxt} • ${name}` : (sTxt || name || "");
+}
+
+function formatEpisodeSubline(ep) {
+  if (!ep) return "";
+
+  const s = Number(ep.ParentIndexNumber);
+  const e = Number(ep.IndexNumber);
+
+  const sTxt = Number.isFinite(s) && s > 0 ? `S${String(s).padStart(2,"0")}` : "";
+  const eTxt = Number.isFinite(e) && e > 0 ? `E${String(e).padStart(2,"0")}` : "";
+
+  const se = (sTxt || eTxt) ? `${sTxt}${eTxt ? ` • ${eTxt}` : ""}` : "";
+  const series = (ep.SeriesName || "").trim();
+
+  if (series && se) return `${series} • ${se}`;
+  return series || se || "";
+}
+
+function formatSeasonSubline(season) {
+  if (!season) return "";
+
+  const s = Number(season.IndexNumber);
+  const sTxt = Number.isFinite(s) && s > 0 ? `S${String(s).padStart(2,"0")}` : "";
+  const series = (season.SeriesName || "").trim();
+
+  if (series && sTxt) return `${series} • ${sTxt}`;
+  return series || sTxt || "";
+}
+
+function getSeriesIdFromItem(it) {
+  if (!it) return null;
+  if (it.Type === "Episode") return it.SeriesId || null;
+  if (it.Type === "Season") return it.SeriesId || it.ParentId || null;
+
+  return null;
+}
+
 function createRowHeroCard(item, serverId, labelText) {
   const hero = document.createElement("div");
   hero.className = "dir-row-hero";
@@ -920,6 +1075,11 @@ function createRowHeroCard(item, serverId, labelText) {
   const ageChip = normalizeAgeChip(posterSource.OfficialRating || "");
   const isSeries = posterSource.Type === "Series";
   const isEpisode = item.Type === "Episode";
+  const isSeason  = item.Type === "Season";
+  const isPhoto = item.Type === "Photo";
+  const isPhotoAlbum = item.Type === "PhotoAlbum";
+  const isVideo = item.Type === "Video";
+  const isFolder = item.Type === "Folder";
 
   const runtimeTicks =
     item.Type === "Series" ? (item.CumulativeRunTimeTicks || posterSource.CumulativeRunTimeTicks) :
@@ -939,6 +1099,10 @@ function createRowHeroCard(item, serverId, labelText) {
     : "";
 
   const typeLabel =
+    isPhoto ? (config.languageLabels.photo || "Fotoğraf") :
+    isPhotoAlbum ? (config.languageLabels.photoAlbum || "Albüm") :
+    isVideo ? (config.languageLabels.video || "Video") :
+    isFolder ? (config.languageLabels.folder || "Klasör") :
     isEpisode ? (config.languageLabels.episode || "Bölüm") :
     isSeries ? (config.languageLabels.dizi || "Dizi") :
     (config.languageLabels.film || "Film");
@@ -951,8 +1115,12 @@ function createRowHeroCard(item, serverId, labelText) {
   if (genres) metaParts.push(genres);
 
   const meta = metaParts.join(" • ");
-  const heroTitle = isEpisode ? (item.SeriesName || posterSource.Name || item.Name) : posterSource.Name;
-  const heroSub = isEpisode ? formatEpisodeLabel(item) : "";
+  const heroTitle =
+    (isEpisode || isSeason)
+      ? (item.SeriesName || posterSource.Name || item.Name)
+      : (posterSource.Name || item.Name || "");
+
+  const heroSub = isEpisode ? formatEpisodeLabel(item) : (isSeason ? formatSeasonLabel(item) : "");
 
   hero.innerHTML = `
     <div class="dir-row-hero-bg-wrap">
@@ -1081,7 +1249,7 @@ function pickRandomIndex(n) {
   return Math.floor(Math.random() * n);
 }
 
-async function fetchRecent(userId, type /* Movie|Series */, limit, parentId /* optional */) {
+async function fetchRecent(userId, type, limit, parentId) {
   const url =
     `/Users/${userId}/Items?` +
     `IncludeItemTypes=${encodeURIComponent(type)}&Recursive=true&Fields=${encodeURIComponent(COMMON_FIELDS)}&` +
@@ -1095,7 +1263,7 @@ async function fetchRecent(userId, type /* Movie|Series */, limit, parentId /* o
     const out = uniqById(items).slice(0, limit);
     try {
       if (STATE.db && STATE.scope) {
-        for (const it of out) await upsertItem(STATE.db, STATE.scope, it);
+        upsertItemsBatchIdle(STATE.db, STATE.scope, out, { timeout: 1500 });
       }
     } catch {}
     return out;
@@ -1105,7 +1273,7 @@ async function fetchRecent(userId, type /* Movie|Series */, limit, parentId /* o
   }
 }
 
-async function fetchContinue(userId, type /* Movie|Series */, limit, parentId /* optional */) {
+async function fetchContinue(userId, type, limit, parentId) {
   const url =
     `/Users/${userId}/Items/Resume?` +
     `IncludeItemTypes=${encodeURIComponent(type)}&Recursive=true&Fields=${encodeURIComponent(COMMON_FIELDS)}&` +
@@ -1119,7 +1287,7 @@ async function fetchContinue(userId, type /* Movie|Series */, limit, parentId /*
     const out = uniqById(items).slice(0, limit);
     try {
       if (STATE.db && STATE.scope) {
-        for (const it of out) await upsertItem(STATE.db, STATE.scope, it);
+        upsertItemsBatchIdle(STATE.db, STATE.scope, out, { timeout: 1500 });
       }
     } catch {}
     return out;
@@ -1129,124 +1297,275 @@ async function fetchContinue(userId, type /* Movie|Series */, limit, parentId /*
   }
 }
 
-async function fetchItemsByIds(ids) {
-  const clean = (ids || []).filter(Boolean);
-  if (!clean.length) return [];
-  const chunkSize = 100;
-  const out = [];
-  for (let i = 0; i < clean.length; i += chunkSize) {
-    const chunk = clean.slice(i, i + chunkSize);
-    const url =
-      `/Items?Ids=${encodeURIComponent(chunk.join(","))}` +
-      `&Fields=${encodeURIComponent(COMMON_FIELDS)}` +
-      `&ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop,Logo`;
-    try {
-      const data = await makeApiRequest(url);
-      const items = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data) ? data : []);
-      out.push(...items);
-    } catch (e) {
-      console.warn("recentRows: fetchItemsByIds error:", e);
-    }
-  }
-  return uniqById(out);
+function getLastPlayedTs(it) {
+  const ud = it?.UserData || it?.UserDataDto || null;
+  const s = ud?.LastPlayedDate || ud?.LastPlayedDateUtc || it?.DatePlayed || null;
+  const t = s ? Date.parse(s) : NaN;
+  return Number.isFinite(t) ? t : 0;
 }
 
-async function fetchRecentEpisodes(userId, limit, parentId /* optional */) {
+async function fetchRecentlyPlayedTracks(userId, limit, parentId) {
+  const want = Math.max(30, limit * 6);
+  const base =
+    `/Users/${userId}/Items?` +
+    `IncludeItemTypes=Audio&Recursive=true&Fields=${encodeURIComponent(COMMON_FIELDS)}&` +
+    `EnableUserData=true&` +
+    (parentId ? `ParentId=${encodeURIComponent(parentId)}&` : ``) +
+    `SortBy=DatePlayed&SortOrder=Descending&Limit=${want}&` +
+    `ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop,Logo`;
+
+  const urlPlayed = base + `&Filters=IsPlayed`;
+  const normalize = async (data) => {
+    const items = Array.isArray(data?.Items) ? data.Items : [];
+    const played = items
+      .filter(it => getLastPlayedTs(it) > 0)
+      .sort((a, b) => getLastPlayedTs(b) - getLastPlayedTs(a));
+
+    return uniqById(played).slice(0, limit);
+  };
+
+  try {
+    let data = await makeApiRequest(urlPlayed);
+    let out = await normalize(data);
+
+    if (out.length < Math.min(limit, 6)) {
+      data = await makeApiRequest(base);
+      out = await normalize(data);
+    }
+
+    try {
+      if (STATE.db && STATE.scope) {
+        upsertItemsBatchIdle(STATE.db, STATE.scope, out, { timeout: 1500 });
+      }
+    } catch {}
+
+    return out;
+  } catch (e) {
+    console.warn("recentRows: recently played tracks fetch error:", e);
+    return [];
+  }
+}
+
+async function fetchItemsByIds(ids) {
+  const clean = Array.isArray(ids) ? ids.map(x => String(x||"").trim()).filter(Boolean) : [];
+  if (!clean.length) return [];
+
+  let hydrated = [];
+  try {
+    if (!STATE.db || !STATE.scope) await ensureRecentDb();
+    if (STATE.db && STATE.scope) {
+      hydrated = await getItemsByIds(STATE.db, STATE.scope, clean);
+    }
+  } catch {}
+
+  const hydratedById = new Map((hydrated || []).filter(x=>x?.Id).map(x => [x.Id, x]));
+  const missing = clean.filter(id => !hydratedById.has(id));
+
+  let fetched = [];
+  if (missing.length) {
+    const chunkSize = 100;
+    const out = [];
+    for (let i = 0; i < missing.length; i += chunkSize) {
+      const chunk = missing.slice(i, i + chunkSize);
+      const url =
+        `/Items?Ids=${encodeURIComponent(chunk.join(","))}` +
+        `&Fields=${encodeURIComponent(COMMON_FIELDS)}` +
+        `&ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop,Logo`;
+      try {
+        const data = await makeApiRequest(url);
+        const items = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data) ? data : []);
+        out.push(...items);
+      } catch (e) {
+        console.warn("recentRows: fetchItemsByIds missing fetch error:", e);
+      }
+    }
+    fetched = uniqById(out);
+
+    try {
+      if (fetched?.length && STATE.db && STATE.scope) {
+        upsertItemsBatchIdle(STATE.db, STATE.scope, fetched, { timeout: 1500 });
+      }
+    } catch {}
+  }
+
+  const fetchedById = new Map((fetched || []).filter(x=>x?.Id).map(x => [x.Id, x]));
+  const final = [];
+  const seen = new Set();
+  for (const id of clean) {
+    const it = hydratedById.get(id) || fetchedById.get(id) || null;
+    if (!it?.Id) continue;
+    if (seen.has(it.Id)) continue;
+    seen.add(it.Id);
+    final.push(it);
+  }
+
+  for (const it of fetched || []) {
+    if (!it?.Id) continue;
+    if (seen.has(it.Id)) continue;
+    seen.add(it.Id);
+    final.push(it);
+  }
+  return final;
+}
+
+function isRealTvEpisode(it) {
+  if (!it) return false;
+  if (it.Type !== "Episode") return false;
+  const hasSeries = !!(it.SeriesId || (it.SeriesName && String(it.SeriesName).trim()));
+  if (!hasSeries) return false;
+
+  const epNo = Number(it.IndexNumber);
+  if (!Number.isFinite(epNo) || epNo <= 0) return false;
+
+  return true;
+}
+
+async function fetchRecentEpisodes(userId, limit, parentId) {
   const url =
     `/Users/${userId}/Items?` +
     `IncludeItemTypes=Episode&Recursive=true&Fields=${encodeURIComponent(COMMON_FIELDS)}&` +
     `EnableUserData=true&` +
     (parentId ? `ParentId=${encodeURIComponent(parentId)}&` : ``) +
+    `ExcludeItemTypes=Playlist&` +
     `SortBy=DateCreated&SortOrder=Descending&Limit=${Math.max(20, limit * 3)}&` +
     `ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop,Logo`;
 
   try {
     const data = await makeApiRequest(url);
     const eps = Array.isArray(data?.Items) ? data.Items : [];
-    const uniqEps = uniqById(eps);
+    const uniqEps = uniqById(eps).filter(isRealTvEpisode);
 
-    const seriesIds = [];
-    for (const ep of uniqEps) {
-      const sid = ep?.SeriesId || null;
-      if (sid) seriesIds.push(sid);
-    }
-    const series = await fetchItemsByIds(Array.from(new Set(seriesIds)));
-    const byId = new Map(series.map(s => [s.Id, s]));
+    await attachSeriesPosterSourceToEpsAndSeasons(uniqEps);
 
-    const mapped = [];
-    for (const ep of uniqEps) {
-      const sid = ep?.SeriesId;
-      const s = sid ? byId.get(sid) : null;
-      if (s) ep.__posterSource = s;
-      mapped.push(ep);
-      if (mapped.length >= limit) break;
-    }
-    return mapped;
+    return uniqEps.slice(0, limit);
   } catch (e) {
     console.warn("recentRows: recent episodes fetch error:", e);
     return [];
   }
 }
 
-async function fetchContinueEpisodes(userId, limit, parentId /* optional */) {
+async function fetchContinueEpisodes(userId, limit, parentId) {
   const url =
     `/Users/${userId}/Items/Resume?` +
     `IncludeItemTypes=Episode&Recursive=true&Fields=${encodeURIComponent(COMMON_FIELDS)}&` +
     `EnableUserData=true&` +
     (parentId ? `ParentId=${encodeURIComponent(parentId)}&` : ``) +
+    `ExcludeItemTypes=Playlist&` +
     `SortBy=DatePlayed,DateCreated&SortOrder=Descending&Limit=${Math.max(20, limit * 3)}&` +
     `ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop,Logo`;
 
   try {
     const data = await makeApiRequest(url);
     const eps = Array.isArray(data?.Items) ? data.Items : [];
-    const uniqEps = uniqById(eps);
+    const uniqEps = uniqById(eps).filter(isRealTvEpisode);
 
-    const seriesIds = [];
-    for (const ep of uniqEps) {
-      const sid = ep?.SeriesId || null;
-      if (sid) seriesIds.push(sid);
-    }
-    const series = await fetchItemsByIds(Array.from(new Set(seriesIds)));
-    const byId = new Map(series.map(s => [s.Id, s]));
+    await attachSeriesPosterSourceToEpsAndSeasons(uniqEps);
 
-    const mapped = [];
-    for (const ep of uniqEps) {
-      const sid = ep?.SeriesId;
-      const s = sid ? byId.get(sid) : null;
-      if (s) ep.__posterSource = s;
-      mapped.push(ep);
-      if (mapped.length >= limit) break;
-    }
-    return mapped;
+    return uniqEps.slice(0, limit);
   } catch (e) {
     console.warn("recentRows: continue episodes fetch error:", e);
     return [];
   }
 }
 
-async function attachSeriesPosterSourceToEpisodes(eps) {
-  const list = Array.isArray(eps) ? eps : [];
+async function attachSeriesPosterSourceToEpsAndSeasons(items) {
+  const list = Array.isArray(items) ? items : [];
   if (!list.length) return list;
 
-  const seriesIds = [];
-  for (const ep of list) {
-    const sid = ep?.SeriesId || null;
-    if (sid) seriesIds.push(sid);
+  const directSeriesIds = [];
+  const needParentResolve = [];
+
+  for (const it of list) {
+    if (!it?.Id) continue;
+    const sid = getSeriesIdFromItem(it);
+    if (sid) directSeriesIds.push(sid);
+    else if (it.ParentId) needParentResolve.push(it.ParentId);
   }
 
-  const uniqSeriesIds = Array.from(new Set(seriesIds));
-  if (!uniqSeriesIds.length) return list;
-
-  const series = await fetchItemsByIds(uniqSeriesIds);
-  const byId = new Map(series.map(s => [s.Id, s]));
-
-  for (const ep of list) {
-    const sid = ep?.SeriesId;
-    const s = sid ? byId.get(sid) : null;
-    if (s) ep.__posterSource = s;
+  const seasonToSeries = new Map();
+  const resolvedSeriesIds = [];
+  if (needParentResolve.length) {
+    const uniqParentIds = Array.from(new Set(needParentResolve.filter(Boolean)));
+    const parents = await fetchItemsByIds(uniqParentIds);
+    for (const p of parents) {
+      if (!p?.Id) continue;
+      const sid =
+        (p.Type === "Season") ? (p.SeriesId || p.ParentId || null) :
+        (p.Type === "Series") ? p.Id :
+        null;
+      if (sid) {
+        seasonToSeries.set(p.Id, sid);
+        resolvedSeriesIds.push(sid);
+      }
+    }
   }
+
+  const allSeriesIds = Array.from(new Set([...directSeriesIds, ...resolvedSeriesIds].filter(Boolean)));
+  if (!allSeriesIds.length) return list;
+
+  const series = await fetchItemsByIds(allSeriesIds);
+  const seriesById = new Map((series || []).filter(s=>s?.Id).map(s => [s.Id, s]));
+
+  for (const it of list) {
+    if (!it) continue;
+
+    let sid = getSeriesIdFromItem(it);
+    if (!sid && it.ParentId) sid = seasonToSeries.get(it.ParentId) || null;
+    const s = sid ? seriesById.get(sid) : null;
+    if (s) it.__posterSource = s;
+  }
+
   return list;
+}
+
+async function fetchRecentGeneric(userId, limit, parentId) {
+  const url =
+    `/Users/${userId}/Items?` +
+    `Recursive=true&Fields=${encodeURIComponent(COMMON_FIELDS)}&` +
+    `EnableUserData=true&` +
+    (parentId ? `ParentId=${encodeURIComponent(parentId)}&` : ``) +
+    `SortBy=DateCreated&SortOrder=Descending&Limit=${Math.max(10, limit * 2)}&` +
+    `ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop,Logo`;
+  try {
+    const data = await makeApiRequest(url);
+    const items = Array.isArray(data?.Items) ? data.Items : [];
+    const out = uniqById(items).slice(0, limit);
+    await attachSeriesPosterSourceToEpsAndSeasons(out);
+    try {
+      if (STATE.db && STATE.scope) {
+        upsertItemsBatchIdle(STATE.db, STATE.scope, out, { timeout: 1500 });
+      }
+    } catch {}
+    return out;
+  } catch (e) {
+    console.warn("recentRows: other recent fetch error:", e);
+    return [];
+  }
+}
+
+async function fetchContinueGeneric(userId, limit, parentId) {
+  const url =
+    `/Users/${userId}/Items/Resume?` +
+    `Recursive=true&Fields=${encodeURIComponent(COMMON_FIELDS)}&` +
+    `EnableUserData=true&` +
+    (parentId ? `ParentId=${encodeURIComponent(parentId)}&` : ``) +
+    `SortBy=DatePlayed,DateCreated&SortOrder=Descending&Limit=${Math.max(10, limit * 2)}&` +
+    `ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop,Logo`;
+  try {
+    const data = await makeApiRequest(url);
+    const items = Array.isArray(data?.Items) ? data.Items : [];
+    const out = uniqById(items).slice(0, limit);
+    await attachSeriesPosterSourceToEpsAndSeasons(out);
+    try {
+      if (STATE.db && STATE.scope) {
+        upsertItemsBatchIdle(STATE.db, STATE.scope, out, { timeout: 1500 });
+      }
+    } catch {}
+    return out;
+  } catch (e) {
+    console.warn("recentRows: other continue fetch error:", e);
+    return [];
+  }
 }
 
 function buildSectionSkeleton({ titleText, badgeType, onSeeAll }) {
@@ -1586,7 +1905,9 @@ export function mountRecentRowsLazy() {
   const anyRecent =
     (recentMaster && (cfg.enableRecentMoviesRow !== false)) ||
     (recentMaster && (cfg.enableRecentSeriesRow !== false)) ||
-    (recentMaster && (cfg.enableRecentEpisodesRow !== false));
+    (recentMaster && (cfg.enableRecentEpisodesRow !== false)) ||
+    (recentMaster && (cfg.enableRecentMusicRow !== false)) ||
+    (recentMaster && (cfg.enableRecentMusicRow !== false) && (cfg.enableRecentMusicTracksRow !== false));
 
   const anyEnabled =
     anyRecent ||
@@ -1682,20 +2003,22 @@ async function initAndRender(wrap) {
   await ensureRecentDb();
   await resolveDefaultPages(userId);
 
-  const tasks = [];
+  const recentPlans   = [];
+  const continuePlans = [];
+  const episodePlans  = [];
+  const pushPlan = (bucket, fn) => { if (typeof fn === "function") bucket.push(fn); };
 
   if (ENABLE_RECENT_MOVIES) {
-    tasks.push(fillSectionWithItems({
+    pushPlan(recentPlans, () => fillSectionWithItems({
       wrap,
       titleText: config.languageLabels.recentMovies || "Son eklenen filmler",
-      badgeType: 'new',
+      badgeType: "new",
       heroLabel: config.languageLabels.recentMoviesHero || "Son eklenen film",
       cardCount: EFFECTIVE_RECENT_MOVIES_COUNT,
       showProgress: false,
       fetcher: Object.assign(
         () => fetchRecent(userId, "Movie", EFFECTIVE_RECENT_MOVIES_COUNT + 1).then(async (items) => {
-          const ids = items.map(x=>x?.Id).filter(Boolean);
-          await writeCachedList("recent", "Movie", ids);
+          await writeCachedList("recent", "Movie", items.map(x=>x?.Id).filter(Boolean));
           return items;
         }),
         {
@@ -1716,15 +2039,15 @@ async function initAndRender(wrap) {
     const tvIds = resolveTvLibSelection("recentSeries");
 
     if (!split) {
-      tasks.push(fillSectionWithItems({
+      pushPlan(recentPlans, () => fillSectionWithItems({
         wrap,
-        titleText: (config.languageLabels.recentSeries || "Son eklenen diziler"),
-        badgeType: 'new',
-        heroLabel: (config.languageLabels.recentSeriesHero || "Son eklenen dizi"),
+        titleText: config.languageLabels.recentSeries || "Son eklenen diziler",
+        badgeType: "new",
+        heroLabel: config.languageLabels.recentSeriesHero || "Son eklenen dizi",
         cardCount: EFFECTIVE_RECENT_SERIES_COUNT,
         showProgress: false,
         fetcher: Object.assign(
-          () => fetchRecent(userId, "Series", EFFECTIVE_RECENT_SERIES_COUNT + 1 /* no parentId */).then(async (items) => {
+          () => fetchRecent(userId, "Series", EFFECTIVE_RECENT_SERIES_COUNT + 1).then(async (items) => {
             await writeCachedList("recent", "Series", items.map(x=>x?.Id).filter(Boolean));
             return items;
           }),
@@ -1742,10 +2065,10 @@ async function initAndRender(wrap) {
     } else {
       for (const tvLibId of tvIds) {
         const libName = (STATE.tvLibs || []).find(x => x.Id === tvLibId)?.Name || "";
-        tasks.push(fillSectionWithItems({
+        pushPlan(recentPlans, () => fillSectionWithItems({
           wrap,
           titleText: (config.languageLabels.recentSeries || "Son eklenen diziler") + (libName ? ` • ${libName}` : ""),
-          badgeType: 'new',
+          badgeType: "new",
           heroLabel: (config.languageLabels.recentSeriesHero || "Son eklenen dizi") + (libName ? ` • ${libName}` : ""),
           cardCount: EFFECTIVE_RECENT_SERIES_COUNT,
           showProgress: false,
@@ -1769,20 +2092,74 @@ async function initAndRender(wrap) {
     }
   }
 
+  if (ENABLE_RECENT_MUSIC) {
+    pushPlan(recentPlans, () => fillSectionWithItems({
+      wrap,
+      titleText: config.languageLabels.recentMusic || "Son eklenen Albüm",
+      badgeType: "new",
+      heroLabel: config.languageLabels.recentMusicHero || "Son eklenen albüm",
+      cardCount: EFFECTIVE_RECENT_MUSIC_COUNT,
+      showProgress: false,
+      fetcher: Object.assign(
+        () => fetchRecent(userId, "MusicAlbum", EFFECTIVE_RECENT_MUSIC_COUNT + 1).then(async (items) => {
+          await writeCachedList("recent", "MusicAlbum", items.map(x=>x?.Id).filter(Boolean));
+          return items;
+        }),
+        {
+          cachedItems: async () => {
+            const { ids } = await readCachedList("recent", "MusicAlbum", TTL_RECENT_MS);
+            if (!ids.length) return [];
+            const items = await fetchItemsByIds(ids.slice(0, EFFECTIVE_RECENT_MUSIC_COUNT + 1));
+            return items.slice(0, EFFECTIVE_RECENT_MUSIC_COUNT + 1);
+          }
+        }
+      ),
+      onSeeAll: () => openLatestPage("MusicAlbum"),
+      randomHero: false
+    }));
+  }
+
+  if (ENABLE_RECENT_TRACKS) {
+  pushPlan(continuePlans, () => fillSectionWithItems({
+    wrap,
+    titleText: (config.languageLabels.recentlyPlayedTracks || config.languageLabels.recentTracks) || "Son dinlenen parçalar",
+    badgeType: "continue",
+    heroLabel: (config.languageLabels.recentlyPlayedTracksHero || config.languageLabels.recentTracksHero) || "Son dinlenen parça",
+    cardCount: EFFECTIVE_RECENT_TRACKS_COUNT,
+    showProgress: false,
+    fetcher: Object.assign(
+      () => fetchRecentlyPlayedTracks(userId, EFFECTIVE_RECENT_TRACKS_COUNT + 1).then(async (items) => {
+        await writeCachedList("played", "Audio", items.map(x=>x?.Id).filter(Boolean));
+        return items;
+      }),
+      {
+        cachedItems: async () => {
+          const { ids } = await readCachedList("played", "Audio", TTL_CONTINUE_MS);
+          if (!ids.length) return [];
+          const items = await fetchItemsByIds(ids.slice(0, EFFECTIVE_RECENT_TRACKS_COUNT + 1));
+          return items.slice(0, EFFECTIVE_RECENT_TRACKS_COUNT + 1);
+        }
+      }
+    ),
+    onSeeAll: () => openLatestPage("Audio"),
+    randomHero: false
+  }));
+}
+
   if (ENABLE_RECENT_EPISODES) {
     const split = (getConfig()?.recentRowsSplitTvLibs !== false);
     const tvIds = resolveTvLibSelection("recentEpisodes");
 
     if (!split) {
-      tasks.push(fillSectionWithItems({
+      pushPlan(episodePlans, () => fillSectionWithItems({
         wrap,
-        titleText: (config.languageLabels.recentEpisodes || "Son eklenen bölümler"),
-        badgeType: 'new',
-        heroLabel: (config.languageLabels.recentEpisodesHero || "Son eklenen bölüm"),
+        titleText: config.languageLabels.recentEpisodes || "Son eklenen bölümler",
+        badgeType: "new",
+        heroLabel: config.languageLabels.recentEpisodesHero || "Son eklenen bölüm",
         cardCount: EFFECTIVE_RECENT_EP_CNT,
         showProgress: false,
         fetcher: Object.assign(
-          () => fetchRecentEpisodes(userId, EFFECTIVE_RECENT_EP_CNT + 1 /* no parentId */).then(async (items) => {
+          () => fetchRecentEpisodes(userId, EFFECTIVE_RECENT_EP_CNT + 1).then(async (items) => {
             await writeCachedList("recent", "Episode", items.map(x=>x?.Id).filter(Boolean));
             return items;
           }),
@@ -1791,7 +2168,7 @@ async function initAndRender(wrap) {
               const { ids } = await readCachedList("recent", "Episode", TTL_RECENT_MS);
               if (!ids.length) return [];
               const eps = await fetchItemsByIds(ids.slice(0, EFFECTIVE_RECENT_EP_CNT + 1));
-              await attachSeriesPosterSourceToEpisodes(eps);
+              await attachSeriesPosterSourceToEpsAndSeasons(eps);
               return eps.slice(0, EFFECTIVE_RECENT_EP_CNT + 1);
             }
           }
@@ -1800,40 +2177,40 @@ async function initAndRender(wrap) {
       }));
     } else {
       for (const tvLibId of tvIds) {
-      const libName = (STATE.tvLibs || []).find(x => x.Id === tvLibId)?.Name || "";
-      tasks.push(fillSectionWithItems({
-        wrap,
-        titleText: (config.languageLabels.recentEpisodes || "Son eklenen bölümler") + (libName ? ` • ${libName}` : ""),
-        badgeType: 'new',
-        heroLabel: (config.languageLabels.recentEpisodesHero || "Son eklenen bölüm") + (libName ? ` • ${libName}` : ""),
-        cardCount: EFFECTIVE_RECENT_EP_CNT,
-        showProgress: false,
-        fetcher: Object.assign(
-          () => fetchRecentEpisodes(userId, EFFECTIVE_RECENT_EP_CNT + 1, tvLibId).then(async (items) => {
-            await writeCachedList("recent", "Episode" + tvLibMetaSuffix(tvLibId), items.map(x=>x?.Id).filter(Boolean));
-            return items;
-          }),
-          {
-            cachedItems: async () => {
-              const { ids } = await readCachedList("recent", "Episode" + tvLibMetaSuffix(tvLibId), TTL_RECENT_MS);
-              if (!ids.length) return [];
-              const eps = await fetchItemsByIds(ids.slice(0, EFFECTIVE_RECENT_EP_CNT + 1));
-              await attachSeriesPosterSourceToEpisodes(eps);
-              return eps.slice(0, EFFECTIVE_RECENT_EP_CNT + 1);
+        const libName = (STATE.tvLibs || []).find(x => x.Id === tvLibId)?.Name || "";
+        pushPlan(episodePlans, () => fillSectionWithItems({
+          wrap,
+          titleText: (config.languageLabels.recentEpisodes || "Son eklenen bölümler") + (libName ? ` • ${libName}` : ""),
+          badgeType: "new",
+          heroLabel: (config.languageLabels.recentEpisodesHero || "Son eklenen bölüm") + (libName ? ` • ${libName}` : ""),
+          cardCount: EFFECTIVE_RECENT_EP_CNT,
+          showProgress: false,
+          fetcher: Object.assign(
+            () => fetchRecentEpisodes(userId, EFFECTIVE_RECENT_EP_CNT + 1, tvLibId).then(async (items) => {
+              await writeCachedList("recent", "Episode" + tvLibMetaSuffix(tvLibId), items.map(x=>x?.Id).filter(Boolean));
+              return items;
+            }),
+            {
+              cachedItems: async () => {
+                const { ids } = await readCachedList("recent", "Episode" + tvLibMetaSuffix(tvLibId), TTL_RECENT_MS);
+                if (!ids.length) return [];
+                const eps = await fetchItemsByIds(ids.slice(0, EFFECTIVE_RECENT_EP_CNT + 1));
+                await attachSeriesPosterSourceToEpsAndSeasons(eps);
+                return eps.slice(0, EFFECTIVE_RECENT_EP_CNT + 1);
+              }
             }
-          }
-        ),
-        onSeeAll: () => gotoHash(`#/tv?topParentId=${encodeURIComponent(tvLibId)}&collectionType=tvshows&tab=1`)
-      }));
+          ),
+          onSeeAll: () => gotoHash(`#/tv?topParentId=${encodeURIComponent(tvLibId)}&collectionType=tvshows&tab=1`)
+        }));
       }
     }
   }
 
   if (ENABLE_CONTINUE_MOVIES) {
-    tasks.push(fillSectionWithItems({
+    pushPlan(continuePlans, () => fillSectionWithItems({
       wrap,
       titleText: config.languageLabels.continueMovies || "Film izlemeye devam et",
-      badgeType: 'continue',
+      badgeType: "continue",
       heroLabel: config.languageLabels.continueMoviesHero || "İzlemeye devam (Film)",
       cardCount: EFFECTIVE_CONT_MOV_CNT,
       showProgress: true,
@@ -1852,7 +2229,7 @@ async function initAndRender(wrap) {
         }
       ),
       onSeeAll: () => openResumePage("Movie"),
-      randomHero: true,
+      randomHero: true
     }));
   }
 
@@ -1861,15 +2238,15 @@ async function initAndRender(wrap) {
     const tvIds = resolveTvLibSelection("continueSeries");
 
     if (!split) {
-      tasks.push(fillSectionWithItems({
+      pushPlan(continuePlans, () => fillSectionWithItems({
         wrap,
-        titleText: (config.languageLabels.continueSeries || "Dizi izlemeye devam et"),
-        badgeType: 'continue',
-        heroLabel: (config.languageLabels.continueSeriesHero || "İzlemeye devam (Dizi)"),
+        titleText: config.languageLabels.continueSeries || "Dizi izlemeye devam et",
+        badgeType: "continue",
+        heroLabel: config.languageLabels.continueSeriesHero || "İzlemeye devam (Dizi)",
         cardCount: EFFECTIVE_CONT_SER_CNT,
         showProgress: true,
         fetcher: Object.assign(
-          () => fetchContinueEpisodes(userId, EFFECTIVE_CONT_SER_CNT + 1 /* no parentId */).then(async (items) => {
+          () => fetchContinueEpisodes(userId, EFFECTIVE_CONT_SER_CNT + 1).then(async (items) => {
             await writeCachedList("resume", "Episode", items.map(x=>x?.Id).filter(Boolean));
             return items;
           }),
@@ -1878,48 +2255,162 @@ async function initAndRender(wrap) {
               const { ids } = await readCachedList("resume", "Episode", TTL_CONTINUE_MS);
               if (!ids.length) return [];
               const eps = await fetchItemsByIds(ids.slice(0, EFFECTIVE_CONT_SER_CNT + 1));
-              await attachSeriesPosterSourceToEpisodes(eps);
+              await attachSeriesPosterSourceToEpsAndSeasons(eps);
               return eps.slice(0, EFFECTIVE_CONT_SER_CNT + 1);
             }
           }
         ),
         onSeeAll: () => openResumePage("Episode"),
-        randomHero: true,
+        randomHero: true
       }));
     } else {
       for (const tvLibId of tvIds) {
-      const libName = (STATE.tvLibs || []).find(x => x.Id === tvLibId)?.Name || "";
-      tasks.push(fillSectionWithItems({
-        wrap,
-        titleText: (config.languageLabels.continueSeries || "Dizi izlemeye devam et") + (libName ? ` • ${libName}` : ""),
-        badgeType: 'continue',
-        heroLabel: (config.languageLabels.continueSeriesHero || "İzlemeye devam (Dizi)") + (libName ? ` • ${libName}` : ""),
-        cardCount: EFFECTIVE_CONT_SER_CNT,
-        showProgress: true,
-        fetcher: Object.assign(
-          () => fetchContinueEpisodes(userId, EFFECTIVE_CONT_SER_CNT + 1, tvLibId).then(async (items) => {
-            await writeCachedList("resume", "Episode" + tvLibMetaSuffix(tvLibId), items.map(x=>x?.Id).filter(Boolean));
-            return items;
-          }),
-          {
-            cachedItems: async () => {
-              const { ids } = await readCachedList("resume", "Episode" + tvLibMetaSuffix(tvLibId), TTL_CONTINUE_MS);
-              if (!ids.length) return [];
-              const eps = await fetchItemsByIds(ids.slice(0, EFFECTIVE_CONT_SER_CNT + 1));
-              await attachSeriesPosterSourceToEpisodes(eps);
-              return eps.slice(0, EFFECTIVE_CONT_SER_CNT + 1);
+        const libName = (STATE.tvLibs || []).find(x => x.Id === tvLibId)?.Name || "";
+        pushPlan(continuePlans, () => fillSectionWithItems({
+          wrap,
+          titleText: (config.languageLabels.continueSeries || "Dizi izlemeye devam et") + (libName ? ` • ${libName}` : ""),
+          badgeType: "continue",
+          heroLabel: (config.languageLabels.continueSeriesHero || "İzlemeye devam (Dizi)") + (libName ? ` • ${libName}` : ""),
+          cardCount: EFFECTIVE_CONT_SER_CNT,
+          showProgress: true,
+          fetcher: Object.assign(
+            () => fetchContinueEpisodes(userId, EFFECTIVE_CONT_SER_CNT + 1, tvLibId).then(async (items) => {
+              await writeCachedList("resume", "Episode" + tvLibMetaSuffix(tvLibId), items.map(x=>x?.Id).filter(Boolean));
+              return items;
+            }),
+            {
+              cachedItems: async () => {
+                const { ids } = await readCachedList("resume", "Episode" + tvLibMetaSuffix(tvLibId), TTL_CONTINUE_MS);
+                if (!ids.length) return [];
+                const eps = await fetchItemsByIds(ids.slice(0, EFFECTIVE_CONT_SER_CNT + 1));
+                await attachSeriesPosterSourceToEpsAndSeasons(eps);
+                return eps.slice(0, EFFECTIVE_CONT_SER_CNT + 1);
+              }
             }
-          }
-        ),
-        onSeeAll: () => gotoHash(`#/tv?topParentId=${encodeURIComponent(tvLibId)}&collectionType=tvshows&tab=1`),
-        randomHero: true,
-      }));
+          ),
+          onSeeAll: () => gotoHash(`#/tv?topParentId=${encodeURIComponent(tvLibId)}&collectionType=tvshows&tab=1`),
+          randomHero: true
+        }));
       }
     }
   }
 
-  if (tasks.length) {
-    await Promise.allSettled(tasks);
+  if (ENABLE_OTHER_LIB_ROWS) {
+    const otherIds = resolveOtherLibSelection();
+    const otherDefs = otherIds.map((libId) => {
+      const lib = (STATE.otherLibs || []).find(x => x.Id === libId) || null;
+      return { libId, libName: lib?.Name || "Library" };
+    });
+
+    for (const { libId, libName } of otherDefs) {
+      pushPlan(recentPlans, () => fillSectionWithItems({
+        wrap,
+        titleText: `${config.languageLabels.otherLibRecent || "Son eklenenler"} • ${libName}`,
+        badgeType: "new",
+        heroLabel: `${config.languageLabels.otherLibRecentHero || "Son eklenen"} • ${libName}`,
+        cardCount: EFFECTIVE_OTHER_RECENT_CNT,
+        showProgress: false,
+        fetcher: Object.assign(
+          () => fetchRecentGeneric(userId, EFFECTIVE_OTHER_RECENT_CNT + 1, libId).then(async (items) => {
+            await writeCachedList("other_recent", `lib:${libId}`, items.map(x=>x?.Id).filter(Boolean));
+            return items;
+          }),
+          {
+            cachedItems: async () => {
+              const { ids } = await readCachedList("other_recent", `lib:${libId}`, TTL_RECENT_MS);
+              if (!ids.length) return [];
+              const items = await fetchItemsByIds(ids.slice(0, EFFECTIVE_OTHER_RECENT_CNT + 1));
+              await attachSeriesPosterSourceToEpsAndSeasons(items);
+              return items.slice(0, EFFECTIVE_OTHER_RECENT_CNT + 1);
+            }
+          }
+        ),
+        onSeeAll: () => gotoHash(`#/list.html?parentId=${encodeURIComponent(libId)}`)
+      }));
+    }
+
+    for (const { libId, libName } of otherDefs) {
+      pushPlan(continuePlans, () => fillSectionWithItems({
+        wrap,
+        titleText: `${config.languageLabels.otherLibContinue || "İzlemeye devam et"} • ${libName}`,
+        badgeType: "continue",
+        heroLabel: `${config.languageLabels.otherLibContinueHero || "Devam"} • ${libName}`,
+        cardCount: EFFECTIVE_OTHER_CONTINUE_CNT,
+        showProgress: true,
+        fetcher: Object.assign(
+          () => fetchContinueGeneric(userId, EFFECTIVE_OTHER_CONTINUE_CNT + 1, libId).then(async (items) => {
+            await writeCachedList("other_resume", `lib:${libId}`, items.map(x=>x?.Id).filter(Boolean));
+            return items;
+          }),
+          {
+            cachedItems: async () => {
+              const { ids } = await readCachedList("other_resume", `lib:${libId}`, TTL_CONTINUE_MS);
+              if (!ids.length) return [];
+              const items = await fetchItemsByIds(ids.slice(0, EFFECTIVE_OTHER_CONTINUE_CNT + 1));
+              await attachSeriesPosterSourceToEpsAndSeasons(items);
+              return items.slice(0, EFFECTIVE_OTHER_CONTINUE_CNT + 1);
+            }
+          }
+        ),
+        onSeeAll: () => gotoHash(`#/list.html?parentId=${encodeURIComponent(libId)}&tab=resume`),
+        randomHero: true
+      }));
+    }
+
+    for (const { libId, libName } of otherDefs) {
+      pushPlan(episodePlans, () => fillSectionWithItems({
+        wrap,
+        titleText: `${config.languageLabels.recentEpisodes || "Son eklenen bölümler"} • ${libName}`,
+        badgeType: "episode",
+        heroLabel: `${config.languageLabels.recentEpisodesHero || "Bölüm"} • ${libName}`,
+        cardCount: EFFECTIVE_OTHER_EP_CNT,
+        showProgress: false,
+        fetcher: Object.assign(
+          () => fetchRecentEpisodes(userId, EFFECTIVE_OTHER_EP_CNT + 1, libId).then(async (items) => {
+            await writeCachedList("other_recent", `ep:${libId}`, items.map(x=>x?.Id).filter(Boolean));
+            return items;
+          }),
+          {
+            cachedItems: async () => {
+              const { ids } = await readCachedList("other_recent", `ep:${libId}`, TTL_RECENT_MS);
+              if (!ids.length) return [];
+              const eps = await fetchItemsByIds(ids.slice(0, EFFECTIVE_OTHER_EP_CNT + 1));
+              await attachSeriesPosterSourceToEpsAndSeasons(eps);
+              return eps.slice(0, EFFECTIVE_OTHER_EP_CNT + 1);
+            }
+          }
+        ),
+        onSeeAll: () => gotoHash(`#/list.html?parentId=${encodeURIComponent(libId)}&includeItemTypes=Episode`)
+      }));
+    }
+  }
+
+  const runners = [...recentPlans, ...continuePlans, ...episodePlans];
+
+  async function runWithLimit(fns, limit) {
+    const pool = new Set();
+    const results = [];
+    for (const fn of fns) {
+      const p = Promise.resolve().then(fn);
+      results.push(p);
+      pool.add(p);
+      p.finally(() => pool.delete(p));
+      if (pool.size >= limit) {
+        try { await Promise.race(pool); } catch {}
+      }
+    }
+    return Promise.allSettled(results);
+  }
+
+  const limit = IS_MOBILE ? 1 : 2;
+  if (runners.length) {
+    await runWithLimit(
+      runners.map((run) => async () => {
+        try { return await run(); }
+        catch (e) { console.warn("recentRows: runner error:", e); }
+      }),
+      limit
+    );
   }
 
   if (!wrap.querySelector(".recent-row-section")) {
