@@ -390,11 +390,28 @@ export function getConfig() {
     enableContinueSeries: (localStorage.getItem('enableContinueSeries') || 'true') !== 'false',
     continueSeriesCardCount: parseInt(localStorage.getItem('continueSeriesCardCount'), 10) || 10,
 
+    enableOtherLibRows: localStorage.getItem('enableOtherLibRows') === 'true',
+    otherLibrariesRecentCardCount: parseInt(localStorage.getItem('otherLibrariesRecentCardCount'), 10) || 10,
+    otherLibrariesContinueCardCount: parseInt(localStorage.getItem('otherLibrariesContinueCardCount'), 10) || 10,
+    otherLibrariesEpisodesCardCount: parseInt(localStorage.getItem('otherLibrariesEpisodesCardCount'), 10) || 10,
+    otherLibrariesIds: (() => {
+      try {
+        const raw = localStorage.getItem('otherLibrariesIds');
+        if (!raw || raw === '[object Object]') return [];
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr.map(x=>String(x||'').trim()).filter(Boolean) : [];
+      } catch { return []; }
+    })(),
+
     enableRecentMoviesRow: (localStorage.getItem('enableRecentMoviesRow') || 'true') !== 'false',
     recentMoviesCardCount: parseInt(localStorage.getItem('recentMoviesCardCount'), 10) || 10,
 
     enableRecentSeriesRow: (localStorage.getItem('enableRecentSeriesRow') || 'true') !== 'false',
     recentSeriesCardCount: parseInt(localStorage.getItem('recentSeriesCardCount'), 10) || 10,
+
+    enableRecentMusicRow: (localStorage.getItem('enableRecentMusicRow') || 'true') !== 'false',
+    enableRecentMusicTracksRow: (localStorage.getItem('enableRecentMusicTracksRow') || 'true') !== 'false',
+    recentMusicCardCount: parseInt(localStorage.getItem('recentMusicCardCount'), 10) || 10,
 
     enableRecentEpisodesRow: (localStorage.getItem('enableRecentEpisodesRow') || 'true') !== 'false',
     recentEpisodesCardCount: parseInt(localStorage.getItem('recentEpisodesCardCount'), 10) || 10,
