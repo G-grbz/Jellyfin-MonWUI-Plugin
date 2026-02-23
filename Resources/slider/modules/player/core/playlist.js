@@ -5,6 +5,7 @@ import { shuffleArray } from "../utils/domUtils.js";
 import { showNotification } from "../ui/notification.js";
 import { updateModernTrackInfo, playTrack } from "../player/playback.js";
 import { updatePlaylistModal } from "../ui/playlistModal.js";
+import { makeApiRequest } from "../../api.js";
 
 const config = getConfig();
 const BATCH_SIZE = config.gruplimit;
@@ -427,4 +428,83 @@ export async function saveCurrentPlaylistToJellyfin(
     );
     throw err;
   }
+}
+
+async function ensureGmmpReady() {
+  const gmmp = (typeof window !== "undefined" && window.__GMMP) ? window.__GMMP : null;
+  if (gmmp?.ensureInit) {
+    await gmmp.ensureInit({ show: true }).catch(() => false);
+  }
+  return !!musicPlayerState.modernPlayer;
+}
+
+function isAudioItem(it) {
+  const t = String(it?.Type || "");
+  return t === "Audio" || t === "MusicVideo" || String(it?.MediaType || "") === "Audio";
+}
+
+export async function playTrackById(itemId, { revealPlayer = true } = {}) {
+  if (!itemId) return false;
+
+  const ok = await ensureGmmpReady();
+  if (!ok) return false;
+
+  const it = await makeApiRequest(`/Items/${encodeURIComponent(String(itemId).trim())}?Fields=Name,Artists,Album,RunTimeTicks,ImageTags,MediaStreams,UserData`).catch(() => null);
+  if (!it || !isAudioItem(it)) return false;
+
+  musicPlayerState.playlist = [it];
+  musicPlayerState.originalPlaylist = [it];
+  musicPlayerState.effectivePlaylist = [it];
+  musicPlayerState.currentIndex = 0;
+
+  if (revealPlayer) {
+    try {
+      musicPlayerState.isPlayerVisible = true;
+      musicPlayerState.modernPlayer?.classList?.add("visible");
+      musicPlayerState.modernPlayer?.removeAttribute?.("aria-hidden");
+      musicPlayerState.modernPlayer && (musicPlayerState.modernPlayer.inert = false);
+    } catch {}
+  }
+
+  playTrack(0);
+  return true;
+}
+
+function isTrackItem(it) {
+  const t = String(it?.Type || "");
+  return t === "Audio" || t === "MusicVideo" || String(it?.MediaType || "") === "Audio";
+}
+
+export async function playAlbumById(albumId, { revealPlayer = true, limit = 2000 } = {}) {
+  if (!albumId) return false;
+
+  const ok = await ensureGmmpReady();
+  if (!ok) return false;
+
+  const resp = await makeApiRequest(
+    `/Items?ParentId=${encodeURIComponent(String(albumId).trim())}` +
+    `&IncludeItemTypes=Audio&Recursive=true&SortBy=IndexNumber,SortName&Limit=${encodeURIComponent(String(limit))}` +
+    `&Fields=Name,Artists,Album,RunTimeTicks,ImageTags,MediaStreams,UserData`
+  ).catch(() => null);
+
+  const items = Array.isArray(resp?.Items) ? resp.Items : [];
+  const tracks = items.filter(isTrackItem);
+  if (!tracks.length) return false;
+
+  musicPlayerState.playlist = tracks;
+  musicPlayerState.originalPlaylist = [...tracks];
+  musicPlayerState.effectivePlaylist = [...tracks];
+  musicPlayerState.currentIndex = 0;
+
+  if (revealPlayer) {
+    try {
+      musicPlayerState.isPlayerVisible = true;
+      musicPlayerState.modernPlayer?.classList?.add("visible");
+      musicPlayerState.modernPlayer?.removeAttribute?.("aria-hidden");
+      musicPlayerState.modernPlayer && (musicPlayerState.modernPlayer.inert = false);
+    } catch {}
+  }
+
+  playTrack(0);
+  return true;
 }
