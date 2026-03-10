@@ -2,6 +2,7 @@ import { getConfig } from "./config.js";
 import { applyContainerStyles } from "./positionUtils.js";
 import { fetchItemDetails } from "./api.js";
 import { calculateMatchPercentage } from "./hoverTrailerModal.js";
+import { withServer } from "./jfUrl.js";
 
 const config = getConfig();
 
