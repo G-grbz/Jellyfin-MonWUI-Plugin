@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/G-grbz/Jellyfin-MonWUI-Plugin/main/img/icon.png",
     "versions": [
       {
+        "version": "2.0.1.0",
+        "changelog": "Fix missing imported function issue",
+        "targetAbi": "10.10.0.0",
+        "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v2.0.0/JMSFusion-2.0.1.0-server.zip",
+        "checksum": "7ea568af60c8ed48a57351af2772ebb2",
+        "timestamp": "2026-03-10T12:26:42.3393349Z"
+      },
+      {
         "version": "2.0.0.0",
         "changelog": "Subtitle customization and UX fixes",
         "targetAbi": "10.10.0.0",
