@@ -783,10 +783,7 @@ export function createDotNavigation() {
   }
 
   const dotType = config.dotBackgroundImageType;
-  const indexPage = document.querySelector("#indexPage:not(.hide)");
-  if (!indexPage) return;
-
-  const slidesContainer = indexPage.querySelector("#slides-container");
+  const slidesContainer = getPeakViewportContainer();
   if (!slidesContainer) {
     console.warn("Slayt konteynırı bulunamadı, nokta navigasyonu oluşturulamıyor");
     return;
@@ -1150,10 +1147,7 @@ async function openModalForDot(dot, itemId, signal) {
 }
 
 export function initSwipeEvents() {
-  const indexPage = document.querySelector("#indexPage:not(.hide)");
-  if (!indexPage) return;
-
-  const slidesContainer = indexPage.querySelector("#slides-container");
+  const slidesContainer = getPeakViewportContainer();
   if (!slidesContainer) return;
   if (slidesContainer.__swipeBound) return;
   slidesContainer.__swipeBound = true;
@@ -1252,10 +1246,10 @@ async function preloadGenreData(itemIds) {
 export function displaySlide(index) {
   ensureFlickerFixCSS();
 
-  const indexPage = document.querySelector("#indexPage:not(.hide)");
-  if (!indexPage) return;
+  const slidesContainer = getPeakViewportContainer();
+  if (!slidesContainer) return;
 
-  const slides = indexPage.querySelectorAll(".slide");
+  const slides = slidesContainer.querySelectorAll(".slide");
   if (!slides.length) return;
 
   if (!document.querySelector(".dot-navigation-container")) {
@@ -1265,7 +1259,7 @@ export function displaySlide(index) {
   const currentSlide = slides[index];
   if (!currentSlide) return;
 
-  const activeSlide = indexPage.querySelector(".slide.active");
+  const activeSlide = slidesContainer.querySelector(".slide.active");
   const slidesArr = Array.from(slides);
   const len = slidesArr.length;
 
@@ -1277,7 +1271,6 @@ export function displaySlide(index) {
   if (delta < -len / 2)  delta += len;
 
   const direction = delta === 0 ? 1 : (delta > 0 ? 1 : -1);
-  const slidesContainer = indexPage.querySelector("#slides-container");
 
   const isPeak = !!getConfig()?.peakSlider;
   if (slidesContainer) slidesContainer.classList.toggle("peak-mode", isPeak);
