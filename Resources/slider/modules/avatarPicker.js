@@ -6,6 +6,7 @@ const config = getConfig?.() || {};
 const L = (key, fallback = "") =>
   (config.languageLabels && config.languageLabels[key]) || fallback;
 const AVATAR_DIR = "/web/slider/src/images/avatar";
+const randomAvatarUrlCache = new Map();
 
 function absUrl(path) {
   const base = getServerBase?.() || "";
@@ -76,6 +77,16 @@ function sortAvatars(list) {
   });
 }
 
+function hashSeed(seed) {
+  let hash = 2166136261;
+  const input = String(seed || "");
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
 async function getAvatarFiles() {
   if (getAvatarFiles._cache && Date.now() - getAvatarFiles._ts < 300000) {
     return getAvatarFiles._cache;
@@ -90,6 +101,24 @@ async function getAvatarFiles() {
   getAvatarFiles._cache = files;
   getAvatarFiles._ts = Date.now();
   return files;
+}
+
+export async function getRandomAvatarUrl(seed = "") {
+  const cacheKey = String(seed || "").trim();
+  if (cacheKey && randomAvatarUrlCache.has(cacheKey)) {
+    return randomAvatarUrlCache.get(cacheKey) || "";
+  }
+
+  const files = await getAvatarFiles().catch(() => []);
+  if (!files.length) return "";
+
+  const idx = cacheKey
+    ? hashSeed(cacheKey) % files.length
+    : Math.floor(Math.random() * files.length);
+  const url = absUrl(`${AVATAR_DIR}/${files[idx]}`);
+
+  if (cacheKey) randomAvatarUrlCache.set(cacheKey, url);
+  return url;
 }
 
 async function uploadViaJellyfinUi(blob) {

@@ -270,7 +270,7 @@ async function showNowPlayingModal(nowPlayingItem, device) {
 
             <div class="castRating-container">
               ${imdbRating ? `<span class="castimdb-rating"><i class="fas fa-star"></i> ${imdbRating}</span>` : ''}
-              ${tmdbRating ? `<span class="casttmdb-rating"><i class="fas fa-family"></i> ${tmdbRating}</span>` : ''}
+              ${tmdbRating ? `<span class="casttmdb-rating"><i class="fa-solid fa-user-group"></i> ${tmdbRating}</span>` : ''}
             </div>
 
             ${tmdbId ? `<p><strong>TMDB:</strong> <a href="https://www.themoviedb.org/${item.Type === 'Episode' ? 'tv' : 'movie'}/${tmdbId}" target="_blank">Link</a></p>` : ''}

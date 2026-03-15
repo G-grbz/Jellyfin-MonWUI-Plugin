@@ -52,7 +52,7 @@ export async function fetchJellyfinPlaylists() {
   } catch (error) {
     console.error("Çalma listesi getirme hatası:", error);
     showNotification(
-      `<i class="fas fa-regular fa-hexagon-exclamation"></i> ${config.languageLabels.playlistFetchError}`,
+      `<i class="fa-solid fa-circle-exclamation"></i> ${config.languageLabels.playlistFetchError}`,
       2000,
       "error"
     );
@@ -149,7 +149,7 @@ export async function playJellyfinPlaylist(playlistId) {
     updatePlaylistModal();
     resetShuffle();
     showNotification(
-      `<i class="fas fa-solid fa-guitars"></i> ${items.length} ${config.languageLabels.tracks}`,
+      `<i class="fa-solid fa-music"></i> ${items.length} ${config.languageLabels.tracks}`,
       2000,
       "kontrol"
     );

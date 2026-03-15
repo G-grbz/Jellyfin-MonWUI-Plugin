@@ -479,7 +479,8 @@ export function createTrailerIframe({
   videoElement.style.opacity = "0";
 
   videoContainer.appendChild(videoElement);
-  slide.appendChild(videoContainer);
+  const backdropContainer = slide?.__backdropContainer || slide?.querySelector?.(".bckdrp-cntnr");
+  (backdropContainer || slide).appendChild(videoContainer);
 
   function setPreviewPlaybackFlag(kind, itemId) {
   try {
@@ -785,7 +786,8 @@ function clearPreviewPlaybackFlag() {
         right: "0%",
         bottom: "0",
       });
-      slide.appendChild(ytIframe);
+      const backdropContainer = slide?.__backdropContainer || slide?.querySelector?.(".bckdrp-cntnr");
+      (backdropContainer || slide).appendChild(ytIframe);
     }
 
     if (!isActiveSlide()) return false;
@@ -1283,20 +1285,42 @@ export function prefetchImages(urls) {
 
 export async function getHighResImageUrls(item, backdropIndex) {
   const itemId = item.Id;
-  const imageTag = item.ImageTags?.Primary || "";
   const logoTag = item.ImageTags?.Logo || "";
   const pixelRatio = window.devicePixelRatio || 1;
   const logoHeight = Math.floor(720 * pixelRatio);
-  const fmt = supportsWebP() ? "&format=webp" : "";
+  const fmtValue = supportsWebP() ? "webp" : "";
   const index = backdropIndex !== undefined ? backdropIndex : "0";
   const backdropMaxWidth = (config.backdropMaxWidth || 1920) * pixelRatio;
-  const backdropTag = item.ImageTags?.Backdrop?.[index] || "";
+  const backdropTags = Array.isArray(item?.BackdropImageTags) ? item.BackdropImageTags : [];
+  const backdropTagFromImageTags = Array.isArray(item?.ImageTags?.Backdrop)
+    ? item.ImageTags.Backdrop[Number(index) || 0]
+    : ((Number(index) || 0) === 0 ? item?.ImageTags?.Backdrop : "");
+  const backdropTag = backdropTags[Number(index) || 0] || backdropTagFromImageTags || "";
 
-  const backdropUrl = S(`/Items/${itemId}/Images/Backdrop/${index}?tag=${backdropTag}&quality=90&maxWidth=${Math.floor(
-    backdropMaxWidth
-  )}${fmt}`);
-  const placeholderUrl = S(`/Items/${itemId}/Images/Primary?tag=${imageTag}&maxHeight=50&blur=15`);
-  const logoUrl = S(`/Items/${itemId}/Images/Logo?tag=${logoTag}&quality=90&maxHeight=${logoHeight}${fmt}`);
+  const backdropQs = new URLSearchParams();
+  if (backdropTag) backdropQs.set("tag", backdropTag);
+  backdropQs.set("quality", "90");
+  backdropQs.set("maxWidth", String(Math.floor(backdropMaxWidth)));
+  if (fmtValue) backdropQs.set("format", fmtValue);
+  const backdropUrl = S(`/Items/${itemId}/Images/Backdrop/${index}?${backdropQs.toString()}`);
+
+  const placeholderQs = new URLSearchParams();
+  placeholderQs.set("quality", "20");
+  placeholderQs.set("maxWidth", String(Math.max(96, Math.floor(160 * pixelRatio))));
+  placeholderQs.set("blur", "15");
+  if (fmtValue) placeholderQs.set("format", fmtValue);
+  const placeholderPath = backdropTag
+    ? `/Items/${itemId}/Images/Backdrop/${index}`
+    : `/Items/${itemId}/Images/Primary`;
+  if (!backdropTag && !placeholderQs.has("maxHeight")) placeholderQs.set("maxHeight", "50");
+  const placeholderUrl = S(`${placeholderPath}?${placeholderQs.toString()}`);
+
+  const logoQs = new URLSearchParams();
+  if (logoTag) logoQs.set("tag", logoTag);
+  logoQs.set("quality", "90");
+  logoQs.set("maxHeight", String(logoHeight));
+  if (fmtValue) logoQs.set("format", fmtValue);
+  const logoUrl = S(`/Items/${itemId}/Images/Logo?${logoQs.toString()}`);
 
   return { backdropUrl, placeholderUrl, logoUrl };
 }

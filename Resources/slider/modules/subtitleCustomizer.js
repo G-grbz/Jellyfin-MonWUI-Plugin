@@ -1,5 +1,6 @@
 import { getConfig } from "./config.js";
 import { getLanguageLabels } from "../language/index.js";
+import { faIconHtml } from "./faIcons.js";
 
 const STORAGE_KEY = "jms:subtitleCustomizer:v1";
 const JF_APPEARANCE_KEY = "localplayersubtitleappearance3";
@@ -16,6 +17,8 @@ let playbackManagersCache = {
   at: 0,
   list: []
 };
+const patchedSubtitleAppearancePlayers = new Set();
+const patchedSubtitleAppearanceMeta = new WeakMap();
 
 const config = getConfig();
 const labels =
@@ -968,7 +971,53 @@ function patchExistingCueStyles(settings) {
   });
 }
 
-function applyOverlayStyles(settings) {
+function getLiveSubtitleCustomizerSettings(fallback = null) {
+  try {
+    const live = window.__jmsSubtitleCustomizerState?.settings;
+    if (live && typeof live === "object") {
+      return {
+        ...DEFAULT_SETTINGS,
+        ...live
+      };
+    }
+  } catch {}
+
+  if (fallback && typeof fallback === "object") {
+    return {
+      ...DEFAULT_SETTINGS,
+      ...fallback
+    };
+  }
+
+  return loadSettings();
+}
+
+function applySubtitleContainerStyles(container, settings) {
+  if (!(container instanceof HTMLElement)) return;
+
+  container.style.width = "100%";
+  container.style.left = "0";
+  container.style.right = "0";
+  container.style.pointerEvents = "none";
+
+  if (settings.position === "top") {
+    container.style.top = "0";
+    container.style.bottom = "";
+    container.style.transform = "";
+  } else if (settings.position === "center") {
+    container.style.top = "50%";
+    container.style.bottom = "";
+    container.style.transform = "translateY(-50%)";
+  } else {
+    container.style.top = "";
+    container.style.bottom = "0";
+    container.style.transform = "";
+  }
+}
+
+function applySubtitleTextStyles(subtitleText, settings) {
+  if (!(subtitleText instanceof HTMLElement)) return;
+
   const fontStack = resolveFontStack(settings);
   const textShadow = getTextShadowValue(
     settings.dropShadow,
@@ -980,55 +1029,90 @@ function applyOverlayStyles(settings) {
   const textColor = getTextColorValue(settings);
   const textBackground = getBackgroundColorValue(settings);
   const backgroundRadius = getBackgroundRadiusCssValue(settings);
+
+  subtitleText.style.color = textColor;
+  subtitleText.style.fontSize = `${settings.sizePercent}%`;
+  subtitleText.style.fontFamily = fontStack;
+  subtitleText.style.textShadow = textShadow;
+  subtitleText.style.backgroundColor = textBackground;
+  subtitleText.style.padding = settings.backgroundEnabled ? SUBTITLE_BACKGROUND_PADDING : "0";
+  subtitleText.style.borderRadius = settings.backgroundEnabled ? backgroundRadius : "0";
+  subtitleText.style.display = settings.backgroundEnabled ? "inline-block" : "";
+  subtitleText.style.lineHeight = "1.3";
+  subtitleText.style.textAlign = "center";
+
+  if (settings.position === "top") {
+    subtitleText.style.marginTop = "1.2em";
+    subtitleText.style.marginBottom = "0";
+  } else if (settings.position === "center") {
+    subtitleText.style.marginTop = "0";
+    subtitleText.style.marginBottom = "0";
+  } else {
+    subtitleText.style.marginTop = "0";
+    subtitleText.style.marginBottom = "1.2em";
+  }
+}
+
+function applySubtitleAppearancePair(windowEl, textEl, settings) {
+  const resolved = getLiveSubtitleCustomizerSettings(settings);
+  applySubtitleContainerStyles(windowEl, resolved);
+  applySubtitleTextStyles(textEl, resolved);
+}
+
+function applyOverlayStyles(settings) {
   const containers = document.querySelectorAll(".videoSubtitles");
   containers.forEach((container) => {
-    if (!(container instanceof HTMLElement)) return;
-
-    container.style.width = "100%";
-    container.style.left = "0";
-    container.style.right = "0";
-    container.style.pointerEvents = "none";
-
-    if (settings.position === "top") {
-      container.style.top = "0";
-      container.style.bottom = "";
-      container.style.transform = "";
-    } else if (settings.position === "center") {
-      container.style.top = "50%";
-      container.style.bottom = "";
-      container.style.transform = "translateY(-50%)";
-    } else {
-      container.style.top = "";
-      container.style.bottom = "0";
-      container.style.transform = "";
-    }
+    applySubtitleContainerStyles(container, settings);
   });
 
   const subtitles = document.querySelectorAll(".videoSubtitlesInner, .videoSecondarySubtitlesInner");
   subtitles.forEach((subtitleText) => {
-    if (!(subtitleText instanceof HTMLElement)) return;
-    subtitleText.style.color = textColor;
-    subtitleText.style.fontSize = `${settings.sizePercent}%`;
-    subtitleText.style.fontFamily = fontStack;
-    subtitleText.style.textShadow = textShadow;
-    subtitleText.style.backgroundColor = textBackground;
-    subtitleText.style.padding = settings.backgroundEnabled ? SUBTITLE_BACKGROUND_PADDING : "0";
-    subtitleText.style.borderRadius = settings.backgroundEnabled ? backgroundRadius : "0";
-    subtitleText.style.display = settings.backgroundEnabled ? "inline-block" : "";
-    subtitleText.style.lineHeight = "1.3";
-    subtitleText.style.textAlign = "center";
-
-    if (settings.position === "top") {
-      subtitleText.style.marginTop = "1.2em";
-      subtitleText.style.marginBottom = "0";
-    } else if (settings.position === "center") {
-      subtitleText.style.marginTop = "0";
-      subtitleText.style.marginBottom = "0";
-    } else {
-      subtitleText.style.marginTop = "0";
-      subtitleText.style.marginBottom = "1.2em";
-    }
+    applySubtitleTextStyles(subtitleText, settings);
   });
+}
+
+function patchPlayerSubtitleAppearance(player, settings = null) {
+  if (!player || typeof player !== "object") return false;
+  if (patchedSubtitleAppearancePlayers.has(player)) return true;
+  if (typeof player.setSubtitleAppearance !== "function") return false;
+
+  const original = player.setSubtitleAppearance;
+  if (typeof original !== "function") return false;
+
+  const wrapped = function patchedSetSubtitleAppearance(windowEl, textEl, ...args) {
+    let result;
+    try {
+      result = original.call(this, windowEl, textEl, ...args);
+    } finally {
+      try {
+        applySubtitleAppearancePair(windowEl, textEl, settings);
+      } catch {}
+    }
+    return result;
+  };
+
+  try {
+    player.setSubtitleAppearance = wrapped;
+    patchedSubtitleAppearancePlayers.add(player);
+    patchedSubtitleAppearanceMeta.set(player, { original, wrapped });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function unpatchAllPlayerSubtitleAppearance() {
+  patchedSubtitleAppearancePlayers.forEach((player) => {
+    const meta = patchedSubtitleAppearanceMeta.get(player);
+    if (!meta) return;
+    try {
+      if (player.setSubtitleAppearance === meta.wrapped) {
+        player.setSubtitleAppearance = meta.original;
+      }
+    } catch {}
+    patchedSubtitleAppearanceMeta.delete(player);
+  });
+  patchedSubtitleAppearancePlayers.clear();
 }
 
 function getComplexSubtitleScale(sizePercent) {
@@ -1368,6 +1452,12 @@ function tryRefreshPlayerAppearance(settings) {
   let playerApplySuccess = 0;
   let nativeUiApplied = false;
 
+  players.forEach((player) => {
+    try {
+      patchPlayerSubtitleAppearance(player, settings);
+    } catch {}
+  });
+
   const readSubtitleOffset = (target, playerArg = null) => {
     if (!target || typeof target !== "object") return null;
 
@@ -1652,7 +1742,7 @@ function createDialog(settings, onUpdate, onReset, onClosed) {
       <div class="formDialog">
         <div class="formDialogHeader">
           <button type="button" is="paper-icon-button-light" class="btnCancel autoSize" title="${escapeAttr(backLabel)}">
-            <span class="material-icons arrow_back" aria-hidden="true"></span>
+            ${faIconHtml("arrowLeft", "jms-subtitle-icon")}
           </button>
           <h3 class="formDialogHeaderTitle">${escapeAttr(L("subtitleCustomizerDialogTitle", "Altyazı Ayarları"))}</h3>
         </div>
@@ -2143,6 +2233,12 @@ export function initSubtitleCustomizer() {
   };
 
   const applyNow = () => {
+    try {
+      window.__jmsSubtitleCustomizerState = {
+        settings: { ...settings }
+      };
+    } catch {}
+
     const hasAssSubtitleRenderer = collectComplexSubtitleNodes().assNodes.length > 0;
     const serialized = JSON.stringify(settings);
     if (serialized !== lastSaved || hasAssSubtitleRenderer !== lastComplexSubtitleRendererState) {
@@ -2271,7 +2367,7 @@ export function initSubtitleCustomizer() {
         btn.setAttribute("is", subtitleBtn?.getAttribute("is") || "paper-icon-button-light");
         btn.setAttribute("aria-label", L("subtitleCustomizerOpenButton", "Altyazı ayarları"));
         btn.title = L("subtitleCustomizerOpenButton", "Altyazı ayarları");
-        btn.innerHTML = `<span class="xlargePaperIconButton material-icons tune" aria-hidden="true"></span>`;
+        btn.innerHTML = faIconHtml("sliders", "xlargePaperIconButton jms-subtitle-icon");
         btn.addEventListener("click", openDialog);
 
         if (subtitleBtn?.parentElement === bar) {
@@ -2337,6 +2433,8 @@ export function initSubtitleCustomizer() {
     } catch {}
     closeDialog = null;
     setSubtitleDialogOpenState(false);
+    try { delete window.__jmsSubtitleCustomizerState; } catch {}
+    unpatchAllPlayerSubtitleAppearance();
 
     document.removeEventListener("play", passiveApply, true);
     document.removeEventListener("loadedmetadata", passiveApply, true);

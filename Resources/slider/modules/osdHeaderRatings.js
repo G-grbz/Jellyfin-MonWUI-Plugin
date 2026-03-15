@@ -1,5 +1,6 @@
 import { getSessionInfo, getAuthHeader } from "./api.js";
 import { getConfig } from "./config.js";
+import { getTomatoIconHtml } from "./customIcons.js";
 
 const HOST_ID = "jms-osd-header-ratings-v4";
 const SESSION_POLL_INTERVAL_MS = 10_000;
@@ -182,8 +183,7 @@ function buildTomatoHtml(criticRating) {
 
   return `
     <span class="jms-tomato-container" data-jms-rating="tomato" style="opacity:0; transform:scale(0.9); animation:jmsRatingFadeIn 0.2s ease-out forwards;">
-      <i class="fa-duotone fa-solid fa-tomato fa-lg"
-         style="--fa-primary-color:#01902e; --fa-secondary-color:#f93208; --fa-secondary-opacity:1;"></i>
+      ${getTomatoIconHtml({ size: "1.1em" })}
       <span class="jms-tomato-value">${Math.round(n)}</span>
     </span>
   `.trim();
@@ -196,7 +196,7 @@ function buildOfficialHtml(officialRating) {
   if (!v) return "";
   return `
     <span class="jms-official-container" data-jms-rating="official" style="opacity:0; transform:scale(0.9); animation:jmsRatingFadeIn 0.2s ease-out forwards;">
-      <i class="fa-solid fa-family fa-lg"></i>
+      <i class="fa-solid fa-user-group fa-lg"></i>
       <span class="jms-official-value">${v}</span>
     </span>
   `.trim();
@@ -318,13 +318,6 @@ function applyModernStyles(host) {
     value.style.color = "#d8e6ff";
   });
 
-  host.querySelectorAll('[data-jms-rating="tomato"] i.fa-tomato').forEach((icon) => {
-    if (!(icon instanceof HTMLElement)) return;
-
-    Object.assign(icon.style, {
-      filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.55))"
-    });
-  });
 }
 
 function addAnimationStyles() {

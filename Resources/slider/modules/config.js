@@ -406,6 +406,9 @@ export function getConfig() {
     placeDirectorRowsAtBottom: localStorage.getItem('placeDirectorRowsAtBottom') !== 'false',
     directorRowsUseTopGenres: localStorage.getItem('directorRowsUseTopGenres') !== 'false',
 
+    enableCollectionIndexerAutoStart: localStorage.getItem('enableCollectionIndexerAutoStart') !== 'false',
+    collectionIndexerAutoStartDelayMs: parseInt(localStorage.getItem('collectionIndexerAutoStartDelayMs'), 10) || 75_000,
+
     enableRecentRows: (localStorage.getItem('enableRecentRows') || 'true') !== 'false',
     showRecentRowsHeroCards: (localStorage.getItem('showRecentRowsHeroCards') || 'true') !== 'false',
 

@@ -8,6 +8,7 @@ import { setupScroller } from "./personalRecommendations.js";
 import { openDetailsModal } from "./detailsModal.js";
 import { openDirRowsDB, makeScope, upsertItemsBatchIdle, getMeta, setMeta, getItemsByIds, } from "./recentRowsDb.js";
 import { withServer, withServerSrcset } from "./jfUrl.js";
+import { faIconHtml } from "./faIcons.js";
 
 const config = getConfig();
 const labels = getLanguageLabels?.() || {};
@@ -168,49 +169,54 @@ function getRecentRowsCardTypeBadge(itemType) {
   const ll = config.languageLabels || {};
   switch (itemType) {
     case "Photo":
-      return { label: ll.photo || labels.photo || "Fotoğraf", icon: "photo" };
+      return { label: ll.photo || labels.photo || "Fotoğraf", icon: "image" };
     case "PhotoAlbum":
-      return { label: ll.photoAlbum || labels.photoAlbum || "Albüm", icon: "photo" };
+      return { label: ll.photoAlbum || labels.photoAlbum || "Albüm", icon: "images" };
     case "Video":
-      return { label: ll.video || labels.video || "Video", icon: "videocam" };
+      return { label: ll.video || labels.video || "Video", icon: "video" };
     case "Folder":
       return { label: ll.folder || labels.folder || "Klasör", icon: "folder" };
     case "Episode":
       return { label: ll.episode || labels.episode || "Bölüm", icon: "tv" };
     case "Season":
-      return { label: ll.season || labels.season || "Sezon", icon: "collections" };
+      return { label: ll.season || labels.season || "Sezon", icon: "layerGroup" };
     case "Series":
-      return { label: ll.dizi || labels.dizi || "Dizi", icon: "live_tv" };
+      return { label: ll.dizi || labels.dizi || "Dizi", icon: "tv" };
     case "MusicAlbum":
-      return { label: ll.album || labels.album || "Albüm", icon: "library_music" };
+      return { label: ll.album || labels.album || "Albüm", icon: "compactDisc" };
     case "Audio":
-      return { label: ll.track || labels.track || "Parça", icon: "library_music" };
+      return { label: ll.track || labels.track || "Parça", icon: "music" };
     case "BoxSet":
       return {
         label: ll.collectionTitle || ll.boxset || labels.collectionTitle || labels.boxset || "Collection",
-        icon: "collections"
+        icon: "layerGroup"
       };
     default:
-      return { label: ll.film || labels.film || "Film", icon: "movie" };
+      return { label: ll.film || labels.film || "Film", icon: "film" };
   }
 }
 
- function buildPosterUrl(item, height = 540, quality = 72, { omitTag = false } = {}) {
+function shouldPreferTaglessImages(item) {
+  return item?.__preferTaglessImages === true;
+}
+
+function buildPosterUrl(item, height = 540, quality = 72, { omitTag = false } = {}) {
   if (!item?.Id) return null;
   const tag = item?.ImageTags?.Primary || item?.PrimaryImageTag || null;
-  if (!tag && !omitTag) return null;
+  if (!tag) return null;
+  const skipTag = omitTag || shouldPreferTaglessImages(item);
 
   const base = `/Items/${item.Id}/Images/Primary`;
   const parts = [];
-  if (tag && !omitTag) parts.push(`tag=${encodeURIComponent(tag)}`);
+  if (!skipTag) parts.push(`tag=${encodeURIComponent(tag)}`);
   parts.push(`maxHeight=${height}`);
   parts.push(`quality=${quality}`);
   parts.push(`EnableImageEnhancers=false`);
   const qs = `?${parts.join("&")}`;
   const path = base + qs;
 
-   return withServer(path);
- }
+  return withServer(path);
+}
 
 function buildPosterUrlHQ(item){ return buildPosterUrl(item, 540, 72); }
 
@@ -246,6 +252,15 @@ function toNoTagSrcset(srcset) {
     .join(", ");
 }
 
+function promoteTaglessImageData(data) {
+  if (!data || data.__taglessPromoted) return data;
+  if (data.lqSrcNoTag && data.lqSrcNoTag !== data.lqSrc) data.lqSrc = data.lqSrcNoTag;
+  if (data.hqSrcNoTag && data.hqSrcNoTag !== data.hqSrc) data.hqSrc = data.hqSrcNoTag;
+  if (data.hqSrcsetNoTag && data.hqSrcsetNoTag !== data.hqSrcset) data.hqSrcset = data.hqSrcsetNoTag;
+  data.__taglessPromoted = true;
+  return data;
+}
+
 function markImageSettled(img, src) {
   if (!img) return;
   try { img.removeAttribute("srcset"); } catch {}
@@ -269,11 +284,15 @@ function buildLogoUrl(item, width = 220, quality = 80) {
 
   if (!item?.Id) return null;
   if (!tag) return null;
+  const omitTag = shouldPreferTaglessImages(item);
 
   const base = `/Items/${item.Id}/Images/Logo`;
-  const qs =
-    (tag ? `?tag=${encodeURIComponent(tag)}` : `?`) +
-    `&maxWidth=${width}&quality=${quality}&EnableImageEnhancers=false`;
+  const parts = [];
+  if (!omitTag) parts.push(`tag=${encodeURIComponent(tag)}`);
+  parts.push(`maxWidth=${width}`);
+  parts.push(`quality=${quality}`);
+  parts.push(`EnableImageEnhancers=false`);
+  const qs = `?${parts.join("&")}`;
   const path = base + qs;
 
   return withServer(path);
@@ -289,10 +308,14 @@ function buildBackdropUrl(item, width = 1920, quality = 80) {
 
   if (!item?.Id) return null;
   if (!tag) return null;
+  const omitTag = shouldPreferTaglessImages(item);
   const base = `/Items/${item.Id}/Images/Backdrop`;
-  const qs =
-    (tag ? `?tag=${encodeURIComponent(tag)}` : `?`) +
-    `&maxWidth=${width}&quality=${quality}&EnableImageEnhancers=false`;
+  const parts = [];
+  if (!omitTag) parts.push(`tag=${encodeURIComponent(tag)}`);
+  parts.push(`maxWidth=${width}`);
+  parts.push(`quality=${quality}`);
+  parts.push(`EnableImageEnhancers=false`);
+  const qs = `?${parts.join("&")}`;
   const path = base + qs;
 
   return withServer(path);
@@ -347,14 +370,17 @@ function buildPosterSrcSet(item) {
   if (!item?.Id) return "";
   const tag0 = item?.ImageTags?.Primary || item?.PrimaryImageTag || null;
   if (!tag0) return "";
+  const omitTag = shouldPreferTaglessImages(item);
 
   const raw = hs
     .map(h => {
-      const tag = tag0;
       const base = `/Items/${item.Id}/Images/Primary`;
-      const qs =
-        (tag ? `?tag=${encodeURIComponent(tag)}` : `?`) +
-        `&maxHeight=${h}&quality=${q}&EnableImageEnhancers=false`;
+      const parts = [];
+      if (!omitTag) parts.push(`tag=${encodeURIComponent(tag0)}`);
+      parts.push(`maxHeight=${h}`);
+      parts.push(`quality=${q}`);
+      parts.push(`EnableImageEnhancers=false`);
+      const qs = `?${parts.join("&")}`;
       const path = base + qs;
       return `${path} ${Math.round(h * ar)}w`;
     })
@@ -446,11 +472,12 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
   if (img.__phase === "hi") {
     if (!st.hiNoTagTried && data.hqSrcNoTag && data.hqSrcNoTag !== data.hqSrc) {
       st.hiNoTagTried = true;
+      promoteTaglessImageData(data);
       img.__phase = "hi";
       img.__hiRequested = true;
-      img.src = withCacheBust(data.hqSrcNoTag);
+      img.src = withCacheBust(data.hqSrc);
       requestIdleCallback(() => {
-        if (img.__hiRequested && data.hqSrcsetNoTag) img.srcset = data.hqSrcsetNoTag;
+        if (img.__hiRequested && data.hqSrcset) img.srcset = data.hqSrcset;
       });
       return;
     }
@@ -468,8 +495,9 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
   } else {
     if (!st.lqNoTagTried && data.lqSrcNoTag && data.lqSrcNoTag !== data.lqSrc) {
       st.lqNoTagTried = true;
+      promoteTaglessImageData(data);
       img.__phase = "lq";
-      img.src = withCacheBust(data.lqSrcNoTag);
+      img.src = withCacheBust(data.lqSrc);
       return;
     }
 
@@ -1050,7 +1078,7 @@ function createRecommendationCard(item, serverId, { aboveFold=false, showProgres
           <div class="prc-top-badges">
             ${community}
             <div class="prc-type-badge">
-              <span class="prc-type-icon material-icons">${typeIcon}</span>
+              ${faIconHtml(typeIcon, "prc-type-icon")}
               ${typeLabel}
             </div>
           </div>
@@ -1733,7 +1761,7 @@ function buildSectionSkeleton({ titleText, badgeType, onSeeAll }) {
       <div class="dir-row-see-all"
           aria-label="${escapeHtml(seeAllText)}"
           title="${escapeHtml(seeAllText)}">
-        <span class="material-icons">keyboard_arrow_right</span>
+        ${faIconHtml("chevronRight")}
       </div>
       <span class="dir-row-see-all-tip">${escapeHtml(seeAllText)}</span>
     </h2>

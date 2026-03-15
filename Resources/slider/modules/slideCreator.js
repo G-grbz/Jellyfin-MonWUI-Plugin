@@ -5,6 +5,7 @@ import { getLanguageLabels, getDefaultLanguage } from "../language/index.js";
 import { createSlidesContainer, createHorizontalGradientOverlay, createLogoContainer, createStatusContainer, createActorSlider, createInfoContainer, createDirectorContainer, createRatingContainer, createLanguageContainer, createMetaContainer, createMainContentContainer, createPlotContainer, createTitleContainer } from "./containerUtils.js";
 import { createButtons, createProviderContainer } from './buttons.js';
 import { withServer, withServerSrcset } from "./jfUrl.js";
+import { createTomatoIconElement } from "./customIcons.js";
 
 const S = (u) => withServer(u);
 const config = getConfig();
@@ -76,18 +77,6 @@ function bgFlushHydrationFrame() {
       transition: none !important;
       animation: none !important;
     }
-    #slides-container {
-      will-change: scroll-position;
-      overscroll-behavior: contain;
-      backface-visibility: hidden;
-      touch-action: pan-y pinch-zoom;
-    }
-
-    #slides-container .slide {
-      content-visibility: auto;
-      contain: content;
-      contain-intrinsic-size: 720px 405px;
-    }
   `;
   document.head.appendChild(st);
 })();
@@ -101,6 +90,45 @@ const __bgIO = new IntersectionObserver((entries) => {
   }
 }, { rootMargin: BG_IO_ROOT_MARGIN });
 
+function toNoTagUrl(url) {
+  if (!url) return "";
+  const s = String(url);
+  try {
+    const u = new URL(s, window.location?.origin || "http://localhost");
+    u.searchParams.delete("tag");
+    return u.toString();
+  } catch {
+    const [base, q = ""] = s.split("?");
+    if (!q) return s;
+    const rest = q.split("&").filter(Boolean).filter((p) => !/^tag=/i.test(p));
+    return rest.length ? `${base}?${rest.join("&")}` : base;
+  }
+}
+
+function toNoTagSrcset(srcset) {
+  if (!srcset || typeof srcset !== "string") return "";
+  return srcset
+    .split(",")
+    .map((part) => {
+      const p = part.trim();
+      if (!p) return "";
+      const m = p.match(/^(\S+)(\s+.+)?$/);
+      if (!m) return p;
+      return `${toNoTagUrl(m[1])}${m[2] || ""}`;
+    })
+    .filter(Boolean)
+    .join(", ");
+}
+
+function promoteTaglessBackdropData(data) {
+  if (!data || data.__taglessPromoted) return data;
+  if (data.lqSrcNoTag && data.lqSrcNoTag !== data.lqSrc) data.lqSrc = data.lqSrcNoTag;
+  if (data.hqSrcNoTag && data.hqSrcNoTag !== data.hqSrc) data.hqSrc = data.hqSrcNoTag;
+  if (data.hqSrcsetNoTag && data.hqSrcsetNoTag !== data.hqSrcset) data.hqSrcset = data.hqSrcsetNoTag;
+  data.__taglessPromoted = true;
+  return data;
+}
+
 function isPeakBackdropEligible(img) {
   if (!img?.__peakManaged) return true;
   const slide = img.closest?.('.slide');
@@ -110,7 +138,10 @@ function isPeakBackdropEligible(img) {
 
 function hydrateBackdrop(img, { lqSrc, hqSrc, hqSrcset = '', fallback = '', eager = false, onHiLoaded }) {
   const fb = fallback || lqSrc || '';
-  img.__bgData = { lqSrc, hqSrc, hqSrcset, fallback: fb };
+  const lqSrcNoTag = toNoTagUrl(lqSrc);
+  const hqSrcNoTag = toNoTagUrl(hqSrc);
+  const hqSrcsetNoTag = toNoTagSrcset(hqSrcset);
+  img.__bgData = { lqSrc, hqSrc, hqSrcset, lqSrcNoTag, hqSrcNoTag, hqSrcsetNoTag, fallback: fb };
   img.__phase = 'lq';
   img.__hiRequested = false;
   img.__peakHiTimer = 0;
@@ -179,14 +210,35 @@ function hydrateBackdrop(img, { lqSrc, hqSrc, hqSrcset = '', fallback = '', eage
   }
 
   const onError = () => {
+    const data = img.__bgData || {};
     if (img.__phase === 'hi') {
+      if (!data.__taglessPromoted && data.hqSrcNoTag && data.hqSrcNoTag !== data.hqSrc) {
+        promoteTaglessBackdropData(data);
+        try { img.removeAttribute('srcset'); } catch {}
+        if (data.hqSrcset) img.srcset = data.hqSrcset;
+        if (data.hqSrc) img.src = data.hqSrc;
+        img.__hiRequested = true;
+        return;
+      }
+      if (!data.__taglessPromoted && data.lqSrcNoTag && data.lqSrcNoTag !== data.lqSrc) {
+        promoteTaglessBackdropData(data);
+      }
       try { img.removeAttribute('srcset'); } catch {}
-      if (lqSrc) img.src = lqSrc; else if (fb) img.src = fb;
+      if (data.lqSrc) img.src = data.lqSrc; else if (fb) img.src = fb;
       img.classList.add('is-lqip');
       img.classList.remove('is-hi-pending');
       img.__phase = 'lq';
       img.__hiRequested = false;
       img.__fetchPriorityTarget = '';
+    } else {
+      if (!data.__taglessPromoted && data.lqSrcNoTag && data.lqSrcNoTag !== data.lqSrc) {
+        promoteTaglessBackdropData(data);
+        if (data.lqSrc) {
+          img.src = data.lqSrc;
+          return;
+        }
+      }
+      if (fb) img.src = fb;
     }
   };
   const onLoad = () => {
@@ -438,6 +490,7 @@ async function createSlide(item, options = {}) {
   if (deferPeakReveal && config.peakSlider) {
     slide.classList.add("peak-batch-pending");
   }
+  slide.dataset.backdropReady = "0";
   slide.style.position = "absolute";
   slide.style.display = "none";
   slide.dataset.detailUrl = `/web/#/details?id=${itemId}`;
@@ -454,6 +507,47 @@ async function createSlide(item, options = {}) {
   if (typeof RunTimeTicks === "number") {
     slide.dataset.runtimeticks = RunTimeTicks;
   }
+
+  let backdropSyncDone = false;
+  let backdropSyncReason = "0";
+  let resolveBackdropSync = null;
+  const backdropSyncPromise = new Promise((resolve) => {
+    resolveBackdropSync = resolve;
+  });
+  const finishBackdropSync = (reason = "loaded") => {
+    if (backdropSyncDone) return backdropSyncReason;
+    backdropSyncDone = true;
+    backdropSyncReason = reason;
+    slide.dataset.backdropReady = reason === "loaded" ? "1" : String(reason || "1");
+    slide.classList.add("backdrop-ready");
+    try { resolveBackdropSync?.(backdropSyncReason); } catch {}
+    return backdropSyncReason;
+  };
+
+  slide.__waitForBackdropReady = ({ timeoutMs = LOW_POWER_PEAK ? 2400 : 1600 } = {}) => {
+    if (backdropSyncDone) return Promise.resolve(backdropSyncReason);
+    const safeTimeout = Math.max(350, Number(timeoutMs) || 0);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        resolve(finishBackdropSync("timeout"));
+      }, safeTimeout);
+      backdropSyncPromise.then((reason) => {
+        clearTimeout(timer);
+        resolve(reason);
+      });
+    });
+  };
+
+  slide.__releasePeakReveal = ({ timeoutMs = LOW_POWER_PEAK ? 2600 : 1800 } = {}) => {
+    if (!config.peakSlider || !slide.classList.contains("peak-batch-pending")) return;
+    if (slide.__peakRevealArmed) return;
+    slide.__peakRevealArmed = true;
+    slide.__waitForBackdropReady({ timeoutMs }).finally(() => {
+      slide.__peakRevealArmed = false;
+      if (!slide.isConnected) return;
+      slide.classList.remove("peak-batch-pending");
+    });
+  };
 
   slide.dataset.backdropUrl = autoBackdropUrl;
   slide.dataset.landscapeUrl = landscapeUrl;
@@ -511,7 +605,15 @@ async function createSlide(item, options = {}) {
     try { backdropImg.setAttribute('fetchpriority','high'); } catch {}
     try { backdropImg.loading = 'eager'; } catch {}
   };
+  backdropImg.addEventListener('load', () => {
+    finishBackdropSync("loaded");
+  }, { passive: true, signal });
   backdropImg.addEventListener('load', pinActiveIfNeeded, { once:true, passive:true, signal });
+  requestAnimationFrame(() => {
+    if (backdropImg.complete && backdropImg.naturalWidth > 0) {
+      finishBackdropSync("loaded");
+    }
+  });
 
   const warmOnHover = () => { warmImageOnce(finalBackdropForWarm).catch(() => {}); };
   if (!LOW_POWER_PEAK) {
@@ -567,7 +669,11 @@ async function createSlide(item, options = {}) {
   slide.__backdropImg = backdropImg;
 
   const horizontalGradientOverlay = createHorizontalGradientOverlay();
-  slide.append(backdropImg, horizontalGradientOverlay);
+  const backdropContainer = document.createElement('div');
+  backdropContainer.className = 'bckdrp-cntnr';
+  backdropContainer.append(backdropImg, horizontalGradientOverlay);
+  slide.__backdropContainer = backdropContainer;
+  slide.append(backdropContainer);
 
   if (!slide.__trailerInit) {
    slide.__trailerInit = true;
@@ -954,11 +1060,7 @@ function openTrailerModal(trailerUrl, trailerName, itemName = '', itemType = '',
     criticRatingElement.style.alignItems = "center";
     criticRatingElement.style.gap = "5px";
 
-    const tomatoIcon = document.createElement("i");
-    tomatoIcon.className = "fa-duotone fa-tomato";
-    tomatoIcon.style.setProperty("--fa-primary-color", "#01902e");
-    tomatoIcon.style.setProperty("--fa-secondary-color", "#f93208");
-    tomatoIcon.style.setProperty("--fa-secondary-opacity", "1");
+    const tomatoIcon = createTomatoIconElement();
 
     const ratingValue = document.createElement("span");
     ratingValue.textContent = `${CriticRating}%`;

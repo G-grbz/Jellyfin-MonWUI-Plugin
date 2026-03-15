@@ -131,7 +131,7 @@ export function createModernPlayerUI() {
       onClick: toggleTheme
     },
     { className: "playlist-btn", iconClass: "fas fa-list", title: config.languageLabels.playlist, onClick: togglePlaylistModal },
-    { className: "jplaylist-btn", iconClass: "fas fa-list-music", title: config.languageLabels.jellyfinPlaylists || "Jellyfin Oynatma Listesi", onClick: showJellyfinPlaylistsModal },
+    { className: "jplaylist-btn", iconClass: "fa-solid fa-list-ol", title: config.languageLabels.jellyfinPlaylists || "Jellyfin Oynatma Listesi", onClick: showJellyfinPlaylistsModal },
     {
       className: "settingsLink",
       iconClass: "fas fa-cog",
@@ -245,11 +245,11 @@ export function createModernPlayerUI() {
 
   trackInfo.append(titleContainer, artist);
 
-  const repeatBtn = createButton({ iconClass: "fas fa-repeat", title: config.languageLabels.repeatModOff, onClick: toggleRepeatMode });
+  const repeatBtn = createButton({ className: "repeat-btn", iconClass: "fas fa-repeat", title: config.languageLabels.repeatModOff, onClick: toggleRepeatMode });
   const shuffleBtn = createButton({ iconClass: "fas fa-random", title: `${config.languageLabels.shuffle}: ${config.languageLabels.shuffleOff}`, onClick: toggleShuffle });
   const removeOnPlayBtn = createButton({
     className: "remove-on-play-btn",
-    iconClass: "fas fa-trash-list",
+    iconClass: "fa-solid fa-trash",
     title: musicPlayerState.userSettings.removeOnPlay
       ? config.languageLabels.removeOnPlayOn || "Çaldıktan sonra sil: Açık"
       : config.languageLabels.removeOnPlayOff || "Çaldıktan sonra sil: Kapalı",
@@ -257,7 +257,7 @@ export function createModernPlayerUI() {
   });
 
   if (musicPlayerState.userSettings.removeOnPlay) {
-    removeOnPlayBtn.innerHTML = '<i class="fas fa-trash-list"></i>';
+    removeOnPlayBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
   }
   const refreshBtn = createButton({ iconClass: "fas fa-sync-alt", title: config.languageLabels.refreshPlaylist, onClick: refreshPlaylist });
 

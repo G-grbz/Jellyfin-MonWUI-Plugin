@@ -1,10 +1,11 @@
 import { initPlayer, togglePlayerVisibility, isPlayerInitialized } from "./utils/mainIndex.js";
 import { refreshPlaylist, playTrackById, playAlbumById } from "./core/playlist.js";
 import { updateProgress, updateDuration } from "./player/progress.js";
-import { syncDbIncremental, syncDbFullscan, startGlobalDbFullscanScheduler } from "./ui/artistModal.js";
+import { syncDbIncremental, syncDbFullscan } from "./ui/artistModal.js";
 import { loadJSMediaTags } from "./lyrics/id3Reader.js";
 import { getConfig } from "../config.js";
 import { initializeControlStates } from "./ui/controls.js";
+import { faIconHtml } from "../faIcons.js";
 
 const config = getConfig();
 
@@ -46,7 +47,6 @@ function ensurePointerStylesInjected() {
       text-shadow: rgb(255 255 255) 0 0 2px !important;
       cursor: pointer !important;
       border: none !important;
-      transform: scale(1.2) !important;
     }
   `;
   document.head.appendChild(style);
@@ -116,7 +116,7 @@ function createPlayerButton() {
     btn.setAttribute("is", "paper-icon-button-light");
     btn.setAttribute("aria-label", "GMMP Aç/Kapa");
     btn.title = "GMMP";
-    btn.innerHTML = `<i class="material-icons gmmp" aria-hidden="true">play_arrow</i>`;
+    btn.innerHTML = faIconHtml("play", "gmmp");
     return btn;
   }
   return null;
@@ -140,8 +140,6 @@ async function onToggleClick() {
       queueMicrotask(() => {
       const run = async () => {
         try {
-          startGlobalDbFullscanScheduler?.();
-
           const dbIsEmpty = async () => {
             try {
               const t = await window.__musicDB?.getAllTracks?.();

@@ -285,7 +285,7 @@ export function createArtistModal() {
 
   const fetchAllMusicBtn = document.createElement("div");
   fetchAllMusicBtn.className = "modal-fetch-all-music-btn";
-  fetchAllMusicBtn.innerHTML = '<i class="fa-solid fa-music-magnifying-glass"></i>';
+  fetchAllMusicBtn.innerHTML = '<i class="fa-solid fa-rectangle-list"></i>';
   fetchAllMusicBtn.title = config.languageLabels.fetchAllMusic || "Tüm müzikleri getir";
   fetchAllMusicBtn.onclick = (e) => {
     try {
@@ -1694,7 +1694,7 @@ function setupHeaderActions(headerActions) {
   const playSelectedBtn = document.createElement("button");
   playSelectedBtn.className = "modal-play-selected-btn";
   playSelectedBtn.title = config.languageLabels.addToExisting;
-  playSelectedBtn.innerHTML = '<i class="fa-solid fa-plus-large"></i>';
+  playSelectedBtn.innerHTML = '<i class="fa-solid fa-plus"></i>';
   playSelectedBtn.disabled = selectedTrackIds.size === 0;
   playSelectedBtn.onclick = handlePlaySelected;
 

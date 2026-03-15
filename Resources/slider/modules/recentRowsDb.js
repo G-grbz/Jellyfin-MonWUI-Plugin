@@ -55,6 +55,7 @@ function normalizeCachedItem(rec) {
     People: rec.People || rec.people || [],
     UserData: userData,
     UserDataDto: userData,
+    __preferTaglessImages: true,
   };
 }
 

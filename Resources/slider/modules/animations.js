@@ -192,16 +192,34 @@ function onTransitionEndOnce(el, timeoutMs, cb) {
   return off;
 }
 
-function animateStep(el, styles, duration, easing) {
+function animateStep(el, styles, duration, easing, shouldContinue = null) {
+  if (shouldContinue && !shouldContinue()) return Promise.resolve(false);
   const props = Object.keys(styles).map(jsPropToCssProp);
   withTransition(el, duration, easing, props);
-  raf(el, () => setStyles(el, styles));
-  return new Promise(res => onTransitionEndOnce(el, duration, res));
+  raf(el, () => {
+    if (shouldContinue && !shouldContinue()) return;
+    setStyles(el, styles);
+  });
+  return new Promise(res => onTransitionEndOnce(el, duration, () => {
+    res(!shouldContinue || shouldContinue());
+  }));
 }
-async function animateSequence(el, steps, easing = 'cubic-bezier(0.33,1,0.68,1)') {
+async function animateSequence(el, steps, easing = 'cubic-bezier(0.33,1,0.68,1)', shouldContinue = null) {
   for (const { styles, duration } of steps) {
-    await animateStep(el, styles, duration, easing);
+    const ok = await animateStep(el, styles, duration, easing, shouldContinue);
+    if (ok === false || (shouldContinue && !shouldContinue())) return false;
   }
+  return true;
+}
+
+function afterAnimationDelay(el, timeoutMs, cb) {
+  const waitMs = Math.max(16, timeoutMs | 0);
+  const tid = setTimeout(() => {
+    __globalTimers.delete(tid);
+    cb?.();
+  }, waitMs);
+  trackTimer(el, tid);
+  return tid;
 }
 
 const __rafSubscribers = new Set();
@@ -287,6 +305,13 @@ export function applySlideAnimation(currentSlide, newSlide, direction) {
   const easing = 'cubic-bezier(0.33,1,0.68,1)';
   const type = config.slideTransitionType || 'fade';
   const same = currentSlide === newSlide;
+  let cleanupMode = 'transition';
+  let cleanupWaitMs = duration;
+
+  currentSlide.classList?.add?.('is-visible');
+  currentSlide.classList?.remove?.('is-hidden');
+  newSlide.classList?.add?.('is-visible');
+  newSlide.classList?.remove?.('is-hidden');
   newSlide.style.display = "block";
   newSlide.style.zIndex = "2";
   withTransition(newSlide, duration, easing);
@@ -350,40 +375,60 @@ export function applySlideAnimation(currentSlide, newSlide, direction) {
     }
 
     case 'slideTop': {
-  currentSlide.style.transform = "translate3d(0,0,0)";
-  currentSlide.style.opacity = "1";
-  startTransition(newSlide,
-    () => {
-      newSlide.style.transform = "translate3d(0,-100%,0)";
-      newSlide.style.opacity = "0";
-    },
-    () => {
-      newSlide.style.transform = "translate3d(0,0,0)";
-      newSlide.style.opacity = "1";
+      startTransition(currentSlide,
+        () => {
+          currentSlide.style.transform = "translate3d(0,0,0)";
+          currentSlide.style.opacity = "1";
+        },
+        () => {
+          if (currentSlide.__animToken !== animToken) return;
+          currentSlide.style.transform = "translate3d(0,100%,0)";
+          currentSlide.style.opacity = "0";
+        }
+      );
+      startTransition(newSlide,
+        () => {
+          newSlide.style.transform = "translate3d(0,-100%,0)";
+          newSlide.style.opacity = "0";
+        },
+        () => {
+          if (newSlide.__animToken !== animToken) return;
+          newSlide.style.transform = "translate3d(0,0,0)";
+          newSlide.style.opacity = "1";
+        }
+      );
+      break;
     }
-  );
-  break;
-}
 
     case 'slideBottom': {
-  currentSlide.style.transform = "translate3d(0,0,0)";
-  currentSlide.style.opacity = "1";
-  startTransition(newSlide,
-    () => {
-      newSlide.style.transform = "translate3d(0,100%,0)";
-      newSlide.style.opacity = "0";
-    },
-    () => {
-      newSlide.style.transform = "translate3d(0,0,0)";
-      newSlide.style.opacity = "1";
+      startTransition(currentSlide,
+        () => {
+          currentSlide.style.transform = "translate3d(0,0,0)";
+          currentSlide.style.opacity = "1";
+        },
+        () => {
+          if (currentSlide.__animToken !== animToken) return;
+          currentSlide.style.transform = "translate3d(0,-100%,0)";
+          currentSlide.style.opacity = "0";
+        }
+      );
+      startTransition(newSlide,
+        () => {
+          newSlide.style.transform = "translate3d(0,100%,0)";
+          newSlide.style.opacity = "0";
+        },
+        () => {
+          if (newSlide.__animToken !== animToken) return;
+          newSlide.style.transform = "translate3d(0,0,0)";
+          newSlide.style.opacity = "1";
+        }
+      );
+      break;
     }
-  );
-  break;
-}
 
     case 'rotateIn': {
-      currentSlide.style.transform = "rotate(0deg) scale(1)";
-      currentSlide.style.opacity = "1";
+      currentSlide.style.transform = "rotate(12deg) scale(1.08)";
+      currentSlide.style.opacity = "0";
       newSlide.style.transform = "rotate(-180deg) scale(0)";
       newSlide.style.opacity = "0";
       raf(newSlide, () => {
@@ -395,8 +440,8 @@ export function applySlideAnimation(currentSlide, newSlide, direction) {
     }
 
     case 'flipInX': {
-      currentSlide.style.transform = "perspective(400px) rotateX(0deg)";
-      currentSlide.style.opacity = "1";
+      currentSlide.style.transform = "perspective(400px) rotateX(-35deg) scale(0.96)";
+      currentSlide.style.opacity = "0";
       newSlide.style.transform = "perspective(400px) rotateX(90deg)";
       newSlide.style.opacity = "0";
       newSlide.style.backfaceVisibility = "hidden";
@@ -410,8 +455,8 @@ export function applySlideAnimation(currentSlide, newSlide, direction) {
     }
 
     case 'flipInY': {
-      currentSlide.style.transform = "perspective(400px) rotateY(0deg)";
-      currentSlide.style.opacity = "1";
+      currentSlide.style.transform = "perspective(400px) rotateY(35deg) scale(0.96)";
+      currentSlide.style.opacity = "0";
       newSlide.style.transform = "perspective(400px) rotateY(90deg)";
       newSlide.style.opacity = "0";
       newSlide.style.backfaceVisibility = "hidden";
@@ -427,13 +472,19 @@ export function applySlideAnimation(currentSlide, newSlide, direction) {
     case 'jelly': {
       const seg = (config.slideAnimationDuration && config.slideAnimationDuration > 0) ? duration : 600;
       const s = Math.max(40, Math.round(seg / 5));
+      const isCurrentAnimation = () => newSlide.__animToken === animToken && currentSlide.__animToken === animToken;
+      cleanupMode = 'timeout';
+      cleanupWaitMs = Math.max(duration, s * 4) + 48;
+      currentSlide.style.transform = "scale(1.03)";
+      currentSlide.style.opacity = "0";
       newSlide.style.transform = "scale(1,1)";
+      newSlide.style.opacity = "1";
       animateSequence(newSlide, [
         { styles: { transform: 'scale(0.9, 1.1)' }, duration: s },
         { styles: { transform: 'scale(1.1, 0.9)' }, duration: s },
         { styles: { transform: 'scale(0.95, 1.05)' }, duration: s },
         { styles: { transform: 'scale(1, 1)' }, duration: s },
-      ]);
+      ], easing, isCurrentAnimation);
       break;
     }
 
@@ -451,22 +502,32 @@ export function applySlideAnimation(currentSlide, newSlide, direction) {
     }
 
     case 'eye': {
-      const seg = 600;
+      const seg = Math.max(600, duration);
+      const isCurrentAnimation = () => newSlide.__animToken === animToken && currentSlide.__animToken === animToken;
+      cleanupMode = 'timeout';
+      cleanupWaitMs = seg + 64;
+      currentSlide.style.transform = "scale(1.05)";
+      currentSlide.style.opacity = "0";
+      newSlide.style.opacity = "1";
+      newSlide.style.transform = "scale(0.96) rotate(2deg)";
       animateSequence(newSlide, [
         { styles: { transform: 'scale(1) rotate(0deg)' }, duration: 1 },
         { styles: { transform: 'scale(1.1) rotate(-3deg)' }, duration: seg/2 },
         { styles: { transform: 'scale(1) rotate(0deg)' }, duration: seg/2 },
-      ]);
+      ], easing, isCurrentAnimation);
       break;
     }
 
     case 'glitch': {
+      const glitchFrames = 8;
+      cleanupMode = 'timeout';
+      cleanupWaitMs = duration + (glitchFrames * 18) + 64;
       currentSlide.style.filter = "blur(10px)";
       currentSlide.style.opacity = "0";
       newSlide.style.filter = "blur(10px)";
       newSlide.style.opacity = "0";
       newSlide.style.clipPath = "polygon(0 0,100% 0,100% 100%,0 100%)";
-      let frames = 8;
+      let frames = glitchFrames;
       const jitter = () => Math.floor(Math.random() * 100);
       const step = () => {
         if (!newSlide || frames-- <= 0) {
@@ -476,7 +537,7 @@ export function applySlideAnimation(currentSlide, newSlide, direction) {
           return;
         }
         newSlide.style.clipPath = `polygon(0 ${jitter()}%,100% ${jitter()}%,100% ${jitter()}%,0 ${jitter()}%)`;
-        requestAnimationFrame(step);
+        raf(newSlide, step);
       };
       raf(newSlide, step);
       break;
@@ -642,7 +703,11 @@ export function applySlideAnimation(currentSlide, newSlide, direction) {
     }
   }
 
-  onTransitionEndOnce(newSlide, duration, cleanupStyles);
+  if (cleanupMode === 'timeout') {
+    afterAnimationDelay(newSlide, cleanupWaitMs, cleanupStyles);
+  } else {
+    onTransitionEndOnce(newSlide, cleanupWaitMs, cleanupStyles);
+  }
 }
 
 export function applyDotPosterAnimation(dot, isActive) {

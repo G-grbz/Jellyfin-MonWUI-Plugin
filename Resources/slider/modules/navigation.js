@@ -30,6 +30,14 @@ let __peakLiteEnabled = false;
 let __peakStructureSyncTimer = 0;
 let __peakStructureSyncRaf = 0;
 
+function getPeakShiftDurationMs() {
+  return isLowPowerPeakRuntime() ? 220 : 320;
+}
+
+function getPeakShiftEasing() {
+  return 'cubic-bezier(.23,.78,.32,1)';
+}
+
 if (typeof document !== 'undefined' && (document.hidden || document.visibilityState === 'hidden')) {
   closeVideoModal();
 }
@@ -66,6 +74,67 @@ function ensureFlickerFixCSS() {
     .slide.peak-batch-pending {
       opacity: 0 !important;
       pointer-events: none !important;
+      visibility: hidden !important;
+    }
+    #slides-container.peak-shifting .slide {
+      transition:
+        transform var(--peak-shift-ms, 320ms) var(--peak-shift-ease, cubic-bezier(.23,.78,.32,1)),
+        opacity var(--peak-shift-opacity-ms, 220ms) ease-out !important;
+      will-change: transform, opacity !important;
+    }
+    #slides-container.peak-shifting .slide,
+    #slides-container.peak-shifting .slide.active {
+      box-shadow: none !important;
+    }
+    #slides-container.peak-shifting .slide .backdrop {
+      transition: opacity var(--peak-shift-opacity-ms, 220ms) ease-out !important;
+      will-change: opacity !important;
+    }
+    #slides-container.peak-shifting .slide .button-container,
+    #slides-container.peak-shifting .slide .button-container *,
+    #slides-container.peak-shifting .slide .director-container,
+    #slides-container.peak-shifting .slide .horizontal-gradient-overlay,
+    #slides-container.peak-shifting .slide .horizontal-gradient-overlay:before,
+    #slides-container.peak-shifting .slide .horizontal-gradient-overlay:after,
+    #slides-container.peak-shifting .slide .info-container,
+    #slides-container.peak-shifting .slide .language-container,
+    #slides-container.peak-shifting .slide .logo-container,
+    #slides-container.peak-shifting .slide .logo-container .logo-img,
+    #slides-container.peak-shifting .slide .main-button-container,
+    #slides-container.peak-shifting .slide .meta-container,
+    #slides-container.peak-shifting .slide .meta-container *,
+    #slides-container.peak-shifting .slide .plot-container,
+    #slides-container.peak-shifting .slide .plot-container *,
+    #slides-container.peak-shifting .slide .provider-container,
+    #slides-container.peak-shifting .slide .provider-container *,
+    #slides-container.peak-shifting .slide .slider-wrapper,
+    #slides-container.peak-shifting .slide .status-container,
+    #slides-container.peak-shifting .slide .status-container *,
+    #slides-container.peak-shifting .slide .title-container,
+    #slides-container.peak-shifting .slide .title-container * {
+      animation: none !important;
+      transition: none !important;
+      will-change: auto !important;
+    }
+    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) {
+      box-shadow: none !important;
+      outline: none !important;
+    }
+    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .button-container,
+    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .director-container,
+    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .info-container,
+    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .language-container,
+    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .logo-container,
+    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .main-button-container,
+    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .meta-container,
+    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .plot-container,
+    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .provider-container,
+    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .slider-wrapper,
+    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .status-container,
+    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .title-container {
+      opacity: 0 !important;
+      pointer-events: none !important;
+      transform: translateY(4px) !important;
       visibility: hidden !important;
     }
     #slides-container.peak-ready .slide.peak-snap-in,
@@ -544,11 +613,39 @@ function ensurePeakViewportStability() {
   __peakObserveMO.observe(document.documentElement, { childList: true, subtree: true });
 }
 
+function armPeakShiftLite(container) {
+  if (!container) return;
+  const duration = getPeakShiftDurationMs();
+  const opacityDuration = Math.max(180, Math.round(duration * 0.82));
+  container.style.setProperty('--peak-shift-ms', `${duration}ms`);
+  container.style.setProperty('--peak-shift-opacity-ms', `${opacityDuration}ms`);
+  container.style.setProperty('--peak-shift-ease', getPeakShiftEasing());
+  container.classList.add('peak-shifting');
+
+  if (container.__peakShiftTimer) {
+    clearTimeout(container.__peakShiftTimer);
+  }
+  container.__peakShiftTimer = setTimeout(() => {
+    container.__peakShiftTimer = 0;
+    if (!container.isConnected) return;
+    container.classList.remove('peak-shifting');
+  }, duration + 34);
+}
+
 function showSlide(el) {
   if (!el) return;
   el.classList.add('is-visible');
   el.classList.remove('is-hidden');
   if (el.style.display) el.style.removeProperty('display');
+}
+
+function releasePeakPending(slide) {
+  if (!slide) return;
+  if (typeof slide.__releasePeakReveal === 'function') {
+    slide.__releasePeakReveal();
+    return;
+  }
+  slide.classList.remove('peak-batch-pending');
 }
 
 function armPeakInitialReveal(container) {
@@ -872,7 +969,7 @@ export function createDotNavigation() {
             const remainingMinutes = Math.round((runtimeTicks - positionTicks) / 600000000);
             const text = document.createElement("span");
             text.className = "dot-duration-remaining";
-            text.innerHTML = `<i class="fa-regular fa-hourglass-half"></i> ${remainingMinutes} ${config.languageLabels.dakika} ${config.languageLabels.kaldi}`;
+            text.innerHTML = `<i class="fa-solid fa-hourglass-half"></i> ${remainingMinutes} ${config.languageLabels.dakika} ${config.languageLabels.kaldi}`;
 
             barWrapper.appendChild(bar);
             progressContainer.appendChild(barWrapper);
@@ -1278,9 +1375,12 @@ export function displaySlide(index) {
     slidesContainer.classList.add('peak-init');
     slidesContainer.scrollLeft = 0;
   }
+  if (isPeak && activeSlide && activeSlide !== currentSlide && slidesContainer?.classList?.contains('peak-ready')) {
+    armPeakShiftLite(slidesContainer);
+  }
 
   slides.forEach(s => {
-    if (s === currentSlide) {
+    if (s === currentSlide || s === activeSlide) {
       showSlide(s);
     } else if (!isPeak) {
       hideSlide(s, { soft: true });
@@ -1297,9 +1397,16 @@ export function displaySlide(index) {
       } else {
         cancelOngoingAnimations(slidesArr);
         showSlide(currentSlide);
-        currentSlide.style.opacity = "0";
-        currentSlide.style.willChange = "transform, opacity";
-        forceReflow(currentSlide);
+        const currentBackdrop =
+          currentSlide.__backdropImg ||
+          currentSlide.querySelector?.('img.backdrop') ||
+          currentSlide.querySelector?.('.backdrop') ||
+          null;
+        if (currentBackdrop) {
+          currentBackdrop.style.opacity = "0";
+          currentBackdrop.style.willChange = "transform, opacity";
+          forceReflow(currentBackdrop);
+        }
         requestAnimationFrame(() => {
           applySlideAnimation(activeSlide, currentSlide, direction);
         });
@@ -1349,7 +1456,7 @@ export function displaySlide(index) {
     }
 
     const directorContainer = currentSlide.querySelector(".director-container");
-    if (directorContainer) {
+    if (directorContainer && !isPeak) {
       showAndHideElementWithAnimation(directorContainer, {
         girisSure: config.girisSure,
         aktifSure: config.aktifSure,
@@ -1488,7 +1595,7 @@ export function primePeakFirstPaint(slides, activeIndex, slidesContainer, spanOr
     requestAnimationFrame(() => {
       arr.forEach((s) => {
         s.style.removeProperty('transition');
-        s.classList.remove('peak-batch-pending');
+        releasePeakPending(s);
       });
     });
     return;
@@ -1543,7 +1650,7 @@ export function primePeakFirstPaint(slides, activeIndex, slidesContainer, spanOr
       updatePeakClasses(slides, activeIndex, opts);
       arr.forEach((s) => {
         s.removeAttribute('data-prime-pos');
-        s.classList.remove('peak-batch-pending');
+        releasePeakPending(s);
       });
       armPeakInitialReveal(slidesContainer);
     });

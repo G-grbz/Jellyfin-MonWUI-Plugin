@@ -1717,7 +1717,7 @@ function kickBindRetries(schedule = [50,150,350,800,1500,2500,4000,6000,8000,120
     </div>
   </div>
   <div class="pause-status-bottom-right" id="pause-status-bottom-right" style="display:none;">
-    <span><i class="fa-jelly fa-regular fa-pause"></i> ${labels.paused || "Duraklatıldı"}</span>
+    <span><i class="fa-solid fa-pause"></i> ${labels.paused || "Duraklatıldı"}</span>
   </div>`;
     document.body.appendChild(overlay);
 

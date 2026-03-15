@@ -3,6 +3,7 @@ import { applyContainerStyles } from "./positionUtils.js";
 import { fetchItemDetails } from "./api.js";
 import { calculateMatchPercentage } from "./hoverTrailerModal.js";
 import { withServer } from "./jfUrl.js";
+import { getTomatoIconHtml } from "./customIcons.js";
 
 const config = getConfig();
 
@@ -60,8 +61,8 @@ export function createStatusContainer(itemType, config, UserData, ChildCount, Ru
     const watchedSpan = document.createElement("span");
     watchedSpan.className = "watched-status";
     let watchedText = UserData.Played
-      ? `<i class="fa-light fa-circle-check "></i> ${config.languageLabels.izlendi}`
-      : `<i class="fa-light fa-circle-xmark "></i> ${config.languageLabels.izlenmedi}`;
+      ? `<i class="fa-regular fa-circle-check"></i> ${config.languageLabels.izlendi}`
+      : `<i class="fa-regular fa-circle-xmark"></i> ${config.languageLabels.izlenmedi}`;
     if (UserData.Played && UserData.PlayCount > 0) {
       watchedText += ` (${UserData.PlayCount})`;
     }
@@ -100,7 +101,7 @@ export function createStatusContainer(itemType, config, UserData, ChildCount, Ru
     };
 
     if (Array.isArray(RunTimeTicks)) {
-      runtimeSpan.innerHTML = `<i class="fa-regular fa-hourglass-end "></i> ${
+      runtimeSpan.innerHTML = `<i class="fa-solid fa-hourglass-end"></i> ${
         RunTimeTicks.map(val => calcRuntime(val)).join(", ")
       }`;
     } else {
@@ -113,9 +114,9 @@ export function createStatusContainer(itemType, config, UserData, ChildCount, Ru
       const endHHMM = formatEndTimeLocalized(remainingTicks);
       const endTimeLabel = String(config?.languageLabels?.endTimeLabel || "").trim();
       runtimeSpan.innerHTML = `
-        <i class="fa-regular fa-hourglass-end "></i> ${calcRuntime(RunTimeTicks)}
+        <i class="fa-solid fa-hourglass-end"></i> ${calcRuntime(RunTimeTicks)}
         <span class="end-time">
-          <i class="fa-regular fa-clock"></i> ${endTimeLabel ? `${endTimeLabel} ` : ""}${endHHMM}
+          <i class="fa-solid fa-clock"></i> ${endTimeLabel ? `${endTimeLabel} ` : ""}${endHHMM}
         </span>
       `.trim();
     }
@@ -210,11 +211,11 @@ export async function createActorSlider(People, config, item) {
 
   const leftArrow = document.createElement("button");
   leftArrow.className = "slider-arrow left hidden";
-  leftArrow.innerHTML = `<i class="fa-light fa-left-to-line"></i>`;
+  leftArrow.innerHTML = `<i class="fa-solid fa-chevron-left"></i>`;
 
   const rightArrow = document.createElement("button");
   rightArrow.className = "slider-arrow right hidden";
-  rightArrow.innerHTML = `<i class="fa-light fa-right-to-line"></i>`;
+  rightArrow.innerHTML = `<i class="fa-solid fa-chevron-right"></i>`;
 
   sliderWrapper.appendChild(leftArrow);
   sliderWrapper.appendChild(actorContainer);
@@ -286,12 +287,12 @@ export function createInfoContainer({ config, Genres, ProductionYear, Production
       return matchedEntry ? matchedEntry[1] : genre;
     }).join(", ");
 
-    parts.push(`<span class="genres"><i class="fa-regular fa-masks-theater"></i> ${translated}</span>`);
+    parts.push(`<span class="genres"><i class="fa-solid fa-masks-theater"></i> ${translated}</span>`);
   }
 
   if (ProductionYear && config.showYearInfo) {
     const yearText = Array.isArray(ProductionYear) ? ProductionYear.join(", ") : ProductionYear;
-    parts.push(`<span class="yil"><i class="fa-regular fa-calendar"></i> ${yearText}</span>`);
+    parts.push(`<span class="yil"><i class="fa-solid fa-calendar"></i> ${yearText}</span>`);
   }
 
   if (ProductionLocations && config.showCountryInfo) {
@@ -324,7 +325,7 @@ export function createInfoContainer({ config, Genres, ProductionYear, Production
           return `${getFlagEmoji(info.code)} ${info.name}`;
         })();
 
-    parts.push(`<span class="ulke"><i class="fa-regular fa-location-dot"></i> ${countryText}</span>`);
+    parts.push(`<span class="ulke"><i class="fa-solid fa-location-dot"></i> ${countryText}</span>`);
   }
 
   container.innerHTML = parts.join(` <span class="info-sep">✧</span> `);
@@ -449,7 +450,7 @@ export async function createRatingContainer({
     if (config.showCriticRating && CriticRating) {
       const criticSpan = document.createElement("span");
       criticSpan.className = "t-rating";
-      criticSpan.innerHTML = `<i class="fa-duotone fa-solid fa-tomato " style="--fa-primary-color: #01902e; --fa-secondary-color: #f93208; --fa-secondary-opacity: 1;"></i> ${
+      criticSpan.innerHTML = `${getTomatoIconHtml()} ${
         Array.isArray(CriticRating) ? CriticRating.join(", ") : CriticRating
       } `;
       container.appendChild(criticSpan);
@@ -459,7 +460,7 @@ export async function createRatingContainer({
     if (config.showOfficialRating && OfficialRating) {
       const officialRatingSpan = document.createElement("span");
       officialRatingSpan.className = "officialrating";
-      officialRatingSpan.innerHTML = `<i class="fa-solid fa-family "></i> ${
+      officialRatingSpan.innerHTML = `<i class="fa-solid fa-user-group"></i> ${
         Array.isArray(OfficialRating) ? OfficialRating.join(", ") : OfficialRating
       }`;
       container.appendChild(officialRatingSpan);
@@ -504,12 +505,12 @@ export function createLanguageContainer({ config, MediaStreams, itemType }) {
   let subtitleLabel = "";
 
   if (hasTurkishAudio) {
-    audioLabel = `<i class="fa-regular fa-language"></i> ${config.languageLabels.audio}`;
+    audioLabel = `<i class="fa-solid fa-language"></i> ${config.languageLabels.audio}`;
   } else {
     const defaultAudioStream = audioStreams.find(stream => stream.IsDefault);
     const fallbackLanguage = defaultAudioStream?.Language || "";
     audioLabel =
-      `<i class="fa-regular fa-language"></i> ${config.languageLabels.original}` +
+      `<i class="fa-solid fa-language"></i> ${config.languageLabels.original}` +
       (fallbackLanguage ? ` ${fallbackLanguage}` : "");
   }
 
@@ -613,7 +614,7 @@ export function createPlotContainer(config, Overview, UserData, RunTimeTicks) {
     );
     const text = document.createElement("span");
     text.className = "duration-remaining";
-    text.innerHTML = `<i class="fa-regular fa-hourglass-half"></i> ${remainingMinutes} ${config.languageLabels.dakika} ${config.languageLabels.kaldi}`;
+    text.innerHTML = `<i class="fa-solid fa-hourglass-half"></i> ${remainingMinutes} ${config.languageLabels.dakika} ${config.languageLabels.kaldi}`;
 
     barWrapper.appendChild(bar);
     progressContainer.appendChild(barWrapper);
@@ -646,7 +647,7 @@ export function createTitleContainer({ config, Taglines, title, OriginalTitle, T
     const sloganSpan = document.createElement("span");
     sloganSpan.className = "slogan";
     sloganSpan.innerHTML = `“ ${Taglines.join(
-      ' <i class="fa-solid fa-sparkle fa-2xs" style="color: #ffffff;"></i> '
+      ' <i class="fa-solid fa-star fa-2xs" style="color: #ffffff;"></i> '
     )} ”`;
     container.appendChild(sloganSpan);
   }

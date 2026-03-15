@@ -3,6 +3,7 @@ import { getConfig, getServerAddress } from "./config.js";
 import { getVideoQualityText } from "./containerUtils.js";
 import { getCurrentVersionFromEnv, compareSemver } from "./update.js";
 import { withServer } from "./jfUrl.js";
+import { faIconHtml } from "./faIcons.js";
 
 const config = getConfig();
 
@@ -166,7 +167,7 @@ function ensureNotifButtonIn(el) {
     btn.setAttribute("aria-label", config.languageLabels.recentNotifications);
     btn.title = config.languageLabels.recentNotifications;
     btn.innerHTML = `
-      <i class="material-icons" aria-hidden="true">notifications</i>
+      ${faIconHtml("bell", "jf-notif-icon notif")}
       <span class="jf-notif-badge" hidden></span>
     `;
     btn.addEventListener("click", openModal);
@@ -553,7 +554,7 @@ function ensureUI() {
           <div class="jf-notif-title">${config.languageLabels.recentNotifications}</div>
           <div class="jf-notif-actions">
             <button id="jfNotifModeToggle" class="jf-notif-theme-toggle" title="${(config.languageLabels?.switchToDark)||'Koyu temaya geç'}">
-              <i class="material-icons" aria-hidden="true">dark_mode</i>
+              ${faIconHtml("moon", "jf-notif-icon")}
             </button>
             <button id="jfNotifMarkAllRead" class="jf-notif-markallread" title="${config.languageLabels.markAllRead || 'Tümünü okundu say'}">
               <i class="fa-solid fa-eye"></i>
@@ -1762,8 +1763,7 @@ function setThemeMode(mode) {
   try { localStorage.setItem(getThemeModeKey(), m); } catch {}
   const btn = document.getElementById("jfNotifModeToggle");
   if (btn) {
-    const icon = btn.querySelector(".material-icons");
-    if (icon) icon.textContent = (m === "dark") ? "light_mode" : "dark_mode";
+    btn.innerHTML = faIconHtml(m === "dark" ? "sun" : "moon", "jf-notif-icon");
     btn.title = (m === "dark")
       ? (config.languageLabels?.switchToLight || "Açık temaya geç")
       : (config.languageLabels?.switchToDark  || "Koyu temaya geç");

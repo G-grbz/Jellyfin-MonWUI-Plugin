@@ -103,13 +103,14 @@ function getValidParamsForStyle(style) {
 
 export async function updateHeaderUserAvatar() {
   try {
-    if (_updatingAvatar) return;
+    if (_updatingAvatar) return { status: 'busy' };
     _updatingAvatar = true;
     const config = getConfig?.();
     if (config && config.createAvatar === false) {
       cleanAvatars();
+      customAvatarAdded = false;
       _updatingAvatar = false;
-      return;
+      return { status: 'disabled' };
     }
 
     const [headerButton, user] = await Promise.all([
@@ -117,18 +118,25 @@ export async function updateHeaderUserAvatar() {
       (await waitForAuthReadyStrict(12000), ensureUserData())
     ]);
 
-    if (!headerButton || !user) { _updatingAvatar = false; return; }
+    if (!headerButton || !user) {
+      _updatingAvatar = false;
+      return { status: 'pending', headerButton: !!headerButton, user: !!user };
+    }
 
     if (hasJellyfinAvatar(headerButton)) {
       if (customAvatarAdded) {
         cleanAvatars();
         customAvatarAdded = false;
       }
-      _updatingAvatar = false; return;
+      _updatingAvatar = false;
+      return { status: 'native' };
     }
 
     const avatarElement = await createAvatar(user);
-    if (!avatarElement) { _updatingAvatar = false; return; }
+    if (!avatarElement) {
+      _updatingAvatar = false;
+      return { status: 'pending', headerButton: true, user: true };
+    }
 
     cleanAvatars(headerButton);
     avatarElement.classList.add("custom-user-avatar");
@@ -141,8 +149,10 @@ export async function updateHeaderUserAvatar() {
 
     applyAvatarStyles(avatarElement);
     setupAvatarProtection(headerButton, user);
+    return { status: 'custom' };
   } catch (err) {
     console.error("Avatar güncelleme hatası:", err);
+    return { status: 'error', error: err };
     } finally {
     _updatingAvatar = false;
   }
@@ -549,13 +559,17 @@ export function initAvatarSystem() {
   }
 
   const tryOnce = async () => {
-    await updateHeaderUserAvatar();
+    const result = await updateHeaderUserAvatar();
     const headerBtn = document.querySelector('button.headerUserButton');
-    const ok = headerBtn && (headerBtn.querySelector('.custom-user-avatar') || hasJellyfinAvatar(headerBtn));
-    if (!ok && retryCount++ < maxRetries) {
+    const ok =
+      result?.status === 'custom' ||
+      result?.status === 'native' ||
+      result?.status === 'disabled' ||
+      !!(headerBtn && (headerBtn.querySelector('.custom-user-avatar') || hasJellyfinAvatar(headerBtn)));
+    const shouldRetry = result?.status === 'pending' || result?.status === 'busy';
+
+    if (!ok && shouldRetry && retryCount++ < maxRetries) {
       setTimeout(tryOnce, retryDelay);
-    } else if (!ok) {
-      console.error("Avatar güncellenemedi, maksimum deneme sayısına ulaşıldı.");
     }
   };
   tryOnce();

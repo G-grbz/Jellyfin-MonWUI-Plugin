@@ -2,6 +2,7 @@ import { makeApiRequest, getSessionInfo, getCachedUserTopGenres } from "./api.js
 import { getConfig } from "./config.js";
 import { withServer } from "./jfUrl.js";
 import { openDetailsModal } from "./detailsModal.js";
+import { faIconHtml } from "./faIcons.js";
 
 const IS_MOBILE = (navigator.maxTouchPoints > 0) || (window.innerWidth <= 820);
 
@@ -728,7 +729,7 @@ function createCardFor(item) {
   const typeLabel = isSeries
     ? ((cfg.languageLabels && cfg.languageLabels.dizi) || "Dizi")
     : ((cfg.languageLabels && cfg.languageLabels.film) || "Film");
-  const typeIcon = isSeries ? 'live_tv' : 'movie';
+  const typeIcon = isSeries ? 'tv' : 'film';
 
   const ageChip = normalizeAgeChip(item.OfficialRating || "");
   const year = item.ProductionYear || "";
@@ -755,7 +756,7 @@ function createCardFor(item) {
         <div class="prc-top-badges">
           ${community}
           <div class="prc-type-badge">
-            <span class="prc-type-icon material-icons">${typeIcon}</span>
+            ${faIconHtml(typeIcon, "prc-type-icon")}
             ${escapeHtml(typeLabel)}
           </div>
         </div>

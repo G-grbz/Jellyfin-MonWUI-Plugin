@@ -7,6 +7,23 @@ import { loadJSMediaTags } from "../lyrics/id3Reader.js";
 import { setupAudioListeners } from "../player/progress.js";
 import { enableKeyboardControls } from "../ui/controls.js";
 
+let __artistModalModulePromise = null;
+
+function startGmmpSchedulerWhenVisible() {
+    __artistModalModulePromise = __artistModalModulePromise || import("../ui/artistModal.js");
+    __artistModalModulePromise
+        .then(({ startGlobalDbFullscanScheduler }) => {
+            if (!musicPlayerState.isPlayerVisible) return;
+            try { startGlobalDbFullscanScheduler?.(); } catch (e) {
+                console.warn("startGlobalDbFullscanScheduler failed:", e);
+            }
+        })
+        .catch((e) => {
+            __artistModalModulePromise = null;
+            console.warn("startGlobalDbFullscanScheduler failed:", e);
+        });
+}
+
 export async function initPlayer() {
   try {
     await loadJSMediaTags();
@@ -48,6 +65,7 @@ export function togglePlayerVisibility() {
         if (musicPlayerState.isPlayerVisible) {
             musicPlayerState.modernPlayer.removeAttribute('aria-hidden');
             musicPlayerState.modernPlayer.inert = false;
+            startGmmpSchedulerWhenVisible();
             setTimeout(() => musicPlayerState.playPauseBtn.focus(), 100);
             enableKeyboardControls();
         } else {

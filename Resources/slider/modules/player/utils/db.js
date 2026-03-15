@@ -26,31 +26,37 @@ class MusicDB {
           store = e.currentTarget.transaction.objectStore(this.storeName);
         }
 
-        if (!store.indexNames.contains("Artists"))
+        if (!store.indexNames.contains("Artists")) {
           store.createIndex("Artists", "Artists", { multiEntry: true });
+        }
 
-        if (!store.indexNames.contains("ArtistIds"))
+        if (!store.indexNames.contains("ArtistIds")) {
           store.createIndex("ArtistIds", "ArtistIds", { multiEntry: true });
+        }
 
-        if (!store.indexNames.contains("Album"))
+        if (!store.indexNames.contains("Album")) {
           store.createIndex("Album", "Album");
+        }
 
-        if (!store.indexNames.contains("AlbumArtist"))
+        if (!store.indexNames.contains("AlbumArtist")) {
           store.createIndex("AlbumArtist", "AlbumArtist");
+        }
 
-        if (!store.indexNames.contains("DateCreated"))
+        if (!store.indexNames.contains("DateCreated")) {
           store.createIndex("DateCreated", "DateCreated");
+        }
 
-        if (!store.indexNames.contains("LastUpdated"))
+        if (!store.indexNames.contains("LastUpdated")) {
           store.createIndex("LastUpdated", "LastUpdated");
+        }
 
         if (!db.objectStoreNames.contains(this.deletedStoreName)) {
-          const del = db.createObjectStore(this.deletedStoreName, {
+          const deletedStore = db.createObjectStore(this.deletedStoreName, {
             keyPath: "id",
             autoIncrement: true,
           });
-          del.createIndex("trackId", "trackId");
-          del.createIndex("deletedAt", "deletedAt");
+          deletedStore.createIndex("trackId", "trackId");
+          deletedStore.createIndex("deletedAt", "deletedAt");
         }
 
         if (!db.objectStoreNames.contains(this.lyricsStoreName)) {
@@ -60,6 +66,12 @@ class MusicDB {
 
       req.onsuccess = () => {
         this.db = req.result;
+        this.db.onversionchange = () => {
+          try {
+            this.db?.close();
+          } catch {}
+          this.db = null;
+        };
         resolve(this.db);
       };
 
@@ -67,34 +79,97 @@ class MusicDB {
     });
   }
 
+  async openDB() {
+    return this.open();
+  }
+
+  async init() {
+    return this.open();
+  }
+
+  async ready() {
+    return this.open();
+  }
+
   _tx(store, mode = "readonly") {
     return this.db.transaction(store, mode).objectStore(store);
+  }
+
+  _awaitTransaction(tx) {
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onabort = () => reject(tx.error || new Error("IndexedDB transaction aborted"));
+      tx.onerror = () => reject(tx.error || new Error("IndexedDB transaction failed"));
+    });
+  }
+
+  _toMillis(value) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (value instanceof Date) return value.getTime();
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+    return 0;
+  }
+
+  _trackSortValue(track) {
+    return (
+      this._toMillis(track?.DateCreated) ||
+      this._toMillis(track?.PremiereDate) ||
+      this._toMillis(track?.LastUpdated)
+    );
   }
 
   async _ensure() {
     if (!this.db) await this.open();
   }
 
+  async _getTrackById(trackId) {
+    await this._ensure();
+    return new Promise((resolve) => {
+      const req = this._tx(this.storeName).get(trackId);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    });
+  }
+
   async addOrUpdateTracks(tracks = []) {
-    if (!tracks.length) return;
+    if (!Array.isArray(tracks) || !tracks.length) return;
     await this._ensure();
 
-    const tx = this.db.transaction(this.storeName, "readwrite");
+    const tx = this.db.transaction([this.storeName], "readwrite");
     const store = tx.objectStore(this.storeName);
     const now = Date.now();
 
-    for (const t of tracks) {
-      if (!t?.Id) continue;
-      t.LastUpdated = now;
+    for (const sourceTrack of tracks) {
+      if (!sourceTrack?.Id) continue;
 
-      if (!t.ArtistIds && Array.isArray(t.ArtistItems)) {
-        t.ArtistIds = t.ArtistItems.map(a => a.Id).filter(Boolean);
+      const track = { ...sourceTrack, LastUpdated: now };
+      if (!track.ArtistIds && Array.isArray(track.ArtistItems)) {
+        track.ArtistIds = track.ArtistItems.map((artist) => artist?.Id).filter(Boolean);
       }
 
-      store.put(t);
+      store.put(track);
     }
 
-    return tx.complete;
+    await this._awaitTransaction(tx);
+  }
+
+  async saveTracks(tracks = []) {
+    await this.deleteAllTracks();
+    if (Array.isArray(tracks) && tracks.length) {
+      await this.saveTracksInBatches(tracks);
+    }
+  }
+
+  async saveTracksInBatches(tracks = [], batchSize = 500) {
+    if (!Array.isArray(tracks) || !tracks.length) return;
+
+    const size = Math.max(1, Number(batchSize) || 500);
+    for (let start = 0; start < tracks.length; start += size) {
+      await this.addOrUpdateTracks(tracks.slice(start, start + size));
+    }
   }
 
   async getAllTracks() {
@@ -106,24 +181,46 @@ class MusicDB {
     });
   }
 
-  async deleteTracks(ids = []) {
-    if (!ids.length) return;
+  async deleteAllTracks() {
     await this._ensure();
+    const tx = this.db.transaction([this.storeName], "readwrite");
+    tx.objectStore(this.storeName).clear();
+    await this._awaitTransaction(tx);
+  }
+
+  async deleteTracks(ids = []) {
+    if (!Array.isArray(ids) || !ids.length) return;
+    await this._ensure();
+
+    const uniqueIds = [...new Set(ids.filter(Boolean))];
+    const storedTracks = await Promise.all(
+      uniqueIds.map(async (trackId) => [trackId, await this._getTrackById(trackId)])
+    );
+    const trackMap = new Map(storedTracks);
 
     const tx = this.db.transaction(
       [this.storeName, this.deletedStoreName],
       "readwrite"
     );
     const store = tx.objectStore(this.storeName);
-    const delStore = tx.objectStore(this.deletedStoreName);
-    const now = Date.now();
+    const deletedStore = tx.objectStore(this.deletedStoreName);
 
-    ids.forEach(id => {
-      store.delete(id);
-      delStore.add({ trackId: id, deletedAt: now });
+    uniqueIds.forEach((trackId) => {
+      const trackData = trackMap.get(trackId);
+      store.delete(trackId);
+      deletedStore.put({
+        trackId,
+        deletedAt: new Date().toISOString(),
+        trackData: trackData || {
+          Id: trackId,
+          Name: "Bilinmeyen Parca",
+          Artists: [],
+          AlbumArtist: "",
+        },
+      });
     });
 
-    return tx.complete;
+    await this._awaitTransaction(tx);
   }
 
   async getTracksByArtist(value, useId = false) {
@@ -140,6 +237,69 @@ class MusicDB {
     });
   }
 
+  async getStats(recentLimit = null) {
+    const tracks = await this.getAllTracks();
+    const albums = new Set();
+    const artists = new Set();
+
+    tracks.forEach((track) => {
+      if (track?.Album) albums.add(track.Album);
+
+      if (Array.isArray(track?.Artists)) {
+        track.Artists.forEach((artist) => {
+          if (artist) artists.add(artist);
+        });
+      }
+
+      if (track?.AlbumArtist) {
+        artists.add(track.AlbumArtist);
+      }
+
+      if (Array.isArray(track?.ArtistItems)) {
+        track.ArtistItems.forEach((artist) => {
+          if (artist?.Name) artists.add(artist.Name);
+        });
+      }
+    });
+
+    const sortedTracks = tracks
+      .slice()
+      .sort((a, b) => this._trackSortValue(b) - this._trackSortValue(a));
+
+    return {
+      totalTracks: tracks.length,
+      totalAlbums: albums.size,
+      totalArtists: artists.size,
+      recentlyAdded: Number.isFinite(recentLimit)
+        ? sortedTracks.slice(0, recentLimit)
+        : sortedTracks,
+    };
+  }
+
+  async getRecentlyDeleted(limit = null) {
+    await this._ensure();
+    return new Promise((resolve, reject) => {
+      const req = this._tx(this.deletedStoreName).getAll();
+      req.onsuccess = () => {
+        const entries = (req.result || [])
+          .map((entry) => ({
+            ...entry,
+            trackData: entry?.trackData || {
+              Id: entry?.trackId,
+              Name: "Bilinmeyen Parca",
+              Artists: [],
+              AlbumArtist: "",
+              DateCreated: entry?.deletedAt || null,
+            },
+          }))
+          .sort((a, b) => this._toMillis(b?.deletedAt) - this._toMillis(a?.deletedAt));
+
+        resolve(Number.isFinite(limit) ? entries.slice(0, limit) : entries);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
   async saveLyrics(trackId, data) {
     await this._ensure();
     return new Promise((resolve, reject) => {
@@ -147,7 +307,7 @@ class MusicDB {
         trackId,
         ...data,
       });
-      req.onsuccess = resolve;
+      req.onsuccess = () => resolve();
       req.onerror = () => reject(req.error);
     });
   }
@@ -158,6 +318,34 @@ class MusicDB {
       const req = this._tx(this.lyricsStoreName).get(trackId);
       req.onsuccess = () => resolve(req.result || null);
       req.onerror = () => resolve(null);
+    });
+  }
+
+  async deleteLyrics(trackId) {
+    if (!trackId) return;
+    await this._ensure();
+    return new Promise((resolve, reject) => {
+      const req = this._tx(this.lyricsStoreName, "readwrite").delete(trackId);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async getAllLyrics() {
+    await this._ensure();
+    return new Promise((resolve, reject) => {
+      const req = this._tx(this.lyricsStoreName).getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async getLyricsCount() {
+    await this._ensure();
+    return new Promise((resolve, reject) => {
+      const req = this._tx(this.lyricsStoreName).count();
+      req.onsuccess = () => resolve(req.result || 0);
+      req.onerror = () => reject(req.error);
     });
   }
 

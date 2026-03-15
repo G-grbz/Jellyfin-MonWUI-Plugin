@@ -5,7 +5,7 @@ import {
   getQualitySnapshot
 } from './cacheManager.js';
 
-import { fetchItemDetails } from './api.js';
+import { fetchItemDetails, fetchItemsBulk } from './api.js';
 import { getVideoQualityText } from "./containerUtils.js";
 import { getConfig } from "./config.js";
 import { withServer } from "./jfUrl.js";
@@ -14,10 +14,14 @@ const config = getConfig();
 const QB_VER = '4';
 const STICKY_MODE = true;
 const BATCH_SIZE = 24;
-const MAX_CONCURRENCY = 3;
+const MAX_CONCURRENCY = 24;
 const MUTATION_DEBOUNCE_MS = 80;
 const MEMORY_HINTS_MAX = 1000;
 const HAS_RIC = typeof requestIdleCallback === 'function';
+const CARD_CONTAINER_SELECTOR = '.cardImageContainer, .cardOverlayContainer';
+const BULK_FETCH_BATCH_SIZE = 48;
+const BULK_FETCH_DEBOUNCE_MS = 24;
+const EAGER_INITIAL_HOSTS = 36;
 function idle(fn) {
   if (HAS_RIC) return requestIdleCallback(fn, { timeout: 250 });
   return setTimeout(() => fn({ timeRemaining: () => 0, didTimeout: true }), 0);
@@ -48,12 +52,105 @@ let processingQueue = [];
 let isDraining = false;
 let active = 0;
 let mo = null;
+let bulkFetchTimer = null;
+let bulkFetchRunning = false;
 
-const observedCards = new WeakSet();
+let observedCards = new WeakSet();
 const memoryQualityHints = new Map();
 const inflightById = new Map();
+const pendingBulkIds = new Set();
 const VIDEO_RE = /(movie|episode|film|bölüm)/i;
 const NONVIDEO_RE = /(series|season|person|collection|boxset|folder|genre|studio|music|artist|album|audio|photo|image)/i;
+
+function getCardScope(card) {
+  if (!card?.nodeType) return null;
+  return (
+    card.closest?.('.cardContent') ||
+    card.closest?.('.cardScalable') ||
+    card.closest?.('.cardBox') ||
+    card.closest?.('.card') ||
+    card.closest?.('[data-id], [data-item-id], [data-itemid]') ||
+    card.parentElement ||
+    card
+  );
+}
+
+function getBadgeHost(card) {
+  const scope = getCardScope(card);
+  if (!scope) return null;
+
+  const directMatch = card?.matches?.(CARD_CONTAINER_SELECTOR) ? card : null;
+  const host =
+    scope.querySelector?.('.cardImageContainer') ||
+    scope.querySelector?.('.cardOverlayContainer') ||
+    directMatch ||
+    scope;
+
+  return host?.nodeType === Node.ELEMENT_NODE ? host : null;
+}
+
+function updateMountedState(card, mounted) {
+  try {
+    if (card?.dataset) card.dataset.qbMounted = mounted ? '1' : '0';
+  } catch {}
+}
+
+function resetBadgeRuntimeState(root = document) {
+  try {
+    collectBadgeHosts(root).forEach(card => {
+      if (!card?.dataset) return;
+      card.dataset.qbQueued = '0';
+      updateMountedState(card, !!card.querySelector?.('.quality-badge'));
+    });
+  } catch {}
+}
+
+function collectBadgeHosts(root = document) {
+  const hosts = new Set();
+
+  const pushHost = (node) => {
+    const host = getBadgeHost(node);
+    if (host?.nodeType === Node.ELEMENT_NODE) hosts.add(host);
+  };
+
+  try {
+    if (
+      root?.nodeType === Node.ELEMENT_NODE &&
+      root.matches?.(CARD_CONTAINER_SELECTOR)
+    ) {
+      pushHost(root);
+    }
+
+    const nodes = root.querySelectorAll?.(CARD_CONTAINER_SELECTOR) || [];
+    nodes.forEach(pushHost);
+  } catch {}
+
+  return Array.from(hosts);
+}
+
+function dedupeBadgeInScope(card) {
+  const host = getBadgeHost(card);
+  if (!host) return null;
+
+  const scope = getCardScope(host);
+  const badges = Array.from(scope?.querySelectorAll?.('.quality-badge') || []);
+  if (!badges.length) {
+    updateMountedState(host, false);
+    return null;
+  }
+
+  const keep = badges.find(badge => badge.parentElement === host) || badges[0];
+  if (keep.parentElement !== host && host.isConnected) {
+    try { host.appendChild(keep); } catch {}
+  }
+
+  for (const badge of badges) {
+    if (badge !== keep) badge.remove();
+  }
+
+  updateMountedState(host, true);
+  return keep;
+}
 
 function getItemIdFromCard(card) {
   try {
@@ -151,30 +248,30 @@ export function annotateDomWithQualityHints(root = document) {
 
     if (
       root?.nodeType === Node.ELEMENT_NODE &&
-      root.matches?.('.cardImageContainer, .cardOverlayContainer')
+      root.matches?.(CARD_CONTAINER_SELECTOR)
     ) {
       applyOne(root);
     }
 
-    const nodes = root.querySelectorAll?.('.cardImageContainer, .cardOverlayContainer') || [];
+    const nodes = root.querySelectorAll?.(CARD_CONTAINER_SELECTOR) || [];
     nodes.forEach(applyOne);
   } catch {}
 }
 
 export function addQualityBadge(card, itemId = null) {
-  if (!card || !card.isConnected) return;
+  const host = getBadgeHost(card);
+  if (!host || !host.isConnected) return;
 
-  const kind = getCardKind(card);
+  const kind = getCardKind(host);
   if (kind === 'nonvideo') return;
 
-  itemId = itemId || getItemIdFromCard(card);
+  itemId = itemId || getItemIdFromCard(host);
   if (!itemId) return;
 
-  if (card.querySelector('.quality-badge')) return;
-  if (card.dataset.qbMounted === '1') return;
-  card.dataset.qbMounted = '1';
+  if (dedupeBadgeInScope(host)) return;
+  if (host.dataset.qbMounted === '1' || host.dataset.qbQueued === '1') return;
 
-  handleCard(card);
+  handleCard(host);
 }
 
 export function initializeQualityBadges() {
@@ -196,14 +293,21 @@ export function initializeQualityBadges() {
 
 export function cleanupQualityBadges() {
   try { if (mo) mo.disconnect(); } catch {}
+  try { if (bulkFetchTimer) clearTimeout(bulkFetchTimer); } catch {}
 
   mo = null;
+  bulkFetchTimer = null;
+  bulkFetchRunning = false;
+  observedCards = new WeakSet();
+  resetBadgeRuntimeState();
+  pendingBulkIds.clear();
 
   processingQueue = [];
   active = 0;
   isDraining = false;
   try {
     for (const v of inflightById.values()) {
+      try { v?.resolve?.(null); } catch {}
       try { v?.ctrl?.abort('qb-cleanup'); } catch {}
     }
   } catch {}
@@ -229,6 +333,7 @@ export function clearQualityBadgesCacheAndRefresh() {
     clearQualityCache();
   } finally {
     document.querySelectorAll('.quality-badge').forEach(el => el.remove());
+    resetBadgeRuntimeState();
     rebuildQualityBadges();
   }
 }
@@ -311,13 +416,14 @@ function injectQualityMarkupSafely(container, html) {
 }
 
 function createBadge(card, qualityText) {
-  if (!card?.isConnected) return;
+  const host = getBadgeHost(card);
+  if (!host?.isConnected) return;
 
-  const kind = getCardKind(card);
+  const kind = getCardKind(host);
   if (kind === 'nonvideo') return;
 
-  if (card.querySelector('.quality-badge')) return;
-  if (!card.dataset.quality && qualityText) card.dataset.quality = qualityText;
+  if (dedupeBadgeInScope(host)) return;
+  if (!host.dataset.quality && qualityText) host.dataset.quality = qualityText;
 
   const badge = document.createElement('div');
   badge.className = 'quality-badge';
@@ -335,19 +441,15 @@ function createBadge(card, qualityText) {
 
   badge.appendChild(span);
 
-  card.dataset.qbVer = QB_VER;
-  if (STICKY_MODE) card.dataset.qbSticky = '1';
+  host.dataset.qbVer = QB_VER;
+  updateMountedState(host, true);
+  if (STICKY_MODE) host.dataset.qbSticky = '1';
 
-  card.appendChild(badge);
+  host.appendChild(badge);
 }
 
-async function fetchAndCacheQuality(itemId) {
-  const existing = inflightById.get(itemId);
-  if (existing?.p) return existing.p;
-
-  const ctrl = new AbortController();
-
-  const p = (async () => {
+async function fetchAndCacheQualitySingle(itemId, ctrl = new AbortController()) {
+  return (async () => {
     try {
       const itemDetails = await fetchItemDetails(itemId, { signal: ctrl.signal });
       if (!itemDetails) return null;
@@ -377,19 +479,88 @@ async function fetchAndCacheQuality(itemId) {
       return null;
     }
   })().finally(() => {
-    inflightById.delete(itemId);
+  });
+}
+
+function settleInflightQuality(itemId, quality) {
+  const entry = inflightById.get(itemId);
+  if (!entry) return;
+  try { entry.resolve?.(quality || null); } catch {}
+}
+
+function scheduleBulkFetch() {
+  if (bulkFetchTimer != null || bulkFetchRunning || !pendingBulkIds.size) return;
+  bulkFetchTimer = setTimeout(() => {
+    bulkFetchTimer = null;
+    flushBulkFetchQueue().catch(() => {});
+  }, BULK_FETCH_DEBOUNCE_MS);
+}
+
+async function flushBulkFetchQueue() {
+  if (bulkFetchRunning) return;
+  bulkFetchRunning = true;
+
+  try {
+    while (pendingBulkIds.size) {
+      const ids = Array.from(pendingBulkIds).slice(0, BULK_FETCH_BATCH_SIZE);
+      ids.forEach(id => pendingBulkIds.delete(id));
+
+      try {
+        const { found } = await fetchItemsBulk(ids, ["Type", "MediaStreams"]);
+        primeQualityFromItems(Array.from(found?.values?.() || []));
+      } catch {}
+
+      for (const itemId of ids) {
+        let quality =
+          memoryQualityHints.get(itemId) ||
+          snapshotMap?.get(itemId) ||
+          await getCachedQuality(itemId);
+
+        if (!quality) {
+          const entry = inflightById.get(itemId);
+          const ctrl = new AbortController();
+          if (entry) entry.ctrl = ctrl;
+          quality = await fetchAndCacheQualitySingle(itemId, ctrl);
+        }
+
+        settleInflightQuality(itemId, quality || null);
+        inflightById.delete(itemId);
+      }
+    }
+  } finally {
+    bulkFetchRunning = false;
+    if (pendingBulkIds.size) scheduleBulkFetch();
+  }
+}
+
+async function fetchAndCacheQuality(itemId) {
+  const existing = inflightById.get(itemId);
+  if (existing?.p) return existing.p;
+
+  let resolvePromise;
+  const p = new Promise((resolve) => {
+    resolvePromise = resolve;
   });
 
-  inflightById.set(itemId, { p, ctrl });
+  inflightById.set(itemId, {
+    p,
+    ctrl: null,
+    resolve: resolvePromise
+  });
+
+  pendingBulkIds.add(itemId);
+  scheduleBulkFetch();
   return p;
 }
 
 function enqueueCard(card, itemId) {
-  if (!card?.isConnected) return;
-  if (card.dataset.qbQueued === '1') return;
-  card.dataset.qbQueued = '1';
+  const host = getBadgeHost(card);
+  if (!host?.isConnected) return;
+  if (host.dataset.qbQueued === '1') return;
+  host.dataset.qbQueued = '1';
+  observedCards.add(host);
 
-  processingQueue.push({ card, itemId });
+  processingQueue.push({ card: host, itemId });
   if (!isDraining) drainQueueSoon();
 }
 
@@ -428,21 +599,24 @@ function drainQueue() {
 }
 
 async function processCard(card, itemId) {
-  if (!card?.isConnected) return;
-  if (card.querySelector('.quality-badge')) return;
+  const host = getBadgeHost(card);
+  if (!host?.isConnected) return;
+  if (dedupeBadgeInScope(host)) return;
 
-  const kind = getCardKind(card);
+  const kind = getCardKind(host);
   if (kind === 'nonvideo') return;
 
-  const hinted = card.dataset?.quality || memoryQualityHints.get(itemId) || snapshotMap?.get(itemId);
-  if (hinted) { createBadge(card, hinted); return; }
+  itemId = itemId || getItemIdFromCard(host);
+  if (!itemId) return;
+
+  const hinted = host.dataset?.quality || memoryQualityHints.get(itemId) || snapshotMap?.get(itemId);
+  if (hinted) { createBadge(host, hinted); return; }
 
   const cachedQuality = await getCachedQuality(itemId);
-  if (cachedQuality) { createBadge(card, cachedQuality); return; }
-  if (kind === 'unknown') return;
+  if (cachedQuality) { createBadge(host, cachedQuality); return; }
 
   const quality = await fetchAndCacheQuality(itemId);
-  if (quality && card.isConnected) createBadge(card, quality);
+  if (quality && host.isConnected) createBadge(host, quality);
 }
 
 function initObservers() {
@@ -455,15 +629,15 @@ function initObservers() {
 
     const toProcess = Array.from(pending);
     pending.clear();
+    const hosts = new Set();
 
     for (const node of toProcess) {
       if (!node || node.nodeType !== Node.ELEMENT_NODE) continue;
+      collectBadgeHosts(node).forEach(host => hosts.add(host));
+    }
 
-      if (node.classList?.contains('cardImageContainer') || node.classList?.contains('cardOverlayContainer')) {
-        handleCard(node);
-      } else if (node.querySelectorAll) {
-        node.querySelectorAll('.cardImageContainer, .cardOverlayContainer').forEach(handleCard);
-      }
+    for (const host of hosts) {
+      handleCard(host);
     }
   };
 
@@ -479,8 +653,12 @@ function initObservers() {
     if (hasAdd) debouncedFlush();
   });
 
-  const initial = Array.from(document.querySelectorAll('.cardImageContainer, .cardOverlayContainer'));
-  let idx = 0;
+  const initial = collectBadgeHosts(document);
+  let idx = Math.min(initial.length, EAGER_INITIAL_HOSTS);
+
+  for (let i = 0; i < idx; i++) {
+    handleCard(initial[i]);
+  }
 
   const scanStep = (deadline) => {
     const start = performance.now();
@@ -502,14 +680,29 @@ function initObservers() {
 }
 
 function handleCard(card) {
-  const kind = getCardKind(card);
-  if (kind === 'nonvideo') return;
-  annotateDomWithQualityHints(card);
+  const host = getBadgeHost(card);
+  if (!host?.isConnected) return;
 
-  if (!card.querySelector('.quality-badge')) {
-    const itemId = getItemIdFromCard(card);
-    if (itemId) enqueueCard(card, itemId);
+  const kind = getCardKind(host);
+  if (kind === 'nonvideo') return;
+  annotateDomWithQualityHints(host);
+
+  if (dedupeBadgeInScope(host)) {
+    observedCards.add(host);
+    return;
   }
+
+  if (observedCards.has(host) && (host.dataset.qbMounted === '1' || host.dataset.qbQueued === '1')) return;
+
+  const itemId = getItemIdFromCard(host);
+  const hinted = host.dataset?.quality || memoryQualityHints.get(itemId) || snapshotMap?.get(itemId);
+  if (hinted) {
+    createBadge(host, hinted);
+    observedCards.add(host);
+    return;
+  }
+
+  if (itemId) enqueueCard(host, itemId);
 }
 
 function debounce(fn, wait = 50) {

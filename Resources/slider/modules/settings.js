@@ -139,7 +139,7 @@ export function createSettingsModal() {
     const tabContent = document.createElement('div');
     tabContent.className = 'settings-tab-content';
 
-    const sliderTab = createTab('slider', 'fa-sliders', labels.sliderSettings || 'Slider Ayarları', true);
+    const sliderTab = createTab('slider', 'fa-gear', labels.sliderSettings || 'Slider Ayarları', true);
     const animationTab = createTab('animation', 'fa-film', labels.animationSettings || 'Animasyon Ayarları', true);
     const profileChooserTab = createTab( 'profile-chooser', 'fa-user-group', labels.profileChooserHeader || 'Kim izliyor?', true);
     const musicTab = createTab('music', 'fa-music', labels.gmmpSettings || 'GMMP Ayarları', true);

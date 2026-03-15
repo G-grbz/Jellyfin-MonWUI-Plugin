@@ -1,5 +1,6 @@
 import { getConfig } from "../../config.js";
 import { updateVolumeIcon } from "../ui/controls.js";
+import { getRepeatOneIconHtml } from "../../customIcons.js";
 
 const config = getConfig();
 
@@ -157,8 +158,7 @@ export function loadUserSettings() {
 }
 
 function updateRepeatButtonUI() {
-  const repeatIconEl = document.querySelector(".player-btn .fa-repeat, .player-btn .fa-repeat-1");
-  const repeatBtn = repeatIconEl?.parentElement;
+  const repeatBtn = document.querySelector(".player-btn.repeat-btn");
   if (!repeatBtn) return;
 
   const titles = {
@@ -167,16 +167,13 @@ function updateRepeatButtonUI() {
     all: (config.languageLabels?.repeatModAll || "Tüm liste tekrarı"),
   };
 
-  let iconClass = "fa-repeat";
-  if (musicPlayerState.userSettings.repeatMode === "one") {
-    iconClass = "fa-repeat-1";
-  }
-
   const isActive = musicPlayerState.userSettings.repeatMode !== "none";
   repeatBtn.classList.toggle('active', isActive);
 
   repeatBtn.title = titles[musicPlayerState.userSettings.repeatMode];
-  repeatBtn.innerHTML = `<i class="fas ${iconClass}"></i>`;
+  repeatBtn.innerHTML = musicPlayerState.userSettings.repeatMode === "one"
+    ? getRepeatOneIconHtml()
+    : '<i class="fas fa-repeat"></i>';
 }
 
 function updateShuffleButtonUI() {

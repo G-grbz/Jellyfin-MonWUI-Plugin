@@ -7,6 +7,7 @@ import {
   persistAuthSnapshotFromApiClient,
   getAuthHeader,
 } from "./api.js";
+import { getRandomAvatarUrl } from "./avatarPicker.js";
 import { saveCredentials, saveApiKey, clearCredentials } from "../auth.js";
 
 const OVERLAY_ID = "jfProfileChooserOverlay";
@@ -48,20 +49,100 @@ function timeoutThrottle(fn, wait = 250) {
 }
 
 const LEGACY_HIDE_STYLE_ID = "jfProfileChooserLegacyHideStyle";
+const NATIVE_HEADER_USER_SELECTOR = ".headerUserButtonRound, .headerUserButton";
+const NATIVE_HEADER_USER_MARKER = "data-jfpc-hidden-native-user-btn";
+
+function hideLegacyHeaderUserButtons(root = document) {
+  const nodes = [];
+  try {
+    if (root?.nodeType === 1 && root.matches?.(NATIVE_HEADER_USER_SELECTOR)) nodes.push(root);
+    if (root?.querySelectorAll) {
+      root.querySelectorAll(NATIVE_HEADER_USER_SELECTOR).forEach((el) => nodes.push(el));
+    }
+  } catch {}
+
+  for (const el of nodes) {
+    try {
+      el.setAttribute(NATIVE_HEADER_USER_MARKER, "1");
+      el.style.setProperty("display", "none", "important");
+      el.style.setProperty("visibility", "hidden", "important");
+      el.style.setProperty("pointer-events", "none", "important");
+      el.setAttribute("aria-hidden", "true");
+      el.setAttribute("tabindex", "-1");
+    } catch {}
+  }
+}
 
 function ensureLegacyHeaderUserButtonHidden() {
-  if (document.getElementById(LEGACY_HIDE_STYLE_ID)) return;
-  const st = document.createElement("style");
-  st.id = LEGACY_HIDE_STYLE_ID;
-  st.textContent = `
-    .headerUserButtonRound { display: none !important; }
-  `;
-  (document.head || document.documentElement).appendChild(st);
+  if (!document.getElementById(LEGACY_HIDE_STYLE_ID)) {
+    const st = document.createElement("style");
+    st.id = LEGACY_HIDE_STYLE_ID;
+    st.textContent = `
+      ${NATIVE_HEADER_USER_SELECTOR} {
+        display: none !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
+      }
+    `;
+    (document.head || document.documentElement).appendChild(st);
+  }
+
+  hideLegacyHeaderUserButtons(document);
+
+  if (headerHideMo) return;
+  headerHideMo = new MutationObserver((mutations) => {
+    for (const mut of mutations) {
+      if (mut.type === "attributes") {
+        hideLegacyHeaderUserButtons(mut.target);
+        continue;
+      }
+      for (const node of mut.addedNodes || []) {
+        hideLegacyHeaderUserButtons(node);
+      }
+    }
+  });
+
+  try {
+    headerHideMo.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+  } catch {}
 }
 
 function cleanupLegacyHeaderUserButtonHidden() {
+  try { headerHideMo?.disconnect?.(); } catch {}
+  headerHideMo = null;
+  try {
+    document.querySelectorAll(`[${NATIVE_HEADER_USER_MARKER}="1"]`).forEach((el) => {
+      el.style.removeProperty("display");
+      el.style.removeProperty("visibility");
+      el.style.removeProperty("pointer-events");
+      el.removeAttribute("aria-hidden");
+      if (el.getAttribute("tabindex") === "-1") el.removeAttribute("tabindex");
+      el.removeAttribute(NATIVE_HEADER_USER_MARKER);
+    });
+  } catch {}
   const st = document.getElementById(LEGACY_HIDE_STYLE_ID);
   if (st) st.remove();
+}
+
+export function syncProfileChooserHeaderButtonVisibility(enabled) {
+  const shouldHide = enabled ?? (() => {
+    try {
+      return ((typeof getConfig === "function" ? getConfig() : {}) || {}).enableProfileChooser !== false;
+    } catch {
+      return true;
+    }
+  })();
+
+  if (!shouldHide) {
+    cleanupLegacyHeaderUserButtonHidden();
+    return;
+  }
+  ensureLegacyHeaderUserButtonHidden();
 }
 
 function isSafeMode() {
@@ -428,6 +509,14 @@ function goToMyPreferencesMenu() {
   try { location.hash = "#/mypreferencesmenu"; } catch {}
 }
 
+function goToUserProfile(userId) {
+  try {
+    if (!userId) return;
+    const next = `#/userprofile?userId=${encodeURIComponent(String(userId))}`;
+    location.hash = next;
+  } catch {}
+}
+
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 }
@@ -443,8 +532,99 @@ function userAvatarUrl({ Id, PrimaryImageTag }, size = 220) {
 
   const tag = PrimaryImageTag || "";
   if (tag) qs.set("tag", tag);
+  try {
+    const token = String(getSessionInfo?.()?.accessToken || "").trim();
+    if (token) qs.set("api_key", token);
+  } catch {}
 
   return withServer(`/Users/${encodeURIComponent(String(id))}/Images/Primary?${qs.toString()}`);
+}
+
+function avatarFallbackHtml(name, { big = false } = {}) {
+  const initial = String(name || "P").slice(0, 1).toUpperCase() || "P";
+  return `<div class="jf-profile-fallback${big ? " big" : ""}">${escapeHtml(initial)}</div>`;
+}
+
+function avatarSeedForUser(user) {
+  const id = String(user?.Id || "").trim();
+  const name = String(user?.Name || user?.userName || "").trim();
+  return id || name || "profile";
+}
+
+function setAvatarFallback(slot, user, { requestId, big = false } = {}) {
+  if (!slot) return;
+  if (requestId && slot.getAttribute("data-avatar-request") !== requestId) return;
+  slot.innerHTML = avatarFallbackHtml(user?.Name || user?.userName || "P", { big });
+}
+
+function loadAvatarIntoSlot(slot, url, { requestId, eager = false, onError } = {}) {
+  if (!slot || !url) {
+    onError?.();
+    return;
+  }
+
+  const img = new Image();
+  img.alt = "";
+  img.decoding = "async";
+  img.loading = "eager";
+
+  img.addEventListener("load", () => {
+    if (slot.getAttribute("data-avatar-request") !== requestId) return;
+    slot.replaceChildren(img);
+  }, { once: true });
+
+  img.addEventListener("error", () => {
+    if (slot.getAttribute("data-avatar-request") !== requestId) return;
+    onError?.();
+  }, { once: true });
+
+  img.src = url;
+}
+
+async function assignRandomAvatarToSlot(slot, user, { requestId, eager = false, big = false } = {}) {
+  const randomUrl = await getRandomAvatarUrl(avatarSeedForUser(user)).catch(() => "");
+  if (!slot || slot.getAttribute("data-avatar-request") !== requestId) return;
+  if (!randomUrl) {
+    setAvatarFallback(slot, user, { requestId, big });
+    return;
+  }
+
+  loadAvatarIntoSlot(slot, randomUrl, {
+    requestId,
+    eager,
+    onError: () => setAvatarFallback(slot, user, { requestId, big }),
+  });
+}
+
+function renderProfileAvatarSlot(slot, user, { size = 220, eager = false, big = false, primaryImageTag } = {}) {
+  if (!slot) return;
+
+  const requestId = `${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  slot.setAttribute("data-avatar-request", requestId);
+  setAvatarFallback(slot, user, { requestId, big });
+
+  const userId = String(user?.Id || "").trim();
+  const tag = String(primaryImageTag ?? user?.PrimaryImageTag ?? "").trim();
+  if (!userId) {
+    assignRandomAvatarToSlot(slot, user, { requestId, eager, big }).catch(() => {});
+    return;
+  }
+
+  const url = userAvatarUrl({ Id: userId, PrimaryImageTag: tag }, size);
+  if (!url) {
+    assignRandomAvatarToSlot(slot, user, { requestId, eager, big }).catch(() => {});
+    return;
+  }
+
+  loadAvatarIntoSlot(slot, url, {
+    requestId,
+    eager,
+    onError: () => {
+      assignRandomAvatarToSlot(slot, user, { requestId, eager, big }).catch(() => {
+        setAvatarFallback(slot, user, { requestId, big });
+      });
+    },
+  });
 }
 
 function buildOverlayDom(L) {
@@ -597,19 +777,19 @@ function installHeaderButton(open, L, { isOverlayOpen } = {}) {
       if (nameSlot.textContent !== next) nameSlot.textContent = next;
     }
 
-    const store = readTokenStoreCached(5000);
-    const rec = userId ? store?.[userId] : null;
-    const tag = rec?.primaryImageTag || "";
-
-    const url = userId ? userAvatarUrl({ Id: userId, PrimaryImageTag: tag }, 64) : "";
-
     if (avatarSlot) {
-      const prev = avatarSlot.getAttribute("data-url") || "";
-      if (prev !== url) {
-        avatarSlot.setAttribute("data-url", url);
-        avatarSlot.innerHTML = url
-          ? `<img alt="" src="${escapeHtml(url)}" loading="eager" decoding="async" />`
-          : `<div class="jf-profile-fallback">${escapeHtml((userName || "P").slice(0,1).toUpperCase())}</div>`;
+      const store = readTokenStoreCached(5000);
+      const rec = userId ? store?.[userId] : null;
+      const tag = rec?.primaryImageTag || "";
+      const nextKey = `${userId}|${userName}|${tag}`;
+      const prev = avatarSlot.getAttribute("data-avatar-key") || "";
+      if (prev !== nextKey) {
+        avatarSlot.setAttribute("data-avatar-key", nextKey);
+        renderProfileAvatarSlot(
+          avatarSlot,
+          { Id: userId, Name: userName, PrimaryImageTag: tag },
+          { size: 64, eager: true }
+        );
       }
     }
   };
@@ -723,7 +903,7 @@ export function initProfileChooser(options = {}) {
 
   if (cfg.enableProfileChooser === false) return () => {};
 
-  ensureLegacyHeaderUserButtonHidden();
+  syncProfileChooserHeaderButtonVisibility(true);
 
   const autoOpen = options.autoOpen ?? (cfg.profileChooserAutoOpen !== false);
   const autoOpenRequireQuickLogin = cfg.profileChooserAutoOpenRequireQuickLogin !== false;
@@ -928,9 +1108,11 @@ export function initProfileChooser(options = {}) {
 
     const store = readTokenStore();
     const rev = readTokenStoreRev();
+    const usersById = new Map();
     const html = currentList.map(u => {
       const id = u.Id;
       const name = u.Name;
+      usersById.set(String(id), u);
       const isCurrent = currentUserId && id === currentUserId;
       const remembered = !!store?.[id]?.accessToken;
       const presence = presenceByUserId.get(id) || null;
@@ -941,18 +1123,21 @@ export function initProfileChooser(options = {}) {
       const statusTitle = String(presence?.title || "").trim();
       const showPlayback = !!(statusTitle || isPlaying || isPaused);
 
-      const tag = store?.[id]?.primaryImageTag || u.PrimaryImageTag || "";
-      const avatar = userAvatarUrl({ Id: id, PrimaryImageTag: tag }, 240);
-
       return `
         <button class="jf-profile-tile ${isCurrent ? "is-current" : ""}" type="button"
           data-user-id="${escapeHtml(id)}" role="listitem">
-          <div class="jf-profile-avatar">
-            ${avatar
-              ? `<img alt="" src="${escapeHtml(avatar)}" loading="lazy" decoding="async" />`
-              : `<div class="jf-profile-fallback">${escapeHtml(name.slice(0,1).toUpperCase())}</div>`
-            }
-          </div>
+          ${isCurrent ? `
+            <span
+              class="jf-profile-current-settings"
+              role="button"
+              tabindex="0"
+              data-action="userprofile"
+              data-user-id="${escapeHtml(id)}"
+              aria-label="${escapeHtml(L("profilSayfasi", "Profil sayfası"))}"
+              title="${escapeHtml(L("profilSayfasi", "Profil sayfası"))}"
+            >⚙</span>
+          ` : ``}
+          <div class="jf-profile-avatar">${avatarFallbackHtml(name)}</div>
 
           <div class="jf-profile-name">${escapeHtml(name)}</div>
 
@@ -996,6 +1181,25 @@ export function initProfileChooser(options = {}) {
       grid.setAttribute("data-render-hash", nextHash);
       grid.innerHTML = html;
     }
+
+    grid.querySelectorAll(".jf-profile-tile").forEach((tile) => {
+      const id = String(tile.getAttribute("data-user-id") || "").trim();
+      const user = usersById.get(id);
+      const slot = tile.querySelector(".jf-profile-avatar");
+      if (!user || !slot) return;
+
+      const tag = store?.[id]?.primaryImageTag || user.PrimaryImageTag || "";
+      const nextKey = `${id}|${tag}`;
+      const prevKey = slot.getAttribute("data-avatar-key") || "";
+      if (prevKey === nextKey) return;
+
+      slot.setAttribute("data-avatar-key", nextKey);
+      renderProfileAvatarSlot(
+        slot,
+        { ...user, PrimaryImageTag: tag },
+        { size: 240 }
+      );
+    });
   }
 
   function showGrid() {
@@ -1023,12 +1227,12 @@ export function initProfileChooser(options = {}) {
 
     const store = readTokenStore();
     const tag = store?.[user.Id]?.primaryImageTag || user.PrimaryImageTag || "";
-    const avatar = userAvatarUrl({ Id: user.Id, PrimaryImageTag: tag }, 220);
-
     if (cardAvatar) {
-      cardAvatar.innerHTML = avatar
-        ? `<img alt="" src="${escapeHtml(avatar)}" decoding="async" />`
-        : `<div class="jf-profile-fallback big">${escapeHtml(user.Name.slice(0,1).toUpperCase())}</div>`;
+      renderProfileAvatarSlot(
+        cardAvatar,
+        { ...user, PrimaryImageTag: tag },
+        { size: 220, big: true }
+      );
     }
     if (cardName) cardName.textContent = user.Name;
     if (hintEl) hintEl.textContent = hint || "";
@@ -1144,6 +1348,15 @@ export function initProfileChooser(options = {}) {
         if (uid) {
           forgetRememberedToken(uid);
           renderGridOnce();
+        }
+        return;
+      }
+      if (action === "userprofile") {
+        try { e.preventDefault(); e.stopPropagation(); } catch {}
+        const uid = actionBtn.getAttribute("data-user-id") || "";
+        if (uid) {
+          goToUserProfile(uid);
+          close();
         }
         return;
       }

@@ -209,7 +209,7 @@ export function createButtons(slide, config, UserData, itemId, RemoteTrailers, u
 
     const watchBtnContainer = createButtonWithBackground(
         "watch",
-        '<i class="fa-regular fa-circle-play icon"></i>',
+        '<i class="fa-solid fa-circle-play icon"></i>',
         isResumable
             ? config.languageLabels.devamet
             : config.languageLabels.izle,
@@ -287,7 +287,7 @@ export function createButtons(slide, config, UserData, itemId, RemoteTrailers, u
     const isPlayed = UserData && UserData.Played;
     const playedBtnContainer = createButtonWithBackground(
         "played",
-        isPlayed ? '<i class="fa-solid fa-check" style="color: #FFC107;"></i>' : '<i class="fa-light fa-check"></i>',
+        isPlayed ? '<i class="fa-solid fa-check" style="color: #FFC107;"></i>' : '<i class="fa-regular fa-circle-check"></i>',
         isPlayed ? config.languageLabels.izlendi : config.languageLabels.izlenmedi,
         (event, buttonElement) => {
             const iconWrapper = buttonElement.querySelector('.icon-wrapper');
@@ -295,7 +295,7 @@ export function createButtons(slide, config, UserData, itemId, RemoteTrailers, u
 
             if (buttonElement.classList.contains("played")) {
                 buttonElement.classList.remove("played");
-                iconWrapper.innerHTML = '<i class="fa-light fa-check"></i>';
+                iconWrapper.innerHTML = '<i class="fa-regular fa-circle-check"></i>';
                 textSpan.textContent = config.languageLabels.izlenmedi;
                 updatePlayedStatus(itemId, false);
             } else {
@@ -314,7 +314,7 @@ if (config.showFavoriteButton) {
     const isFavorited = UserData && UserData.IsFavorite;
     const favoriteBtnContainer = createButtonWithBackground(
         "favorite",
-        isFavorited ? '<i class="fa-solid fa-heart" style="color: #FFC107;"></i>' : '<i class="fa-light fa-heart"></i>',
+        isFavorited ? '<i class="fa-solid fa-heart" style="color: #FFC107;"></i>' : '<i class="fa-regular fa-heart"></i>',
         isFavorited ? config.languageLabels.favorilendi : config.languageLabels.favori,
         (event, buttonElement) => {
             const iconWrapper = buttonElement.querySelector('.icon-wrapper');
@@ -322,7 +322,7 @@ if (config.showFavoriteButton) {
 
             if (buttonElement.classList.contains("favorited")) {
                 buttonElement.classList.remove("favorited");
-                iconWrapper.innerHTML = '<i class="fa-light fa-heart"></i>';
+                iconWrapper.innerHTML = '<i class="fa-regular fa-heart"></i>';
                 textSpan.textContent = config.languageLabels.favori;
                 updateFavoriteStatus(itemId, false);
             } else {
@@ -457,7 +457,7 @@ export function createProviderContainer({ config, ProviderIds, RemoteTrailers, i
 
   if (config.showSettingsLink) {
     const settingsLink = document.createElement("span");
-    settingsLink.innerHTML = `<i class="fa-solid fa-sliders"></i>`;
+    settingsLink.innerHTML = `<i class="fa-solid fa-gear"></i>`;
     settingsLink.className = "provider-link settings";
     settingsLink.title = `${config.languageLabels.settingsLink}`;
     settingsLink.addEventListener("click", (e) => {
@@ -478,7 +478,7 @@ export function createProviderContainer({ config, ProviderIds, RemoteTrailers, i
 
     const deviceIcon = document.createElement("div");
     deviceIcon.className = "device-selector-top-icon";
-    deviceIcon.innerHTML = `<i class="fa-regular fa-screencast"></i>`;
+    deviceIcon.innerHTML = `<i class="fa-solid fa-display"></i>`;
     deviceIcon.title = config.languageLabels.castoynat;
 
     const deviceDropdown = document.createElement("div");

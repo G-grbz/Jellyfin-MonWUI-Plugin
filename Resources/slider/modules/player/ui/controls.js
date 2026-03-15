@@ -6,6 +6,7 @@ import { updatePlaylistModal } from "./playlistModal.js";
 import { playNext, playPrevious, togglePlayPause } from '../player/playback.js';
 import { updateNextTracks } from "./playerUI.js";
 import { togglePlayerVisibility } from "../utils/mainIndex.js";
+import { getRepeatOneIconHtml } from "../../customIcons.js";
 
 const config = getConfig();
 
@@ -170,7 +171,7 @@ export function toggleRepeatMode() {
   const nextIndex = (currentIndex + 1) % modes.length;
   musicPlayerState.userSettings.repeatMode = modes[nextIndex];
 
-  const repeatBtn = document.querySelector('.player-btn .fa-repeat, .player-btn .fa-repeat-1')?.parentElement;
+  const repeatBtn = document.querySelector('.player-btn.repeat-btn');
   if (!repeatBtn) {
     console.warn('Tekrar butonu bulunamadı');
     return;
@@ -184,17 +185,18 @@ export function toggleRepeatMode() {
     'all': config.languageLabels?.repeatModAll || 'Tüm liste tekrarı'
   };
 
-  const iconClass = mode === 'one' ? 'fa-repeat-1' : 'fa-repeat';
   const isActive = mode !== 'none';
 
   repeatBtn.classList.remove('active', 'passive');
   repeatBtn.classList.add(isActive ? 'active' : 'passive');
   repeatBtn.title = titles[mode];
-  repeatBtn.innerHTML = `<i class="fas ${iconClass}"></i>`;
+  repeatBtn.innerHTML = mode === 'one'
+    ? getRepeatOneIconHtml()
+    : '<i class="fas fa-repeat"></i>';
 
   const notificationMessages = {
     'none': `<i class="fas fa-repeat crossed-icon"></i> ${config.languageLabels?.repeatMod || 'Tekrar modu'}: ${config.languageLabels?.repeatModOff || 'kapalı'}`,
-    'one': `<i class="fas fa-repeat-1"></i> ${config.languageLabels?.repeatMod || 'Tekrar modu'}: ${config.languageLabels?.repeatModOne || 'tek şarkı'}`,
+    'one': `${getRepeatOneIconHtml()} ${config.languageLabels?.repeatMod || 'Tekrar modu'}: ${config.languageLabels?.repeatModOne || 'tek şarkı'}`,
     'all': `<i class="fas fa-repeat"></i> ${config.languageLabels?.repeatMod || 'Tekrar modu'}: ${config.languageLabels?.repeatModAll || 'tüm liste'}`
   };
 
@@ -369,18 +371,18 @@ export function toggleRemoveOnPlayMode() {
   btn.classList.add(setting ? 'active' : 'passive');
 
   btn.innerHTML = setting
-    ? '<i class="fas fa-trash-list"></i>'
-    : '<i class="fas fa-trash-list"></i>';
+    ? '<i class="fa-solid fa-trash"></i>'
+    : '<i class="fa-solid fa-trash"></i>';
 
   const message = setting
-    ? `<i class="fas fa-trash-list"></i> ${config.languageLabels.removeOnPlayOn || "Çaldıktan sonra sil modu açık"}`
-    : `<i class="fas fa-trash-list crossed-icon"></i> ${config.languageLabels.removeOnPlayOff || "Çaldıktan sonra sil modu kapalı"}`;
+    ? `<i class="fa-solid fa-trash"></i> ${config.languageLabels.removeOnPlayOn || "Çaldıktan sonra sil modu açık"}`
+    : `<i class="fa-solid fa-trash crossed-icon"></i> ${config.languageLabels.removeOnPlayOff || "Çaldıktan sonra sil modu kapalı"}`;
 
   showNotification(message, 2000, 'kontrol');
 }
 
 export function initializeControlStates() {
-  const repeatBtn = document.querySelector('.player-btn .fa-repeat, .player-btn .fa-repeat-1')?.parentElement;
+  const repeatBtn = document.querySelector('.player-btn.repeat-btn');
   if (repeatBtn) {
     const isActive = musicPlayerState.userSettings.repeatMode !== 'none';
     repeatBtn.classList.remove('active', 'passive');

@@ -7,6 +7,7 @@ import { REOPEN_COOLDOWN_MS, OPEN_HOVER_DELAY_MS } from "./hoverTrailerModal.js"
 import { createTrailerIframe } from "./utils.js";
 import { openDetailsModal } from "./detailsModal.js";
 import { withServer } from "./jfUrl.js";
+import { faIconHtml } from "./faIcons.js";
 import { setupScroller } from "./personalRecommendations.js";
 import {
   openDirRowsDB,
@@ -141,7 +142,7 @@ function setDirectorArrowLoading(isLoading) {
   } else {
     arrow.classList.remove('is-loading');
     arrow.disabled = false;
-    arrow.innerHTML = `<span class="material-icons">expand_more</span>`;
+    arrow.innerHTML = faIconHtml("chevronDown");
     arrow.removeAttribute('aria-busy');
   }
 }
@@ -155,7 +156,7 @@ function attachDirectorScrollIdleLoader() {
     const arrow = document.createElement('button');
     arrow.className = 'dir-load-more-arrow';
     arrow.type = 'button';
-    arrow.innerHTML = `<span class="material-icons">expand_more</span>`;
+    arrow.innerHTML = faIconHtml("chevronDown");
     arrow.setAttribute(
       'aria-label',
       (labels.loadMoreDirectors ||
@@ -284,15 +285,15 @@ const COMMON_FIELDS = [
 function getDirectorRowCardTypeBadge(itemType) {
   const ll = config.languageLabels || {};
   if (itemType === "Series") {
-    return { label: ll.dizi || labels.dizi || "Dizi", icon: "live_tv" };
+    return { label: ll.dizi || labels.dizi || "Dizi", icon: "tv" };
   }
   if (itemType === "BoxSet") {
     return {
       label: ll.collectionTitle || ll.boxset || labels.collectionTitle || labels.boxset || "Collection",
-      icon: "collections"
+      icon: "layerGroup"
     };
   }
-  return { label: ll.film || labels.film || "Film", icon: "movie" };
+  return { label: ll.film || labels.film || "Film", icon: "film" };
 }
 
 function pickBestItemByRating(items) {
@@ -311,13 +312,18 @@ function pickBestItemByRating(items) {
   return best || items[0] || null;
 }
 
+function shouldPreferTaglessImages(item) {
+  return item?.__preferTaglessImages === true;
+}
+
 function buildPosterUrl(item, height = 540, quality = 72, { omitTag = false } = {}) {
   if (!item?.Id) return null;
   const tag = item?.ImageTags?.Primary || item?.PrimaryImageTag;
-  if (!tag && !omitTag) return null;
+  if (!tag) return null;
+  const skipTag = omitTag || shouldPreferTaglessImages(item);
 
   const qs = [];
-  if (tag && !omitTag) qs.push(`tag=${encodeURIComponent(tag)}`);
+  if (!skipTag) qs.push(`tag=${encodeURIComponent(tag)}`);
   qs.push(`maxHeight=${height}`);
   qs.push(`quality=${quality}`);
   qs.push(`EnableImageEnhancers=false`);
@@ -358,6 +364,15 @@ function toNoTagSrcset(srcset) {
     .join(", ");
 }
 
+function promoteTaglessImageData(data) {
+  if (!data || data.__taglessPromoted) return data;
+  if (data.lqSrcNoTag && data.lqSrcNoTag !== data.lqSrc) data.lqSrc = data.lqSrcNoTag;
+  if (data.hqSrcNoTag && data.hqSrcNoTag !== data.hqSrc) data.hqSrc = data.hqSrcNoTag;
+  if (data.hqSrcsetNoTag && data.hqSrcsetNoTag !== data.hqSrcset) data.hqSrcset = data.hqSrcsetNoTag;
+  data.__taglessPromoted = true;
+  return data;
+}
+
 function markImageSettled(img, src) {
   if (!img) return;
   try { img.removeAttribute("srcset"); } catch {}
@@ -381,11 +396,13 @@ function buildLogoUrl(item, width = 220, quality = 80) {
 
   if (!tag) return null;
 
-  return withServer(`/Items/${item.Id}/Images/Logo` +
-         `?tag=${encodeURIComponent(tag)}` +
-         `&maxWidth=${width}` +
-         `&quality=${quality}` +
-         `&EnableImageEnhancers=false`);
+  const omitTag = shouldPreferTaglessImages(item);
+  const qs = [];
+  if (!omitTag) qs.push(`tag=${encodeURIComponent(tag)}`);
+  qs.push(`maxWidth=${width}`);
+  qs.push(`quality=${quality}`);
+  qs.push(`EnableImageEnhancers=false`);
+  return withServer(`/Items/${item.Id}/Images/Logo?${qs.join("&")}`);
 }
 
 function buildBackdropUrl(item, width = 1920, quality = 80) {
@@ -398,11 +415,13 @@ function buildBackdropUrl(item, width = 1920, quality = 80) {
 
   if (!tag) return null;
 
-  return withServer(`/Items/${item.Id}/Images/Backdrop` +
-         `?tag=${encodeURIComponent(tag)}` +
-         `&maxWidth=${width}` +
-         `&quality=${quality}` +
-         `&EnableImageEnhancers=false`);
+  const omitTag = shouldPreferTaglessImages(item);
+  const qs = [];
+  if (!omitTag) qs.push(`tag=${encodeURIComponent(tag)}`);
+  qs.push(`maxWidth=${width}`);
+  qs.push(`quality=${quality}`);
+  qs.push(`EnableImageEnhancers=false`);
+  return withServer(`/Items/${item.Id}/Images/Backdrop?${qs.join("&")}`);
 }
 
 function buildBackdropUrlLQ(item) {
@@ -417,7 +436,14 @@ function buildPosterSrcSet(item) {
   const hs = [240, 360, 540];
   const q  = 50;
   const ar = Number(item.PrimaryImageAspectRatio) || 0.6667;
-  return hs.map(h => `${withCacheBust(buildPosterUrl(item, h, q))} ${Math.round(h * ar)}w`).join(", ");
+  const omitTag = shouldPreferTaglessImages(item);
+  return hs
+    .map(h => {
+      const url = buildPosterUrl(item, h, q, { omitTag });
+      return url ? `${withCacheBust(url)} ${Math.round(h * ar)}w` : "";
+    })
+    .filter(Boolean)
+    .join(", ");
 }
 
 function withCacheBust(url) {
@@ -555,13 +581,14 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
   if (img.__phase === "hi") {
     if (!st.hiNoTagTried && data.hqSrcNoTag && data.hqSrcNoTag !== data.hqSrc) {
       st.hiNoTagTried = true;
+      promoteTaglessImageData(data);
       img.__phase = "hi";
       img.__hiRequested = true;
-      img.src = withCacheBust(data.hqSrcNoTag);
+      img.src = withCacheBust(data.hqSrc);
 
       const _rIC = window.requestIdleCallback || ((fn)=>setTimeout(fn, 0));
       _rIC(() => {
-        if (img.__hiRequested && data.hqSrcsetNoTag) img.srcset = data.hqSrcsetNoTag;
+        if (img.__hiRequested && data.hqSrcset) img.srcset = data.hqSrcset;
       });
       return;
     }
@@ -579,8 +606,9 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
   } else {
     if (!st.lqNoTagTried && data.lqSrcNoTag && data.lqSrcNoTag !== data.lqSrc) {
       st.lqNoTagTried = true;
+      promoteTaglessImageData(data);
       img.__phase = "lq";
-      img.src = withCacheBust(data.lqSrcNoTag);
+      img.src = withCacheBust(data.lqSrc);
       return;
     }
 
@@ -781,7 +809,7 @@ function createRecommendationCard(item, serverId, aboveFold = false) {
           <div class="prc-top-badges">
             ${community}
             <div class="prc-type-badge">
-              <span class="prc-type-icon material-icons">${typeIcon}</span>
+              ${faIconHtml(typeIcon, "prc-type-icon")}
               ${typeLabel}
             </div>
           </div>
@@ -2195,7 +2223,10 @@ async function initAndRenderFirstBatch(wrap) {
 
   const initSeq = ++__dirInitSeq;
   const { userId, serverId } = getSessionInfo();
-  if (!userId) return;
+  if (!userId) {
+    scheduleDirectorRowsRetry(800);
+    return;
+  }
 
   STATE.started = true;
   STATE._bgStarted = true;
@@ -2344,7 +2375,7 @@ async function renderDirectorSection(dir) {
       <div class="dir-row-see-all"
            aria-label="${(labels.seeAll || config.languageLabels?.seeAll || 'Tümünü gör')}"
            title="${(labels.seeAll || config.languageLabels?.seeAll || 'Tümünü gör')}">
-        <span class="material-icons">keyboard_arrow_right</span>
+        ${faIconHtml("chevronRight")}
       </div>
       <span class="dir-row-see-all-tip">${(labels.seeAll || config.languageLabels?.seeAll || 'Tümünü gör')}</span>
     </h2>
