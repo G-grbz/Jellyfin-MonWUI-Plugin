@@ -13,8 +13,8 @@
         "changelog": "Improve overall performance and fix various issues across the plugin",
         "targetAbi": "10.10.0.0",
         "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v2.0.0/JMSFusion-2.0.4.0-server.zip",
-        "checksum": "a677daae649cea0e9db3e96c174f4736",
-        "timestamp": "2026-03-15T23:05:11.9458356Z"
+        "checksum": "1bf27e38850e3fc70729667af90c794c",
+        "timestamp": "2026-03-15T23:10:13.7849064Z"
       },
       {
         "version": "2.0.3.0",
