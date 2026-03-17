@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/G-grbz/Jellyfin-MonWUI-Plugin/main/img/icon.png",
     "versions": [
       {
+        "version": "2.0.5.0",
+        "changelog": "Fixes: GMMP / Peak Slider / Notification Panel / Pause Screen / CSS",
+        "targetAbi": "10.10.0.0",
+        "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v2.0.0/JMSFusion-2.0.5.0-server.zip",
+        "checksum": "7f025d3a587686035c8f645c710efbc6",
+        "timestamp": "2026-03-17T08:31:19.6269226Z"
+      },
+      {
         "version": "2.0.4.0",
         "changelog": "Improve overall performance and fix various issues across the plugin",
         "targetAbi": "10.10.0.0",
