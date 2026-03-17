@@ -28,6 +28,7 @@ import { startBackgroundCollectionIndexer, getBackgroundCollectionIndexerStatus 
 import { initProfileChooser, syncProfileChooserHeaderButtonVisibility } from "./modules/profileChooser.js";
 import { initSubtitleCustomizer } from "./modules/subtitleCustomizer.js";
 import { initOsdHeaderRatings } from "./modules/osdHeaderRatings.js";
+import { openDetailsModal } from "./modules/detailsModal.js";
 const idle = window.requestIdleCallback || ((cb) => setTimeout(cb, 0));
 
 function installHomeTabSliderOnlyGate() {
@@ -2009,7 +2010,7 @@ if (window.__totalSlidesPlanned > 0 && window.__slidesCreated >= window.__totalS
       );
     });
 
-    indexPage.addEventListener("keydown", (e) => {
+    indexPage.addEventListener("keydown", async (e) => {
       if (!keyboardActive) return;
       if (e.keyCode === 37) {
         changeSlide(-1);
@@ -2017,7 +2018,23 @@ if (window.__totalSlidesPlanned > 0 && window.__slidesCreated >= window.__totalS
       } else if (e.keyCode === 39) {
         changeSlide(1);
         queueHardResetNextFrame();
-      } else if (e.keyCode === 13 && focusedSlide) window.location.href = focusedSlide.dataset.detailUrl;
+      } else if (e.keyCode === 13 && focusedSlide) {
+        e.preventDefault();
+        const itemId = focusedSlide.dataset.itemId;
+        if (!itemId) return;
+        const preferBackdropIndex = localStorage.getItem("jms_backdrop_index") || "0";
+        const originEl = focusedSlide.__backdropImg || focusedSlide.querySelector?.(".backdrop") || focusedSlide;
+        try {
+          await openDetailsModal({
+            itemId,
+            serverId: getSessionInfo?.()?.serverId || "",
+            preferBackdropIndex,
+            originEl,
+          });
+        } catch (err) {
+          console.warn("openDetailsModal failed (slider keyboard):", err);
+        }
+      }
     });
 
     indexPage.addEventListener("focusin", (e) => {
