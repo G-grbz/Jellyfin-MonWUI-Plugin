@@ -59,13 +59,37 @@ async function __getGmmp() {
     if (typeof window !== "undefined" && window.__GMMP?.playTrackById) return window.__GMMP;
   } catch {}
   try {
-    await import("../player/main.js");
+    await import("./player/main.js");
   } catch (e) {
   }
   try {
     return (typeof window !== "undefined") ? (window.__GMMP || null) : null;
   } catch {
     return null;
+  }
+}
+
+async function __destroyGmmpBeforeVideoPlayNow() {
+  let destroyFn = null;
+
+  try {
+    destroyFn = window.__GMMP?.destroy || null;
+  } catch {}
+
+  if (typeof destroyFn !== "function") {
+    try {
+      const gmmpModule = await import("./player/main.js");
+      destroyFn = gmmpModule?.destroyGmmp || null;
+    } catch {}
+  }
+
+  if (typeof destroyFn !== "function") return false;
+
+  try {
+    return !!(await destroyFn({ reason: "playNow-video" }));
+  } catch (err) {
+    console.warn("playNow(video): GMMP kapatilamadi", err);
+    return false;
   }
 }
 
@@ -494,6 +518,17 @@ export function pickBestLocalTrailer(trailers = []) {
   return byShort[0] || trailers[0];
 }
 
+async function hydrateWatchlistPayload(payload) {
+  if (!payload) return payload;
+  try {
+    const watchlistModule = await import("./watchlist.js");
+    if (typeof watchlistModule?.hydrateWatchlistState === "function") {
+      await watchlistModule.hydrateWatchlistState(payload);
+    }
+  } catch {}
+  return payload;
+}
+
 export async function fetchItemsBulk(ids = [], fields = [
   "Type","Name","SeriesId","SeriesName","ParentId","ParentIndexNumber",
   "IndexNumber","Overview","Genres","RunTimeTicks","OfficialRating","ProductionYear",
@@ -512,6 +547,7 @@ export async function fetchItemsBulk(ids = [], fields = [
     throw err;
   });
   const items = res?.Items || [];
+  await hydrateWatchlistPayload(items);
 
   try {
     if (Array.isArray(items) && config?.enableQualityBadges) {
@@ -958,6 +994,7 @@ export function goToDetailsPage(itemId) {
      if (data === null) markTombstone(String(itemId));
 
      __qbTryPrimeQualityFromItem(data);
+     await hydrateWatchlistPayload(data);
 
      return data || null;
    } catch (e) {
@@ -972,7 +1009,7 @@ const ITEM_FULL_FIELDS = [
   "Type","Name","SeriesId","SeriesName","ParentId","ParentIndexNumber","IndexNumber",
   "Overview","Genres","RunTimeTicks","OfficialRating","ProductionYear",
   "CommunityRating","CriticRating",
-  "ImageTags","BackdropImageTags",
+  "ImageTags","BackdropImageTags","ParentBackdropImageTags","ParentBackdropItemId","SeriesBackdropImageTag","SeasonId",
   "UserData","MediaStreams","Series", "CollectionIds",
   "ProviderIds", "People", "RemoteTrailers", "Studios", "Taglines",
   "AlbumId", "Album", "AlbumArtist", "AlbumArtistId", "Artists", "ArtistId", "ArtistIds", "ArtistItems",
@@ -991,6 +1028,7 @@ export async function fetchItemDetailsFull(itemId, { signal } = {}) {
     if (data === null) markTombstone(String(itemId));
 
     __qbTryPrimeQualityFromItem(data);
+    await hydrateWatchlistPayload(data);
 
     return data || null;
   } catch (e) {
@@ -1044,26 +1082,71 @@ async function getCachedItemDetailsInternal(itemId) {
   pruneMapBySize(itemCache, MAX_ITEM_CACHE);
   return data;
 }
-export async function updateFavoriteStatus(itemId, isFavorite) {
+
+async function setJellyfinFavoriteStatus(itemId, isFavorite, { signal } = {}) {
   const { userId } = getSessionInfo();
-  return makeApiRequest(`/Users/${userId}/Items/${itemId}/UserData`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ IsFavorite: isFavorite })
+  if (!userId) {
+    const err = new Error("Kullanıcı oturumu bulunamadı.");
+    err.status = 401;
+    throw err;
+  }
+
+  const cleanItemId = String(itemId || "").trim();
+  if (!cleanItemId) {
+    throw new Error("itemId gerekli");
+  }
+
+  return makeApiRequest(`/Users/${encodeURIComponent(userId)}/FavoriteItems/${encodeURIComponent(cleanItemId)}`, {
+    method: isFavorite ? "POST" : "DELETE",
+    signal,
+    __quiet: true
   });
+}
+
+export async function updateFavoriteStatus(itemId, isFavorite, options = {}) {
+  const watchlistModule = await import("./watchlist.js");
+  const cleanItemId = String(itemId || "").trim();
+  if (!cleanItemId) throw new Error("itemId gerekli");
+
+  const syncLocal = async () => {
+    if (isFavorite) {
+      return watchlistModule.addToWatchlist(cleanItemId, options);
+    }
+    return watchlistModule.removeFromWatchlist(cleanItemId, options);
+  };
+
+  watchlistModule?.suppressFavoriteMirrorOnce?.(cleanItemId, isFavorite);
+  await setJellyfinFavoriteStatus(cleanItemId, isFavorite, { signal: options?.signal });
+
+  try {
+    return await syncLocal();
+  } catch (error) {
+    try {
+      watchlistModule?.suppressFavoriteMirrorOnce?.(cleanItemId, !isFavorite);
+      await setJellyfinFavoriteStatus(cleanItemId, !isFavorite, { signal: options?.signal });
+    } catch {}
+    throw error;
+  }
 }
 
 export async function updatePlayedStatus(itemId, played) {
   const { userId } = getSessionInfo();
-  return makeApiRequest(`/Users/${userId}/Items/${itemId}/UserData`, {
+  const result = await makeApiRequest(`/Users/${userId}/Items/${itemId}/UserData`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
     body: JSON.stringify({ Played: played })
   });
+
+  if (played) {
+    try {
+      const watchlistModule = await import("./watchlist.js");
+      await watchlistModule?.removePlayedItemFromWatchlist?.(itemId);
+    } catch {}
+  }
+
+  return result;
 }
 
 export async function getImageDimensions(url) {
@@ -1742,6 +1825,8 @@ export async function playNow(itemId) {
     }
     const normalizedItemId = String(itemId);
     const resumeTicks = Math.max(0, Math.floor(Number(item?.UserData?.PlaybackPositionTicks) || 0));
+
+    await __destroyGmmpBeforeVideoPlayNow().catch(() => false);
 
     const localKick = await tryLocalPlaybackStart(normalizedItemId, {
       startPositionTicks: resumeTicks,

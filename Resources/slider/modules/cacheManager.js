@@ -1,4 +1,6 @@
-const QUALITY_CACHE_STORAGE_KEY = 'videoQualityCache';
+const QUALITY_CACHE_SCHEMA_VERSION = 2;
+const QUALITY_CACHE_STORAGE_KEY = `videoQualityCache_v${QUALITY_CACHE_SCHEMA_VERSION}`;
+const LEGACY_QUALITY_CACHE_STORAGE_KEYS = ['videoQualityCache'];
 
 let inMemoryOnly = false;
 let pendingSaveId = null;
@@ -12,6 +14,14 @@ function storageAvailable() {
     return true;
   } catch {
     return false;
+  }
+}
+
+function clearLegacyQualityCacheKeys() {
+  if (!storageAvailable()) return;
+  for (const key of LEGACY_QUALITY_CACHE_STORAGE_KEYS) {
+    if (!key || key === QUALITY_CACHE_STORAGE_KEY) continue;
+    try { localStorage.removeItem(key); } catch {}
   }
 }
 
@@ -107,6 +117,7 @@ const videoQualityCache = {
       inMemoryOnly = true;
       return;
     }
+    clearLegacyQualityCacheKeys();
     const str = localStorage.getItem(QUALITY_CACHE_STORAGE_KEY);
     if (!str) return;
     try {
@@ -201,6 +212,7 @@ const videoQualityCache = {
     try {
       localStorage.removeItem(QUALITY_CACHE_STORAGE_KEY);
     } catch {}
+    clearLegacyQualityCacheKeys();
     inMemoryOnly = false;
   }
 };

@@ -2,6 +2,7 @@ import { makeApiRequest, updateFavoriteStatus, getSessionInfo, fetchItemDetails 
 import { getConfig } from "./config.js";
 import { getVideoQualityText } from "./containerUtils.js";
 import { tryOpenTrailerPopover, hideTrailerPopover } from "./studioTrailerPopover.js";
+import { cleanupImageResourceRefs } from "./imageResourceCleanup.js";
 
 const config = getConfig();
 const DETAILS_TTL = 60 * 60 * 1000;
@@ -16,7 +17,7 @@ let __miniNavSeq  = 0;
 let __miniTombstoneUntil = 0;
 
 const __miniTimers = new Set();
-const __abortByCard = new WeakMap();
+const __abortByCard = new Map();
 
 let __activeHoverCard = null;
 
@@ -98,10 +99,30 @@ function ensureMiniPopover() {
   return el;
 }
 
+function cleanupMiniPopoverResources(pop = __miniPop) {
+  if (!pop) return;
+  try { cleanupImageResourceRefs(pop, { revokeDetachedBlobs: true }); } catch {}
+}
+
+function abortCardOpen(cardEl) {
+  const ac = __abortByCard.get(cardEl);
+  if (!ac) return;
+  try { ac.abort(); } catch {}
+  __abortByCard.delete(cardEl);
+}
+
+function abortAllMiniOpens() {
+  for (const [cardEl, ac] of __abortByCard.entries()) {
+    try { ac.abort(); } catch {}
+    __abortByCard.delete(cardEl);
+  }
+}
+
 function destroyMiniPopover() {
   if (!__miniPop) return;
   try { hideTrailerPopover(0); } catch {}
   try { window.dispatchEvent(new Event("studiohubs:miniDestroyed")); } catch {}
+  cleanupMiniPopoverResources(__miniPop);
   try { __miniPop.remove(); } catch {}
   __miniPop = null;
 }
@@ -148,6 +169,7 @@ export function hideMiniPopover() {
   if (!wasVisible) {
     el.classList.remove("leaving");
     el.style.display = "none";
+    cleanupMiniPopoverResources(el);
     return;
   }
 
@@ -183,6 +205,7 @@ export function hideMiniPopover() {
     if (safety) clearTimeout(safety);
     try { window.dispatchEvent(new Event("studiohubs:miniHidden")); } catch {}
     try { hideTrailerPopover(0); } catch {}
+    cleanupMiniPopoverResources(el);
   };
 
   const onEnd = () => cleanup();
@@ -594,8 +617,7 @@ export function attachMiniPosterHover(cardEl, itemLike) {
 
   const cancelOpen = () => {
     if (overTimer) { clearTimeout(overTimer); __miniTimers.delete(overTimer); overTimer = null; }
-    const ac = __abortByCard.get(cardEl);
-    if (ac) { try { ac.abort(); } catch {} __abortByCard.delete(cardEl); }
+    abortCardOpen(cardEl);
   };
 
   const open = async () => {
@@ -617,6 +639,11 @@ export function attachMiniPosterHover(cardEl, itemLike) {
     try {
       details = await getDetails(itemLike.Id, ac.signal);
     } catch {}
+    finally {
+      if (__abortByCard.get(cardEl) === ac) {
+        __abortByCard.delete(cardEl);
+      }
+    }
 
     if (ac.signal.aborted) return;
     if (document.hidden || Date.now() < __miniTombstoneUntil) return;
@@ -719,9 +746,7 @@ export function attachMiniPosterHover(cardEl, itemLike) {
     try { hideMiniPopover(); } catch {}
     try { hideTrailerPopover(0); } catch {}
     killAllTimers();
-    try {
-      __abortByCard && __abortByCard.forEach?.(ac => { try { ac.abort(); } catch {} });
-    } catch {}
+    abortAllMiniOpens();
     if (destroy) destroyMiniPopover();
   };
 
@@ -791,12 +816,19 @@ export function attachMiniPosterHover(cardEl, itemLike) {
 })();
 
 document.addEventListener('closeAllMiniPopovers', () => {
+  __miniOpenSeq++;
+  __activeHoverCard = null;
+  abortAllMiniOpens();
   try { hideTrailerPopover(0); } catch {}
   try { destroyMiniPopover(); } catch {}
 });
 
 if (typeof window !== 'undefined') {
   window.__closeMiniPopover = () => {
+    __miniOpenSeq++;
+    __activeHoverCard = null;
+    abortAllMiniOpens();
+    try { hideTrailerPopover(0); } catch {}
     try { destroyMiniPopover(); } catch {}
   };
 }

@@ -1,8 +1,18 @@
 const SERVER_ADDR_KEY = "jf_serverAddress";
 const SERVER_BASE_MICRO_CACHE_MS = 1500;
+const MISSING_IMAGE_TTL_MS = 30 * 60 * 1000;
+const MISSING_IMAGE_CACHE_LIMIT = 500;
 
 let __serverBaseCache = "";
 let __serverBaseCacheAt = 0;
+const __missingImageCache =
+  (typeof window !== "undefined" && window.__jmsMissingImageCache instanceof Map)
+    ? window.__jmsMissingImageCache
+    : new Map();
+
+if (typeof window !== "undefined" && !(window.__jmsMissingImageCache instanceof Map)) {
+  window.__jmsMissingImageCache = __missingImageCache;
+}
 
 function normalizeServerBase(s) {
   if (!s || typeof s !== "string") return "";
@@ -94,6 +104,69 @@ export function resolveServerBase({ getServerAddress } = {}) {
   } catch {}
 
   return readStoredServerBase();
+}
+
+function normalizeImageCacheKey(url) {
+  if (!url || typeof url !== "string") return "";
+  try {
+    const u = new URL(url, (typeof window !== "undefined" && window.location?.origin) || "http://localhost");
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return String(url).split("?")[0]?.trim() || "";
+  }
+}
+
+function pruneMissingImageCache(now = Date.now()) {
+  if (!__missingImageCache.size) return;
+
+  for (const [key, expiresAt] of __missingImageCache.entries()) {
+    if (!Number.isFinite(expiresAt) || expiresAt <= now) {
+      __missingImageCache.delete(key);
+    }
+  }
+
+  if (__missingImageCache.size <= MISSING_IMAGE_CACHE_LIMIT) return;
+
+  const overflow = __missingImageCache.size - MISSING_IMAGE_CACHE_LIMIT;
+  let removed = 0;
+  for (const key of __missingImageCache.keys()) {
+    __missingImageCache.delete(key);
+    removed += 1;
+    if (removed >= overflow) break;
+  }
+}
+
+export function isKnownMissingImage(url) {
+  const key = normalizeImageCacheKey(url);
+  if (!key) return false;
+
+  const now = Date.now();
+  const expiresAt = Number(__missingImageCache.get(key) || 0);
+  if (!expiresAt) return false;
+  if (expiresAt <= now) {
+    __missingImageCache.delete(key);
+    return false;
+  }
+  return true;
+}
+
+export function markImageMissing(url, ttlMs = MISSING_IMAGE_TTL_MS) {
+  if (!url) return "";
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return "";
+
+  const key = normalizeImageCacheKey(url);
+  if (!key) return "";
+
+  pruneMissingImageCache();
+  const ttl = Number.isFinite(ttlMs) ? Math.max(60_000, ttlMs | 0) : MISSING_IMAGE_TTL_MS;
+  __missingImageCache.set(key, Date.now() + ttl);
+  return key;
+}
+
+export function clearMissingImage(url) {
+  const key = normalizeImageCacheKey(url);
+  if (!key) return false;
+  return __missingImageCache.delete(key);
 }
 
 export function getServerBaseCached(opts) {

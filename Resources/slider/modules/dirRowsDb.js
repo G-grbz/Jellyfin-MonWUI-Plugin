@@ -261,6 +261,44 @@ export async function getItemsForDirector(db, scope, directorId, limit = 20) {
   return items;
 }
 
+export async function deleteItemsAndRelationsByIds(db, scope, ids) {
+  const list = Array.isArray(ids) ? Array.from(new Set(ids.map(x => String(x || "").trim()).filter(Boolean))) : [];
+  if (!db || !scope || !list.length) return 0;
+
+  const tx = db.transaction(['items', 'directorItems'], 'readwrite');
+  const itemStore = tx.objectStore('items');
+  const relIdx = tx.objectStore('directorItems').index('byItem');
+  let removed = 0;
+
+  for (const itemId of list) {
+    try { itemStore.delete(`${scope}|${itemId}`); } catch {}
+
+    await new Promise((resolve) => {
+      let req;
+      try {
+        req = relIdx.openCursor(IDBKeyRange.only([scope, itemId]));
+      } catch {
+        resolve();
+        return;
+      }
+
+      req.onerror = () => resolve();
+      req.onsuccess = (e) => {
+        const cur = e.target.result;
+        if (!cur) {
+          resolve();
+          return;
+        }
+        try { cur.delete(); removed++; } catch {}
+        cur.continue();
+      };
+    });
+  }
+
+  await txDone(tx);
+  return removed;
+}
+
 export async function getMeta(db, key) {
   const tx = db.transaction(['meta'], 'readonly');
   const val = await promisify(tx.objectStore('meta').get(key));

@@ -1,20 +1,20 @@
 import { createSection, createCheckbox, createTextInput } from '../settings.js';
 import { showNotification } from "../player/ui/notification.js";
+import { getServerBase } from "../api.js";
 
 const LS_JOB_KEY = 'jmsf_trailer_job_running';
-const SS_SECRETS_KEY = 'jmsf_trailer_secrets';
+const TRAILER_RESOLUTION_OPTIONS = [640, 720, 1080, 1440, 2160];
+const DEFAULT_TRAILER_MIN_RESOLUTION = 720;
+const DEFAULT_TRAILER_MAX_RESOLUTION = 1080;
+const DEFAULT_MAX_CONCURRENT_DOWNLOADS = 1;
+const MIN_CONCURRENT_DOWNLOADS = 1;
+const MAX_CONCURRENT_DOWNLOADS = 8;
 
 function setJobFlag(on) {
   try { on ? localStorage.setItem(LS_JOB_KEY, String(Date.now())) : localStorage.removeItem(LS_JOB_KEY); } catch {}
 }
 function getJobFlag() {
   try { return !!localStorage.getItem(LS_JOB_KEY); } catch { return false; }
-}
-function loadSecrets() {
-  try { return JSON.parse(sessionStorage.getItem(SS_SECRETS_KEY) || '{}'); } catch { return {}; }
-}
-function saveSecrets(obj) {
-  try { sessionStorage.setItem(SS_SECRETS_KEY, JSON.stringify(obj || {})); } catch {}
 }
 
 async function getAuthHeaders() {
@@ -47,13 +47,83 @@ function mapEnumToWire(val) {
   if (s.includes('better'))  return 'if-better';
   return 'skip';
 }
-function mapWireToEnum(val) {
-  const s = String(val || '').toLowerCase();
-  if (s === 'replace')    return 'Replace';
-  if (s === 'if-better')  return 'IfBetter';
-  return 'Skip';
-}
 function parseIntSafe(x){ const n=Number(x); return Number.isFinite(n)?n:0; }
+
+function normalizeBaseUrl(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  try {
+    return new URL(raw, window.location.href).toString().replace(/\/+$/, '');
+  } catch {
+    return raw.replace(/\/+$/, '');
+  }
+}
+
+function resolveAutoJfBase(config = {}) {
+  const candidates = [];
+
+  try { candidates.push(getServerBase()); } catch {}
+
+  try {
+    const api = window.ApiClient || null;
+    candidates.push(typeof api?.serverAddress === 'function' ? api.serverAddress() : api?.serverAddress);
+    candidates.push(api?._serverInfo?.ManualAddress);
+    candidates.push(api?._serverInfo?.LocalAddress);
+  } catch {}
+
+  candidates.push(config?.JFBase);
+  candidates.push(config?.jfBase);
+
+  for (const candidate of candidates) {
+    const normalized = normalizeBaseUrl(candidate);
+    if (normalized) return normalized;
+  }
+
+  return '';
+}
+
+function normalizeTrailerConfigEnvelope(payload) {
+  const base = payload?.cfg && typeof payload.cfg === 'object' ? payload.cfg : payload;
+  return base && typeof base === 'object' ? base : {};
+}
+
+function pickConfigValue(source, ...keys) {
+  const cfg = normalizeTrailerConfigEnvelope(source);
+  for (const key of keys) {
+    if (cfg[key] != null) return cfg[key];
+  }
+  return undefined;
+}
+
+function coerceBoolean(value, fallback = false) {
+  if (value === true || value === false) return value;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return fallback;
+}
+
+function normalizeResolutionOption(value, fallback) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+
+  return TRAILER_RESOLUTION_OPTIONS.reduce((closest, option) => (
+    Math.abs(option - num) < Math.abs(closest - num) ? option : closest
+  ), fallback);
+}
+
+function normalizeConcurrentDownloads(value, fallback = DEFAULT_MAX_CONCURRENT_DOWNLOADS) {
+  const num = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(MAX_CONCURRENT_DOWNLOADS, Math.max(MIN_CONCURRENT_DOWNLOADS, num));
+}
+
+function getResolutionBounds(source) {
+  const minRaw = pickConfigValue(source, 'trailerMinResolution', 'TrailerMinResolution');
+  const maxRaw = pickConfigValue(source, 'trailerMaxResolution', 'TrailerMaxResolution');
+  const min = normalizeResolutionOption(minRaw, DEFAULT_TRAILER_MIN_RESOLUTION);
+  const max = normalizeResolutionOption(maxRaw, DEFAULT_TRAILER_MAX_RESOLUTION);
+  return min <= max ? { min, max } : { min: max, max: min };
+}
 
 function fmtStr(str, params) {
   if (!params) return String(str ?? '');
@@ -73,6 +143,131 @@ function matchFirst(text, patterns) {
   return null;
 }
 
+function normalizeMessageArgs(args) {
+  return args && typeof args === 'object' ? args : {};
+}
+
+function translateTrailerStepName(step, L) {
+  const raw = String(step ?? '').trim();
+  if (!raw) return '';
+  if (/^trailers\.sh$/i.test(raw)) return L.summaryDownloaderTitle;
+  if (/^trailersurl\.sh$/i.test(raw)) return L.summaryUrlNfoTitle;
+  return raw;
+}
+
+function translateTrailersMessage(code, args, fallback, L) {
+  const p = normalizeMessageArgs(args);
+  const localizedStep = translateTrailerStepName(p.step, L) || p.step || '';
+
+  switch (String(code || '')) {
+    case 'trailers.api.user_header_required':
+      return L.ctrlApiUserHeaderRequired;
+    case 'trailers.api.token_header_required':
+      return L.ctrlApiTokenHeaderRequired;
+    case 'trailers.api.user_not_found':
+      return L.shUserNotFound;
+    case 'trailers.api.admin_required':
+      return L.adminRequired;
+    case 'trailers.api.script_execution_disabled':
+      return L.ctrlApiExecutionDisabled;
+    case 'trailers.api.no_task_enabled':
+      return L.ctrlApiNoTaskEnabled;
+    case 'trailers.api.already_running':
+      return L.alreadyRunning;
+    case 'trailers.api.plugin_config_unavailable':
+      return L.ctrlApiPluginConfigUnavailable;
+    case 'trailers.api.plugin_config_hint':
+      return L.ctrlApiPluginConfigHint;
+    case 'trailers.api.cancel_in_progress':
+      return L.ctrlApiCancelInProgress;
+    case 'trailers.api.no_running_job':
+      return L.ctrlApiNoRunningJob;
+    case 'trailers.api.unexpected_error':
+      return L.ctrlApiUnexpectedError;
+    case 'trailers.last.cancel_requested':
+      return L.ctrlLastCancelRequested;
+    case 'trailers.last.step_starting':
+      return fmtStr(L.ctrlLastStepStarting, { step: localizedStep });
+    case 'trailers.last.step_finished':
+      return fmtStr(L.ctrlLastStepFinished, { step: localizedStep });
+    case 'trailers.last.cancelled':
+      return L.cancelled;
+    case 'trailers.last.finished':
+      return fmtStr(L.ctrlLastFinishedDuration, { seconds: p.seconds ?? '' });
+    default:
+      break;
+  }
+
+  if (fallback != null && fallback !== '') {
+    return translateLogLine(String(fallback), L);
+  }
+
+  return '';
+}
+
+function translateTrailersLastMessage(status, L) {
+  const raw = String(status?.lastMessage ?? '').trim();
+  if (!status?.lastMessageCode && /^JMSF::(?:TOTAL|DONE)=/i.test(raw)) {
+    return '';
+  }
+  return translateTrailersMessage(status?.lastMessageCode, status?.lastMessageArgs, raw, L);
+}
+
+function translateTrailersApiErrorText(data, L, status, rawText = '') {
+  const errorText = translateTrailersMessage(data?.errorCode, data?.errorArgs, data?.error || data?.Message, L);
+  const hintText = translateTrailersMessage(data?.hintCode, data?.hintArgs, data?.hint, L);
+  const detailText = typeof data?.detail === 'string' ? data.detail.trim() : '';
+  const parts = [errorText, hintText];
+  if (detailText && !parts.includes(detailText)) parts.push(detailText);
+  if (!parts.some(Boolean) && rawText) parts.push(`HTTP ${status}: ${rawText}`);
+  return parts.filter(Boolean).join(' ');
+}
+
+function formatShortTime(value) {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  try {
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch {
+    return d.toLocaleTimeString();
+  }
+}
+
+function buildProgressBody(status, L) {
+  const lines = [];
+  const startedAt = formatShortTime(status?.startedAt);
+  if (startedAt) {
+    lines.push(`${L.progressStartedAtLabel}: ${startedAt}`);
+  }
+
+  const steps = Array.isArray(status?.steps) ? status.steps : [];
+  const stepCount = steps.length;
+  const currentStep = String(status?.currentStep || '');
+  const currentStepLabel = translateTrailerStepName(currentStep, L);
+  let stepIndex = currentStep ? steps.findIndex((step) => String(step) === currentStep) + 1 : 0;
+  if (!status?.running && stepCount > 0) stepIndex = stepCount;
+  if (stepIndex <= 0 && status?.running && stepCount > 0) stepIndex = 1;
+
+  if (stepCount > 0) {
+    const stepText = currentStepLabel
+      ? `${stepIndex}/${stepCount} (${currentStepLabel})`
+      : `${stepIndex}/${stepCount}`;
+    lines.push(`${L.progressStepLabel}: ${stepText}`);
+  }
+
+  const done = Number(status?.currentStepDone);
+  const total = Number(status?.currentStepTotal);
+  if (Number.isFinite(total) && total > 0) {
+    const safeDone = Number.isFinite(done) ? Math.max(0, done) : 0;
+    lines.push(`${L.progressItemsLabel}: ${safeDone}/${total}`);
+  } else if (status?.running) {
+    lines.push(`${L.progressItemsLabel}: ${L.progressItemsPending}`);
+  }
+
+  return lines.join('\n');
+}
+
 function translateLogLine(line, L) {
   if (!line) return line;
   const rawLine = String(line);
@@ -87,13 +282,20 @@ function translateLogLine(line, L) {
     .replace(/\[DEBUG\]/g, L.logDebug);
 
   const rules = [
+    { re: /İş iptal edildi\./i, out: L.cancelled },
     { re: /Bu script bash gerektirir/i, out: L.shRequiresBash },
     { re: /WORK_DIR oluşturulamadı/i,   out: L.shWorkdirCreateFailed },
     { re: /Hata:\s*([A-Za-z0-9_\-.]+)\s+kurulu değil\./i, out: (m) => fmtStr(L.shDependencyMissing, { bin: m[1] }) },
+    { re: /Hata:\s*yt-dlp hazırlanamadı\./i, out: L.shYtDlpPrepareFailed },
+    { re: /Hata:\s*deno hazırlanamadı\./i, out: L.shDenoPrepareFailed },
     { re: /Uyarı:\s*ffprobe yok/i,      out: L.shFfprobeMissing },
+    { re: /Hata:\s*Jellyfin oturum tokeni alınamadı/i, out: L.shSessionTokenMissing },
+    { re: /Hata:\s*TMDB_API_KEY ayarla/i, out: L.shSetTmdbApiKey },
     { re: /Hata:\s*JF_API_KEY ve TMDB_API_KEY ayarla/i, out: L.shSetApiKeys },
     { re: /OVERWRITE_POLICY geçersiz/i, out: L.shInvalidOverwrite },
     { re: /Kullanıcı bulunamadı/i,      out: L.shUserNotFound },
+    { re: /Eşzamanlı indirme limiti:\s*(\d+)/i,
+      out: (m) => fmtStr(L.shConcurrentDownloadLimit, { n: m[1] }) },
     { re: /\[DEBUG\]\s*İşleniyor:\s*(.+?)\s*\(IMDb:\s*(.*?),\s*TMDb:\s*(.*?),\s*Tür:\s*(.+?)\)/i,
       out: (m) => fmtStr(L.shProcessing, { name: m[1], imdb: m[2] || '-', tmdb: m[3] || '-', type: m[4] }) },
     { re: /Zaten var: .*theme\.mp4 kuruldu\/korundu/i, out: L.shAlreadyExistsThemeDone },
@@ -104,6 +306,8 @@ function translateLogLine(line, L) {
     { re: /Series TMDb yok|Series TMDb/i, out: L.shSeriesTmdbMissing },
     { re: /Tür desteklenmiyor/i,       out: L.shUnsupportedType },
     { re: /Yol yok/i,                  out: L.shNoPath },
+    { re: /Aynı klasör bu çalıştırmada zaten işlendi:\s*(.+?)\s*->\s*(.+?)\s*\(([^()]*)\)\s*$/i,
+      out: (m) => fmtStr(L.shDirAlreadyHandled, { dir: m[1], name: m[2], year: m[3] }) },
     { re: /Yazılamayan klasör,\s*atlanıyor:\s*(.+?)\s*->\s*(.+?)\s*\(([^()]*)\)\s*$/i,
       out: (m) => fmtStr(L.shDirNotWritable, { dir: m[1], name: m[2], year: m[3] }) },
     { re: /Hedefte yetersiz boş alan/i, out: L.shInsufficientSpaceDest },
@@ -114,13 +318,45 @@ function translateLogLine(line, L) {
       out: (m) => fmtStr(L.shDownloading, { name: m[1], year: m[2], out: m[3], site: m[4], key: m[5] }) },
     { re: /yt-dlp deneme #(\d+) başarısız/i,
       out: (m) => fmtStr(L.shYtDlpRetryFail, { n: m[1] }) },
+    { re: /yt-dlp stderr:\s*(.+)$/i,
+      out: (m) => fmtStr(L.shYtDlpStderr, { line: m[1] }) },
+    { re: /yt-dlp çıktı:\s*(.+)$/i,
+      out: (m) => fmtStr(L.shYtDlpStdout, { line: m[1] }) },
     { re: /Diskte yer kalmamış/i, out: L.shNoSpaceLeft },
     { re: /Dosya çok küçük/i,          out: L.shFileTooSmall },
     { re: /Süre kısa/i,                out: L.shDurationShort },
     { re: /Yeni trailer daha iyi bulundu.*değiştiriliyor/i, out: L.shIfBetterNewIsBetter },
     { re: /Mevcut trailer daha iyi\/eşdeğer.*yenisi silindi/i, out: L.shIfBetterOldIsBetter },
+    { re: /mv başarısız,\s*yazılamıyor:\s*(.+)$/i,
+      out: (m) => fmtStr(L.shMoveFailed, { path: m[1] }) },
     { re: /Eklendi ve yenilendi/i,     out: L.shMovedAddedRefreshed },
     { re: /Uygun indirilebilir trailer bulunamadı/i, out: L.shNoDownloadableFound },
+    { re: /NFO yolu çözülemedi:\s*(.+)$/i,
+      out: (m) => fmtStr(L.shNfoPathResolveFailed, { name: m[1] }) },
+    { re: /Refresh çağrısı başarısız:\s*(.+)$/i,
+      out: (m) => `${L.shRefreshFailed}: ${m[1]}` },
+    { re: /Trailer bulunamadı:\s*(.+)$/i,
+      out: (m) => `${L.urlNfoNotFound}: ${m[1]}` },
+    { re: /backdrops klasörü oluşturulamadı:\s*(.+)$/i,
+      out: (m) => fmtStr(L.shBackdropsDirCreateFailed, { dir: m[1] }) },
+    { re: /theme\.mp4 için symlink oluşturuldu \(mode=symlink\):\s*(.+?)\s*->\s*(.+)$/i,
+      out: (m) => fmtStr(L.shThemeSymlinkCreated, { path: m[1], target: m[2] }) },
+    { re: /symlink mümkün değil,\s*hardlink fallback kullanıldı \(mode=symlink\):\s*(.+)$/i,
+      out: (m) => fmtStr(L.shThemeHardlinkFallback, { path: m[1] }) },
+    { re: /Symlink\/hardlink oluşturulamadı,\s*theme\.mp4 atlanıyor \(mode=symlink\)\./i,
+      out: L.shThemeSymlinkFailed },
+    { re: /theme\.mp4 için hardlink oluşturuldu \(mode=hardlink\):\s*(.+)$/i,
+      out: (m) => fmtStr(L.shThemeHardlinkCreated, { path: m[1] }) },
+    { re: /hardlink mümkün değil,\s*symlink fallback kullanıldı \(mode=hardlink\):\s*(.+)$/i,
+      out: (m) => fmtStr(L.shThemeSymlinkFallback, { path: m[1] }) },
+    { re: /Hardlink\/symlink oluşturulamadı,\s*theme\.mp4 atlanıyor \(mode=hardlink\)\./i,
+      out: L.shThemeHardlinkFailed },
+    { re: /theme\.mp4 kopyalandı \(mode=copy\):\s*(.+)$/i,
+      out: (m) => fmtStr(L.shThemeCopied, { path: m[1] }) },
+    { re: /copy mode:\s*theme\.mp4 kopyalanamadı:\s*(.+)$/i,
+      out: (m) => fmtStr(L.shThemeCopyFailed, { path: m[1] }) },
+    { re: /backdrops\/theme\.mp4 hazırlandı\s*(?:→|->)\s*(.+)$/i,
+      out: (m) => fmtStr(L.shThemeReady, { path: m[1] }) },
     { re: /Geçici dosyalar temizleniyor/i, out: L.shCleaningTemps },
     { re: /BİTTİ:\s*işlenen\s*=\s*(\d+)/i, out: (m) => fmtStr(L.shFinishedCount, { n: m[1] }) },
     { re: /ÖZET\s*->\s*indirilen\s*=\s*(\d+)\s*,\s*başarısız\s*=\s*(\d+)(?:\s*,\s*atlanan(?:\(zaten vardı\))?\s*=\s*(\d+))?/i,
@@ -148,10 +384,15 @@ export function createTrailersPanel(config, labels) {
     enableTrailerDownloader: labels?.enableTrailerDownloader || 'Fragman indir (trailers.sh)',
     enableTrailerUrlNfo: labels?.enableTrailerUrlNfo || 'Sadece URLyi NFO ya yaz (trailersurl.sh)',
     jfBase: labels?.jfBase || 'Jellyfin URL (JF_BASE)',
-    jfApiKey: labels?.jfApiKey || 'Jellyfin API Key (JF_API_KEY)',
+    jfBaseAutoNote: labels?.jfBaseAutoNote || 'Jellyfin URL aktif oturumdan otomatik algılanır.',
     tmdbApiKey: labels?.tmdbApiKey || 'TMDb API Key (TMDB_API_KEY)',
     preferredLang: labels?.preferredLang || 'Tercih edilen dil (PREFERRED_LANG)',
     fallbackLang: labels?.fallbackLang || 'Yedek dil (FALLBACK_LANG)',
+    trailerMinResolution: labels?.trailerMinResolution || 'Minimum trailer çözünürlüğü',
+    trailerMaxResolution: labels?.trailerMaxResolution || 'Maksimum trailer çözünürlüğü',
+    trailerResolutionHint: labels?.trailerResolutionHint || 'İndirilebilir formatlar seçtiğin çözünürlük aralığına göre filtrelenir.',
+    maxConcurrentDownloads: labels?.maxConcurrentDownloads || 'Eşzamanlı indirme sayısı',
+    maxConcurrentDownloadsHint: labels?.maxConcurrentDownloadsHint || '1 = tek tek. 2, 3, 4 gibi değerler aynı anda o kadar indirme başlatır.',
     overwritePolicy: labels?.overwritePolicy || 'Overwrite Policy (trailers.sh)',
     enableThemeLink: labels?.enableThemeLink || 'backdrops/theme.mp4 symlink/kopya oluştur (ENABLE_THEME_LINK)',
     themeLinkMode: labels?.themeLinkMode || 'THEME_LINK_MODE',
@@ -177,8 +418,6 @@ export function createTrailersPanel(config, labels) {
     modeHardlink: labels?.modeHardlink || 'Sıkı bağ (hardlink)',
     modeCopy: labels?.modeCopy || 'Kopyala (copy)',
     settingsReadOnly: labels?.settingsReadOnly || 'Yönetici olmayan kullanıcılar ayarları değiştiremez',
-    showSecret: labels?.showSecret || 'Göster',
-    hideSecret: labels?.hideSecret || 'Gizle',
     confirmTitle: labels?.confirmTitle || 'Uzun Süreli İşlem',
     confirmBody: labels?.confirmBody || 'Bu işlem uzun sürebilir. Devam etmek istiyor musunuz?',
     confirmOk: labels?.confirmOk || 'Evet, Başlat',
@@ -196,10 +435,27 @@ export function createTrailersPanel(config, labels) {
     hideLog: labels?.hideLog || "Log'u Gizle",
     noLogToCopy: labels?.noLogToCopy || 'Kopyalanacak log yok',
     progressTitle: labels?.progressTitle || 'Fragman Görevi Çalışıyor',
+    progressStartedAtLabel: labels?.progressStartedAtLabel || 'Başlangıç',
+    progressStepLabel: labels?.progressStepLabel || 'Adım',
+    progressItemsLabel: labels?.progressItemsLabel || 'Öğe',
+    progressItemsPending: labels?.progressItemsPending || 'Hazırlanıyor...',
     stopButton: labels?.stopButton || 'Bitir',
     stopping: labels?.stopping || 'Durduruluyor...',
     cancelled: labels?.cancelled || 'İş iptal edildi.',
     alreadyRunning: labels?.alreadyRunning || 'Zaten çalışan bir iş var; ilerlemeye bağlanılıyor.',
+    ctrlApiUserHeaderRequired: labels?.ctrlApiUserHeaderRequired || 'X-Emby-UserId header gerekli.',
+    ctrlApiTokenHeaderRequired: labels?.ctrlApiTokenHeaderRequired || 'X-Emby-Token header gerekli.',
+    ctrlApiExecutionDisabled: labels?.ctrlApiExecutionDisabled || 'Script çalıştırma kapalı.',
+    ctrlApiNoTaskEnabled: labels?.ctrlApiNoTaskEnabled || 'Hiçbir görev etkin değil.',
+    ctrlApiPluginConfigUnavailable: labels?.ctrlApiPluginConfigUnavailable || 'Plugin konfigürasyonu kullanılamıyor.',
+    ctrlApiPluginConfigHint: labels?.ctrlApiPluginConfigHint || 'Docker içinde /config/plugins ve /config/plugins/configurations yazılabilir olmalı; plugin gerçekten yüklü mü kontrol et.',
+    ctrlApiCancelInProgress: labels?.ctrlApiCancelInProgress || 'İş iptal ediliyor...',
+    ctrlApiNoRunningJob: labels?.ctrlApiNoRunningJob || 'Koşan iş yok.',
+    ctrlApiUnexpectedError: labels?.ctrlApiUnexpectedError || 'Beklenmeyen hata oluştu.',
+    ctrlLastCancelRequested: labels?.ctrlLastCancelRequested || 'İş iptal istendi.',
+    ctrlLastStepStarting: labels?.ctrlLastStepStarting || '{step} başlıyor...',
+    ctrlLastStepFinished: labels?.ctrlLastStepFinished || '{step} bitti.',
+    ctrlLastFinishedDuration: labels?.ctrlLastFinishedDuration || 'Bitti ✓ ({seconds} sn)',
     noteDescription: labels?.noteDescription || 'Sadece eklenti yöntemi ile yüklenerek çalışır ve gerekli araçların (curl, jq, trailers.sh için yt-dlp ve ffmpeg) kurulu olması gerekir',
     logInfo: labels?.logInfo || '[INFO]',
     logWarn: labels?.logWarn || '[WARN]',
@@ -212,9 +468,14 @@ export function createTrailersPanel(config, labels) {
     shWorkdirCreateFailed: labels?.shWorkdirCreateFailed || 'Çalışma klasörü oluşturulamadı',
     shDependencyMissing: labels?.shDependencyMissing || 'Eksik bağımlılık: {bin}',
     shFfprobeMissing: labels?.shFfprobeMissing || 'ffprobe yok; süre/boyut kontrolü sınırlı',
+    shSessionTokenMissing: labels?.shSessionTokenMissing || 'Jellyfin oturum tokeni alınamadı',
+    shSetTmdbApiKey: labels?.shSetTmdbApiKey || 'TMDB_API_KEY ayarlanmalı',
     shSetApiKeys: labels?.shSetApiKeys || 'JF_API_KEY ve TMDB_API_KEY ayarlanmalı',
     shInvalidOverwrite: labels?.shInvalidOverwrite || 'OVERWRITE_POLICY geçersiz (skip|replace|if-better)',
     shUserNotFound: labels?.shUserNotFound || 'Kullanıcı bulunamadı',
+    shYtDlpPrepareFailed: labels?.shYtDlpPrepareFailed || 'yt-dlp hazırlanamadı',
+    shDenoPrepareFailed: labels?.shDenoPrepareFailed || 'deno hazırlanamadı',
+    shConcurrentDownloadLimit: labels?.shConcurrentDownloadLimit || 'Eşzamanlı indirme limiti: {n}',
     shProcessing: labels?.shProcessing || 'İşleniyor: {name} (IMDb: {imdb}, TMDb: {tmdb}, Tür: {type})',
     shAlreadyExistsThemeDone: labels?.shAlreadyExistsThemeDone || 'Zaten var, theme.mp4 kuruldu/korundu',
     shAlreadyExists: labels?.shAlreadyExists || 'Zaten var',
@@ -224,19 +485,34 @@ export function createTrailersPanel(config, labels) {
     shSeriesTmdbMissing: labels?.shSeriesTmdbMissing || 'Dizi TMDb ID yok',
     shUnsupportedType: labels?.shUnsupportedType || 'Tür desteklenmiyor',
     shNoPath: labels?.shNoPath || 'Yol yok',
+    shDirAlreadyHandled: labels?.shDirAlreadyHandled || 'Aynı klasör bu çalıştırmada zaten işlendi: {dir} -> {name} ({year})',
     shDirNotWritable: labels?.shDirNotWritable || 'Yazılamayan klasör, atlanıyor: {dir} -> {name} ({year})',
     shInsufficientSpaceDest: labels?.shInsufficientSpaceDest || 'Hedefte yetersiz boş alan',
     shInsufficientSpaceWork: labels?.shInsufficientSpaceWork || 'Çalışma klasöründe yetersiz boş alan',
     shTryingCandidate: labels?.shTryingCandidate || 'Denenen aday #{n}: {site}:{key}',
     shDownloading: labels?.shDownloading || '{name} ({year}) indiriliyor → {out} [{site}:{key}]',
     shYtDlpRetryFail: labels?.shYtDlpRetryFail || 'yt-dlp denemesi başarısız (#{n})',
+    shYtDlpStderr: labels?.shYtDlpStderr || 'yt-dlp stderr: {line}',
+    shYtDlpStdout: labels?.shYtDlpStdout || 'yt-dlp çıktı: {line}',
     shNoSpaceLeft: labels?.shNoSpaceLeft || 'Diskte yer kalmadı',
     shFileTooSmall: labels?.shFileTooSmall || 'Dosya çok küçük',
     shDurationShort: labels?.shDurationShort || 'Süre kısa',
     shIfBetterNewIsBetter: labels?.shIfBetterNewIsBetter || 'Yeni trailer daha iyi (if-better): değiştiriliyor',
     shIfBetterOldIsBetter: labels?.shIfBetterOldIsBetter || 'Mevcut trailer daha iyi/eşdeğer: yenisi silindi',
+    shMoveFailed: labels?.shMoveFailed || 'Taşıma başarısız, hedefe yazılamıyor: {path}',
     shMovedAddedRefreshed: labels?.shMovedAddedRefreshed || 'Eklendi ve yenilendi',
     shNoDownloadableFound: labels?.shNoDownloadableFound || 'Uygun indirilebilir trailer bulunamadı',
+    shNfoPathResolveFailed: labels?.shNfoPathResolveFailed || 'NFO yolu çözülemedi: {name}',
+    shBackdropsDirCreateFailed: labels?.shBackdropsDirCreateFailed || 'backdrops klasörü oluşturulamadı: {dir}',
+    shThemeSymlinkCreated: labels?.shThemeSymlinkCreated || 'theme.mp4 için symlink oluşturuldu (mode=symlink): {path} -> {target}',
+    shThemeHardlinkFallback: labels?.shThemeHardlinkFallback || 'symlink mümkün değil, hardlink fallback kullanıldı (mode=symlink): {path}',
+    shThemeSymlinkFailed: labels?.shThemeSymlinkFailed || 'Symlink/hardlink oluşturulamadı, theme.mp4 atlanıyor (mode=symlink)',
+    shThemeHardlinkCreated: labels?.shThemeHardlinkCreated || 'theme.mp4 için hardlink oluşturuldu (mode=hardlink): {path}',
+    shThemeSymlinkFallback: labels?.shThemeSymlinkFallback || 'hardlink mümkün değil, symlink fallback kullanıldı (mode=hardlink): {path}',
+    shThemeHardlinkFailed: labels?.shThemeHardlinkFailed || 'Hardlink/symlink oluşturulamadı, theme.mp4 atlanıyor (mode=hardlink)',
+    shThemeCopied: labels?.shThemeCopied || 'theme.mp4 kopyalandı (mode=copy): {path}',
+    shThemeCopyFailed: labels?.shThemeCopyFailed || 'copy mode: theme.mp4 kopyalanamadı: {path}',
+    shThemeReady: labels?.shThemeReady || 'backdrops/theme.mp4 hazırlandı -> {path}',
     shCleaningTemps: labels?.shCleaningTemps || 'Geçici dosyalar temizleniyor',
     shFinishedCount: labels?.shFinishedCount || 'Bitti: işlenen={n}',
     shSummaryLine: labels?.shSummaryLine || 'ÖZET -> indirilen={ok}, başarısız={fail}, atlanan={skip}',
@@ -490,6 +766,7 @@ export function createTrailersPanel(config, labels) {
   }
   function openProgressUi() {
     modal.title.textContent = L.progressTitle;
+    modal.body.textContent = '';
     modal.progressWrap.style.display = '';
     if (modal.logWrap.dataset.forceHidden !== '1') {
       modal.logWrap.style.display = '';
@@ -502,15 +779,17 @@ export function createTrailersPanel(config, labels) {
     modal.overlay.style.display = 'flex';
   }
 
-  function toPct(x) {
+  function toPct(x, fallbackRatio = null) {
     let n = null;
     if (typeof x === 'number') n = x;
     else if (typeof x === 'string') {
       const f = parseFloat(x.replace('%','').trim());
       if (Number.isFinite(f)) n = f;
     }
+    if (n == null && typeof fallbackRatio === 'number' && Number.isFinite(fallbackRatio)) {
+      n = fallbackRatio * 100;
+    }
     if (n == null) return null;
-    if (n > 0 && n <= 1) n = n * 100;
     return Math.max(0, Math.min(100, n));
   }
 
@@ -553,11 +832,20 @@ export function createTrailersPanel(config, labels) {
   }
 
   function updateProgressUi(status) {
-    const pct = toPct(status?.progress);
+    const pct = toPct(status?.progressPercent ?? status?.progress, status?.progress01);
     modal.progressInner.style.width = (pct == null ? (status?.running ? 5 : 100) : pct) + '%';
+    modal.body.textContent = buildProgressBody(status, L);
 
     const stepTxt = status?.currentStep ?? '';
-    modal.sub.textContent = stepTxt ? `${L.adim}: ${stepTxt} ${pct != null ? `(${pct.toFixed(1)}%)` : ''}` : (status?.running ? L.running : L.done);
+    const stepLabel = translateTrailerStepName(stepTxt, L);
+    const lastMessage = translateTrailersLastMessage(status, L);
+    if (lastMessage) {
+      modal.sub.textContent = pct != null ? `${lastMessage} (${pct.toFixed(1)}%)` : lastMessage;
+    } else {
+      modal.sub.textContent = stepLabel
+        ? `${L.adim}: ${stepLabel}${pct != null ? ` (${pct.toFixed(1)}%)` : ''}`
+        : (status?.running ? L.running : L.done);
+    }
 
     if (Array.isArray(status?.log)) {
       if (modal.logWrap.dataset.forceHidden !== '1') {
@@ -632,7 +920,7 @@ export function createTrailersPanel(config, labels) {
         return;
       }
       if (!res.ok && res.status !== 202) {
-        throw new Error(data?.error || data?.Message || `HTTP ${res.status}: ${txt}`);
+        throw new Error(translateTrailersApiErrorText(data, L, res.status, txt));
       }
     } catch (err) {
       showNotification(L.runError + ' ' + (err?.message || err), 3200, 'error');
@@ -660,127 +948,278 @@ export function createTrailersPanel(config, labels) {
   };
 
   let out = null;
+  let trailerConfig = normalizeTrailerConfigEnvelope(config);
 
-  function attachAdminFields() {
-    function createSecretInput(id, labelText) {
-      const wrap = document.createElement('div');
-      wrap.className = 'input-container';
+  function setTrailerConfig(nextConfig) {
+    trailerConfig = normalizeTrailerConfigEnvelope(nextConfig);
+    return trailerConfig;
+  }
 
-      const label = document.createElement('label');
-      label.htmlFor = id; label.textContent = labelText;
+  function setCheckboxValue(id, value) {
+    const input = document.getElementById(id);
+    if (input) input.checked = !!value;
+  }
 
-      const box = document.createElement('div');
-      box.style.cssText = 'display:flex; gap:6px; align-items:center;';
+  function setTextValue(id, value) {
+    const input = document.getElementById(id);
+    if (input && value != null) input.value = value;
+  }
 
-      const input = document.createElement('input');
-      input.type = 'password'; input.id = id;
-      input.placeholder = '••••••••';
-      input.autocomplete = 'new-password';
+  function setTopLevelReadOnly(readOnly) {
+    const a = document.getElementById('EnableTrailerDownloader');
+    const b = document.getElementById('EnableTrailerUrlNfo');
+    [a, b].forEach((input) => {
+      if (!input) return;
+      input.disabled = !!readOnly;
+      input.title = readOnly ? L.settingsReadOnly : '';
+    });
+  }
 
-      const toggle = document.createElement('button');
-      toggle.type = 'button'; toggle.textContent = L.showSecret;
-      toggle.style.cssText = baseBtnCss();
-      toggle.addEventListener('click', () => {
-        const isHidden = input.type === 'password';
-        input.type = isHidden ? 'text' : 'password';
-        toggle.textContent = isHidden ? L.hideSecret : L.showSecret;
-      });
+  function applyTopLevelConfig(source) {
+    setCheckboxValue('EnableTrailerDownloader', coerceBoolean(pickConfigValue(source, 'enableTrailerDownloader', 'EnableTrailerDownloader')));
+    setCheckboxValue('EnableTrailerUrlNfo', coerceBoolean(pickConfigValue(source, 'enableTrailerUrlNfo', 'EnableTrailerUrlNfo')));
+  }
 
-      box.append(input, toggle);
-      wrap.append(label, box);
-      return wrap;
+  function applyResolutionInputs(bounds) {
+    const minSel = document.getElementById('TrailerMinResolution');
+    const maxSel = document.getElementById('TrailerMaxResolution');
+    if (minSel) minSel.value = String(bounds.min);
+    if (maxSel) maxSel.value = String(bounds.max);
+  }
+
+  function getSelectedResolutionBounds() {
+    const minSel = document.getElementById('TrailerMinResolution');
+    const maxSel = document.getElementById('TrailerMaxResolution');
+
+    if (!minSel || !maxSel) {
+      return getResolutionBounds(trailerConfig);
     }
 
+    return getResolutionBounds({
+      trailerMinResolution: minSel.value,
+      trailerMaxResolution: maxSel.value
+    });
+  }
+
+  function createSelectWrap(id, label, options, selectedValue) {
+    const wrap = document.createElement('div');
+    wrap.className = 'input-container';
+
+    const labelEl = document.createElement('label');
+    labelEl.textContent = label;
+    labelEl.htmlFor = id;
+
+    const select = document.createElement('select');
+    select.id = id;
+    select.name = id;
+
+    options.forEach((option) => {
+      const opt = document.createElement('option');
+      opt.value = option.value;
+      opt.textContent = option.label;
+      if (String(option.value) === String(selectedValue)) opt.selected = true;
+      select.appendChild(opt);
+    });
+
+    wrap.append(labelEl, select);
+    return wrap;
+  }
+
+  function createNumberInputWrap(id, label, value, { min = MIN_CONCURRENT_DOWNLOADS, max = MAX_CONCURRENT_DOWNLOADS } = {}) {
+    const wrap = document.createElement('div');
+    wrap.className = 'input-container';
+
+    const labelEl = document.createElement('label');
+    labelEl.textContent = label;
+    labelEl.htmlFor = id;
+
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.id = id;
+    input.name = id;
+    input.min = String(min);
+    input.max = String(max);
+    input.step = '1';
+    input.value = String(normalizeConcurrentDownloads(value));
+    input.addEventListener('change', () => {
+      input.value = String(normalizeConcurrentDownloads(input.value));
+    });
+
+    wrap.append(labelEl, input);
+    return wrap;
+  }
+
+  function wireResolutionBounds() {
+    const minSel = document.getElementById('TrailerMinResolution');
+    const maxSel = document.getElementById('TrailerMaxResolution');
+    if (!minSel || !maxSel) return;
+
+    minSel.addEventListener('change', () => {
+      if (Number(minSel.value) > Number(maxSel.value)) {
+        maxSel.value = minSel.value;
+      }
+    });
+
+    maxSel.addEventListener('change', () => {
+      if (Number(maxSel.value) < Number(minSel.value)) {
+        minSel.value = maxSel.value;
+      }
+    });
+  }
+
+  async function loadLatestTrailerConfig() {
+    const headers = await getAuthHeaders();
+    const res = await fetch('/JMSFusion/config', { method: 'GET', headers });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const latestPayload = await res.json();
+    const latestConfig = setTrailerConfig(latestPayload);
+    applyTopLevelConfig(latestConfig);
+    return latestConfig;
+  }
+
+  function attachAdminFields() {
     out = document.createElement('pre');
     out.className = 'script-output';
     out.style.cssText = 'white-space:pre-wrap; max-height:280px; overflow:auto; margin-top:8px;';
 
+    const getAutoJfBase = () => resolveAutoJfBase(trailerConfig);
+    const syncJfBaseInput = (fallbackValue = '') => {
+      const input = document.getElementById('JFBase');
+      if (!input) return '';
+
+      const resolved = getAutoJfBase() || normalizeBaseUrl(fallbackValue);
+      if (!resolved) return '';
+
+      if (input.value !== resolved) input.value = resolved;
+      input.readOnly = true;
+      input.title = L.jfBaseAutoNote;
+      return resolved;
+    };
+
     function renderAdminFields() {
-      adminOnlyWrap.appendChild(createTextInput('JFBase', L.jfBase, config?.JFBase || 'http://localhost:8096'));
-      adminOnlyWrap.appendChild(createSecretInput('JFApiKey', L.jfApiKey));
-      adminOnlyWrap.appendChild(createSecretInput('TmdbApiKey', L.tmdbApiKey));
-      adminOnlyWrap.appendChild(createTextInput('PreferredLang', L.preferredLang, config?.PreferredLang || 'tr-TR'));
-      adminOnlyWrap.appendChild(createTextInput('FallbackLang', L.fallbackLang,  config?.FallbackLang  || 'en-US'));
+      const currentConfig = trailerConfig;
+      const resolutionBounds = getResolutionBounds(currentConfig);
+      const themeLinkEnabled = Number(pickConfigValue(currentConfig, 'enableThemeLink', 'EnableThemeLink') ?? 0) === 1;
+      const themeLinkMode = pickConfigValue(currentConfig, 'themeLinkMode', 'ThemeLinkMode') || 'symlink';
+
+      adminOnlyWrap.appendChild(createTextInput('JFBase', L.jfBase, getAutoJfBase() || normalizeBaseUrl(pickConfigValue(currentConfig, 'jfBase', 'JFBase')) || ''));
+      syncJfBaseInput(pickConfigValue(currentConfig, 'jfBase', 'JFBase'));
+
+      const jfBaseAutoNote = document.createElement('div');
+      jfBaseAutoNote.className = 'description-text';
+      jfBaseAutoNote.textContent = L.jfBaseAutoNote;
+      adminOnlyWrap.appendChild(jfBaseAutoNote);
+
+      adminOnlyWrap.appendChild(createTextInput('PreferredLang', L.preferredLang, pickConfigValue(currentConfig, 'preferredLang', 'PreferredLang') || 'tr-TR'));
+      adminOnlyWrap.appendChild(createTextInput('FallbackLang', L.fallbackLang, pickConfigValue(currentConfig, 'fallbackLang', 'FallbackLang') || 'en-US'));
+      adminOnlyWrap.appendChild(createNumberInputWrap(
+        'MaxConcurrentDownloads',
+        L.maxConcurrentDownloads,
+        pickConfigValue(currentConfig, 'maxConcurrentDownloads', 'MaxConcurrentDownloads') ?? DEFAULT_MAX_CONCURRENT_DOWNLOADS
+      ));
+
+      const maxConcurrentDownloadsHint = document.createElement('div');
+      maxConcurrentDownloadsHint.className = 'description-text';
+      maxConcurrentDownloadsHint.textContent = L.maxConcurrentDownloadsHint;
+      adminOnlyWrap.appendChild(maxConcurrentDownloadsHint);
+
+      adminOnlyWrap.appendChild(createSelectWrap(
+        'TrailerMinResolution',
+        L.trailerMinResolution,
+        TRAILER_RESOLUTION_OPTIONS.map((value) => ({ value, label: `${value}p` })),
+        resolutionBounds.min
+      ));
+      adminOnlyWrap.appendChild(createSelectWrap(
+        'TrailerMaxResolution',
+        L.trailerMaxResolution,
+        TRAILER_RESOLUTION_OPTIONS.map((value) => ({ value, label: `${value}p` })),
+        resolutionBounds.max
+      ));
+      wireResolutionBounds();
+
+      const resolutionHint = document.createElement('div');
+      resolutionHint.className = 'description-text';
+      resolutionHint.textContent = L.trailerResolutionHint;
+      adminOnlyWrap.appendChild(resolutionHint);
+
+      const tmdbNote = document.createElement('div');
+      tmdbNote.className = 'description-text';
+      tmdbNote.textContent = `${L.tmdbApiKey}: ${(labels?.tmdbManagedInSlider || 'Slider sekmesindeki tek alandan yönetilir ve burada global config kullanılır.')}`;
+      adminOnlyWrap.appendChild(tmdbNote);
 
       const overwriteWrap = document.createElement('div');
       overwriteWrap.className = 'input-container';
       {
         const l = document.createElement('label');
-        l.textContent = L.overwritePolicy; l.htmlFor = 'OverwritePolicy';
-        const sel = document.createElement('select'); sel.id = 'OverwritePolicy';
+        l.textContent = L.overwritePolicy;
+        l.htmlFor = 'OverwritePolicy';
+        const sel = document.createElement('select');
+        sel.id = 'OverwritePolicy';
         [
-          { value: 'skip',      label: L.overwriteSkip },
-          { value: 'replace',   label: L.overwriteReplace },
+          { value: 'skip', label: L.overwriteSkip },
+          { value: 'replace', label: L.overwriteReplace },
           { value: 'if-better', label: L.overwriteIfBetter }
-        ].forEach(opt => { const o = document.createElement('option'); o.value = opt.value; o.textContent = opt.label; sel.appendChild(o); });
-        sel.value = mapEnumToWire(config?.OverwritePolicy || 'Skip');
+        ].forEach((opt) => {
+          const o = document.createElement('option');
+          o.value = opt.value;
+          o.textContent = opt.label;
+          sel.appendChild(o);
+        });
+        sel.value = mapEnumToWire(pickConfigValue(currentConfig, 'overwritePolicy', 'OverwritePolicy') || 'Skip');
         overwriteWrap.append(l, sel);
       }
       adminOnlyWrap.appendChild(overwriteWrap);
-      adminOnlyWrap.appendChild(createCheckbox('EnableThemeLink', L.enableThemeLink, ((config?.EnableThemeLink | 0) === 1)));
+
+      adminOnlyWrap.appendChild(createCheckbox('EnableThemeLink', L.enableThemeLink, themeLinkEnabled));
+      setCheckboxValue('EnableThemeLink', themeLinkEnabled);
 
       const modeWrap = document.createElement('div');
       modeWrap.className = 'input-container';
       {
         const l = document.createElement('label');
-        l.textContent = L.themeLinkMode; l.htmlFor = 'ThemeLinkMode';
-        const sel = document.createElement('select'); sel.id = 'ThemeLinkMode';
+        l.textContent = L.themeLinkMode;
+        l.htmlFor = 'ThemeLinkMode';
+        const sel = document.createElement('select');
+        sel.id = 'ThemeLinkMode';
         [
-          { value: 'symlink',  label: L.modeSymlink },
+          { value: 'symlink', label: L.modeSymlink },
           { value: 'hardlink', label: L.modeHardlink },
-          { value: 'copy',     label: L.modeCopy }
-        ].forEach(opt => { const o = document.createElement('option'); o.value = opt.value; o.textContent = opt.label; sel.appendChild(o); });
-        sel.value = (config?.ThemeLinkMode || 'symlink');
-        sel.addEventListener('change', e => localStorage.setItem('ThemeLinkMode', e.target.value));
+          { value: 'copy', label: L.modeCopy }
+        ].forEach((opt) => {
+          const o = document.createElement('option');
+          o.value = opt.value;
+          o.textContent = opt.label;
+          sel.appendChild(o);
+        });
+        sel.value = themeLinkMode;
         modeWrap.append(l, sel);
       }
       adminOnlyWrap.appendChild(modeWrap);
+
+      applyTopLevelConfig(currentConfig);
+      applyResolutionInputs(resolutionBounds);
 
       const btnRow = document.createElement('div');
       btnRow.style.cssText = 'display:flex; gap:8px; flex-wrap:wrap;';
 
       const saveBtn = document.createElement('button');
-      saveBtn.type = 'button'; saveBtn.textContent = L.saveSettings; saveBtn.style.cssText = primaryBtnCss();
+      saveBtn.type = 'button';
+      saveBtn.textContent = L.saveSettings;
+      saveBtn.style.cssText = primaryBtnCss();
 
       const runBtn = document.createElement('button');
-      runBtn.type = 'button'; runBtn.textContent = L.runNow; runBtn.style.cssText = baseBtnCss();
+      runBtn.type = 'button';
+      runBtn.textContent = L.runNow;
+      runBtn.style.cssText = baseBtnCss();
 
       btnRow.append(saveBtn, runBtn);
       adminOnlyWrap.append(btnRow, out);
 
-      (async () => {
-        try {
-          const headers = await getAuthHeaders();
-          const res = await fetch('/JMSFusion/config', { method: 'GET', headers });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const latest = await res.json();
-          const setChk = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
-          const setTxt = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = v; };
-
-          setChk('EnableTrailerDownloader', latest.enableTrailerDownloader ?? latest.EnableTrailerDownloader);
-          setChk('EnableTrailerUrlNfo',     latest.enableTrailerUrlNfo     ?? latest.EnableTrailerUrlNfo);
-          setChk('EnableThemeLink',         (latest.enableThemeLink ?? latest.EnableThemeLink ?? 0) == 1);
-
-          setTxt('JFBase',        latest.jfBase        ?? latest.JFBase);
-          setTxt('PreferredLang', latest.preferredLang ?? latest.PreferredLang);
-          setTxt('FallbackLang',  latest.fallbackLang  ?? latest.FallbackLang);
-
-          const sec = loadSecrets();
-          if (sec.jf)   { const el = document.getElementById('JFApiKey');   if (el) el.value = sec.jf; }
-          if (sec.tmdb) { const el = document.getElementById('TmdbApiKey'); if (el) el.value = sec.tmdb; }
-
-          const opSel = document.getElementById('OverwritePolicy');
-          if (opSel) opSel.value = mapEnumToWire(latest.overwritePolicy ?? latest.OverwritePolicy ?? 'Skip');
-          const modeSel = document.getElementById('ThemeLinkMode');
-          if (modeSel && (latest.themeLinkMode ?? latest.ThemeLinkMode)) modeSel.value = latest.themeLinkMode ?? latest.ThemeLinkMode;
-
-          exclusifyRefs(getChk(trailerDownloaderCheckbox), getChk(trailerUrlNfoCheckbox));
-        } catch {}
-      })();
-
       saveBtn.onclick = async () => {
         const oldText = saveBtn.textContent;
-        saveBtn.disabled = true; saveBtn.textContent = L.saving;
+        saveBtn.disabled = true;
+        saveBtn.textContent = L.saving;
         try {
           const a = getChk(trailerDownloaderCheckbox);
           const b = getChk(trailerUrlNfoCheckbox);
@@ -788,49 +1227,71 @@ export function createTrailersPanel(config, labels) {
 
           const payload = {};
           const pushIf = (k, v) => { if (v !== undefined && v !== null && v !== '') payload[k] = v; };
+          const selectedBounds = getSelectedResolutionBounds();
+          const fallbackJfBase = pickConfigValue(trailerConfig, 'jfBase', 'JFBase');
 
           pushIf('AllowScriptExecution', true);
           if (a) pushIf('EnableTrailerDownloader', !!a.checked);
-          if (b) pushIf('EnableTrailerUrlNfo',     !!b.checked);
+          if (b) pushIf('EnableTrailerUrlNfo', !!b.checked);
 
-          pushIf('JFBase',        document.getElementById('JFBase')?.value?.trim());
-          const jfVal   = document.getElementById('JFApiKey')?.value?.trim();
-          const tmdbVal = document.getElementById('TmdbApiKey')?.value?.trim();
-          pushIf('JFApiKey',   jfVal);
-          pushIf('TmdbApiKey', tmdbVal);
-
-          const sec = loadSecrets();
-          if (jfVal)   sec.jf   = jfVal;
-          if (tmdbVal) sec.tmdb = tmdbVal;
-          saveSecrets(sec);
-
+          pushIf('JFBase', syncJfBaseInput(fallbackJfBase) || getAutoJfBase());
           pushIf('PreferredLang', document.getElementById('PreferredLang')?.value?.trim());
-          pushIf('FallbackLang',  document.getElementById('FallbackLang')?.value?.trim());
+          pushIf('FallbackLang', document.getElementById('FallbackLang')?.value?.trim());
+          pushIf('MaxConcurrentDownloads', normalizeConcurrentDownloads(document.getElementById('MaxConcurrentDownloads')?.value));
+          pushIf('TrailerMinResolution', selectedBounds.min);
+          pushIf('TrailerMaxResolution', selectedBounds.max);
 
           const opWire = document.getElementById('OverwritePolicy')?.value || 'skip';
-          pushIf('OverwritePolicy', mapWireToEnum(opWire));
+          pushIf('OverwritePolicy', opWire);
           pushIf('EnableThemeLink', document.getElementById('EnableThemeLink')?.checked ? 1 : 0);
-          pushIf('ThemeLinkMode',   document.getElementById('ThemeLinkMode')?.value || 'symlink');
+          pushIf('ThemeLinkMode', document.getElementById('ThemeLinkMode')?.value || 'symlink');
 
           const headers = await getAuthHeaders();
           const res = await fetch('/JMSFusion/config', { method: 'POST', headers, body: JSON.stringify(payload) });
           const txt = await res.text();
-          let data = {}; try { data = JSON.parse(txt); } catch {}
+          let data = {};
+          try { data = JSON.parse(txt); } catch {}
           if (!res.ok) throw new Error(data?.error || data?.Message || `HTTP ${res.status}: ${txt}`);
+
+          const savedConfig = setTrailerConfig(data);
+          applyTopLevelConfig(savedConfig);
+          applyResolutionInputs(getResolutionBounds(savedConfig));
+          setCheckboxValue('EnableThemeLink', Number(pickConfigValue(savedConfig, 'enableThemeLink', 'EnableThemeLink') ?? 0) === 1);
+          setTextValue('PreferredLang', pickConfigValue(savedConfig, 'preferredLang', 'PreferredLang'));
+          setTextValue('FallbackLang', pickConfigValue(savedConfig, 'fallbackLang', 'FallbackLang'));
+          setTextValue('MaxConcurrentDownloads', normalizeConcurrentDownloads(pickConfigValue(savedConfig, 'maxConcurrentDownloads', 'MaxConcurrentDownloads')));
+          syncJfBaseInput(pickConfigValue(savedConfig, 'jfBase', 'JFBase'));
+
+          const overwriteSel = document.getElementById('OverwritePolicy');
+          if (overwriteSel) {
+            overwriteSel.value = mapEnumToWire(pickConfigValue(savedConfig, 'overwritePolicy', 'OverwritePolicy') || opWire);
+          }
+
+          const themeModeSel = document.getElementById('ThemeLinkMode');
+          if (themeModeSel) {
+            themeModeSel.value = pickConfigValue(savedConfig, 'themeLinkMode', 'ThemeLinkMode') || 'symlink';
+          }
+
           showNotification(L.settingsSaved, 2500, 'success');
         } catch (e) {
           showNotification(L.saveError + (e?.message || e), 3000, 'error');
         } finally {
-          saveBtn.disabled = false; saveBtn.textContent = oldText;
+          saveBtn.disabled = false;
+          saveBtn.textContent = oldText;
         }
       };
 
       runBtn.onclick = async () => {
         const attached = await connectIfRunning({ forceOpen: true });
-        if (attached) { showNotification(L.alreadyRunning, 2500, 'warning'); return; }
+        if (attached) {
+          showNotification(L.alreadyRunning, 2500, 'warning');
+          return;
+        }
+
         const body = collectRunBody();
         if (!body.runDownloader && !body.runUrlNfo) {
-          showNotification(L.atLeastOneOption, 2500, 'warning'); return;
+          showNotification(L.atLeastOneOption, 2500, 'warning');
+          return;
         }
         openConfirmUi();
       };
@@ -842,17 +1303,29 @@ export function createTrailersPanel(config, labels) {
   }
 
   function collectRunBody() {
+    const currentConfig = trailerConfig;
+    const selectedBounds = getSelectedResolutionBounds();
+    const autoJfBase = resolveAutoJfBase(currentConfig)
+      || document.getElementById('JFBase')?.value
+      || pickConfigValue(currentConfig, 'jfBase', 'JFBase');
+
     const body = {
       runDownloader: getChk(trailerDownloaderCheckbox)?.checked || false,
-      runUrlNfo:     getChk(trailerUrlNfoCheckbox)?.checked || false,
-      jfBase:        document.getElementById('JFBase')?.value || config?.JFBase,
-      jfApiKey:      document.getElementById('JFApiKey')?.value || undefined,
-      tmdbApiKey:    document.getElementById('TmdbApiKey')?.value || undefined,
-      preferredLang: document.getElementById('PreferredLang')?.value || config?.PreferredLang,
-      fallbackLang:  document.getElementById('FallbackLang')?.value || config?.FallbackLang,
-      overwritePolicy: document.getElementById('OverwritePolicy')?.value || 'skip',
-      enableThemeLink: document.getElementById('EnableThemeLink')?.checked ? 1 : 0,
-      themeLinkMode:   document.getElementById('ThemeLinkMode')?.value || 'symlink'
+      runUrlNfo: getChk(trailerUrlNfoCheckbox)?.checked || false,
+      jfBase: autoJfBase,
+      preferredLang: document.getElementById('PreferredLang')?.value || pickConfigValue(currentConfig, 'preferredLang', 'PreferredLang') || 'tr-TR',
+      fallbackLang: document.getElementById('FallbackLang')?.value || pickConfigValue(currentConfig, 'fallbackLang', 'FallbackLang') || 'en-US',
+      maxConcurrentDownloads: normalizeConcurrentDownloads(
+        document.getElementById('MaxConcurrentDownloads')?.value
+          ?? pickConfigValue(currentConfig, 'maxConcurrentDownloads', 'MaxConcurrentDownloads')
+      ),
+      trailerMinResolution: selectedBounds.min,
+      trailerMaxResolution: selectedBounds.max,
+      overwritePolicy: document.getElementById('OverwritePolicy')?.value || mapEnumToWire(pickConfigValue(currentConfig, 'overwritePolicy', 'OverwritePolicy') || 'Skip'),
+      enableThemeLink: document.getElementById('EnableThemeLink')?.checked
+        ? 1
+        : (Number(pickConfigValue(currentConfig, 'enableThemeLink', 'EnableThemeLink') ?? 0) === 1 ? 1 : 0),
+      themeLinkMode: document.getElementById('ThemeLinkMode')?.value || pickConfigValue(currentConfig, 'themeLinkMode', 'ThemeLinkMode') || 'symlink'
     };
     if (body.runDownloader && body.runUrlNfo) body.runUrlNfo = false;
     return body;
@@ -860,25 +1333,27 @@ export function createTrailersPanel(config, labels) {
 
   (async () => {
     try {
+      try {
+        await loadLatestTrailerConfig();
+      } catch {}
+
       isAdminUser = await checkUserIsAdmin();
       if (isAdminUser) {
+        setTopLevelReadOnly(false);
         adminOnlyWrap.style.display = '';
         attachAdminFields();
         await connectIfRunning({ forceOpen: false });
-        if (getJobFlag()) { openProgressUi(); startPolling(); }
+        if (getJobFlag()) {
+          openProgressUi();
+          startPolling();
+        }
       } else {
         nonAdminInfo.style.display = '';
-        const a = document.getElementById('EnableTrailerDownloader');
-        const b = document.getElementById('EnableTrailerUrlNfo');
-        if (a) { a.disabled = true; a.title = L.settingsReadOnly; }
-        if (b) { b.disabled = true; b.title = L.settingsReadOnly; }
+        setTopLevelReadOnly(true);
       }
     } catch {
       nonAdminInfo.style.display = '';
-      const a = document.getElementById('EnableTrailerDownloader');
-      const b = document.getElementById('EnableTrailerUrlNfo');
-      if (a) { a.disabled = true; a.title = L.settingsReadOnly; }
-      if (b) { b.disabled = true; b.title = L.settingsReadOnly; }
+      setTopLevelReadOnly(true);
     }
   })();
 

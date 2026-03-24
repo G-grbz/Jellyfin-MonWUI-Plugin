@@ -7,6 +7,7 @@ import { createButtons, createProviderContainer } from './buttons.js';
 import { withServer, withServerSrcset } from "./jfUrl.js";
 import { createTomatoIconElement } from "./customIcons.js";
 import { openDetailsModal } from "./detailsModal.js";
+import { getWatchlistButtonText } from "./watchlist.js";
 
 const S = (u) => withServer(u);
 const config = getConfig();
@@ -1109,9 +1110,7 @@ function openTrailerModal(trailerUrl, trailerName, itemName = '', itemType = '',
     favoriteIcon.style.color = initiallyFav ? "#FFC107" : "#fff";
 
     const favoriteText = document.createElement("span");
-    favoriteText.textContent = initiallyFav
-      ? config.languageLabels.favorilendi
-      : config.languageLabels.favori;
+    favoriteText.textContent = getWatchlistButtonText({ Type: itemType }, initiallyFav);
 
     favoriteContainer.addEventListener("click", async (e) => {
       e.stopPropagation();
@@ -1119,14 +1118,12 @@ function openTrailerModal(trailerUrl, trailerName, itemName = '', itemType = '',
 
       const newFavoriteStatus = !favoriteIcon.classList.contains("fa-solid");
       try {
-        await updateFavoriteCallback(itemId, newFavoriteStatus);
+        await updateFavoriteCallback(itemId, newFavoriteStatus, { item: { Id: itemId, Type: itemType, Name: itemName } });
         favoriteIcon.className = newFavoriteStatus
           ? "fa-solid fa-heart"
           : "fa-regular fa-heart";
         favoriteIcon.style.color = newFavoriteStatus ? "#FFC107" : "#fff";
-        favoriteText.textContent = newFavoriteStatus
-          ? config.languageLabels.favorilendi
-          : config.languageLabels.favori;
+        favoriteText.textContent = getWatchlistButtonText({ Type: itemType }, newFavoriteStatus);
         favoriteIcon.style.transform = "scale(1.2)";
         setTimeout(() => (favoriteIcon.style.transform = ""), 200);
       } catch (err) {

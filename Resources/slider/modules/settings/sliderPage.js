@@ -1,9 +1,7 @@
-import { getConfig } from "../config.js";
 import { createCheckbox, createImageTypeSelect, bindCheckboxKontrol, bindTersCheckboxKontrol } from "../settings.js";
-import { applySettings, applyRawConfig } from "./applySettings.js";
 import { getDefaultLanguage, getStoredLanguagePreference } from '../../language/index.js';
+import { fetchJmsPluginConfig, sanitizeTmdbApiKey } from "../jmsPluginConfig.js";
 
-const LS_TMDB_KEY   = 'jms_tmdb_api_key';
 const LS_TMDB_LANG  = 'jms_tmdb_reviews_lang';
 
 function lsGet(k, def = '') { try { return localStorage.getItem(k) ?? def; } catch { return def; } }
@@ -82,6 +80,7 @@ export function createSliderPanel(config, labels) {
 
   const tmdbWrap = document.createElement('div');
   tmdbWrap.className = 'fsetting-item';
+  const canEditGlobalTmdb = config?.currentUserIsAdmin === true;
 
   const tmdbTitle = document.createElement('h3');
   tmdbTitle.textContent = labels.tmdbReviewsTitle || 'TMDb Yorumları';
@@ -95,12 +94,15 @@ export function createSliderPanel(config, labels) {
     const i = document.createElement('input');
     i.type = 'password';
     i.id = 'tmdbKeyForReviews';
+    i.name = 'TmdbApiKey';
     i.placeholder = '••••••••';
-    i.value = lsGet(LS_TMDB_KEY, '');
+    i.value = sanitizeTmdbApiKey(config?.TmdbApiKey || config?.tmdbApiKey || '');
+    i.disabled = !canEditGlobalTmdb;
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.textContent = (labels.showSecret || 'Göster');
     btn.style.cssText = 'margin-left:8px; padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.15); background:transparent; color:inherit; cursor:pointer;';
+    btn.disabled = !canEditGlobalTmdb;
     btn.onclick = () => {
       const hidden = i.type === 'password';
       i.type = hidden ? 'text' : 'password';
@@ -113,11 +115,11 @@ export function createSliderPanel(config, labels) {
 
     const hint = document.createElement('div');
     hint.className = 'description-text';
-    hint.textContent = labels.tmdbKeyHint || 'Bu anahtar tarayıcında saklanır (localStorage).';
+    hint.textContent = canEditGlobalTmdb
+      ? (labels.tmdbKeyHint || 'Bu anahtar Jellyfin genel ayarına kaydedilir ve trailer/detailsModal tarafından ortak kullanılır.')
+      : (labels.settingsReadOnly || 'Bu alanı sadece yönetici değiştirebilir.');
 
     w.append(l, row, hint);
-
-    i.addEventListener('change', () => lsSet(LS_TMDB_KEY, i.value.trim()));
     return w;
   })();
 
@@ -136,6 +138,14 @@ export function createSliderPanel(config, labels) {
   );
   tmdbLangSelect.sel.addEventListener('change', () => lsSet(LS_TMDB_LANG, tmdbLangSelect.sel.value));
   tmdbWrap.append(tmdbTitle, tmdbKeyField, tmdbLangSelect.wrap);
+
+  (async () => {
+    try {
+      const latest = await fetchJmsPluginConfig();
+      const input = tmdbKeyField.querySelector('#tmdbKeyForReviews');
+      if (input) input.value = sanitizeTmdbApiKey(latest?.TmdbApiKey ?? latest?.tmdbApiKey);
+    } catch {}
+  })();
 
   const cssDiv = document.createElement('div');
   cssDiv.className = 'fsetting-item';

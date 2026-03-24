@@ -5,6 +5,16 @@ import { getTomatoIconHtml } from "./customIcons.js";
 const HOST_ID = "jms-osd-header-ratings-v4";
 const SESSION_POLL_INTERVAL_MS = 10_000;
 
+function getCommunityRatingValue(communityRating) {
+  const raw = Array.isArray(communityRating)
+    ? communityRating.reduce((sum, value) => sum + Number(value || 0), 0) /
+      Math.max(1, communityRating.length)
+    : Number(communityRating);
+
+  if (!Number.isFinite(raw) || raw <= 0) return null;
+  return Math.round(raw * 10) / 10;
+}
+
 function getOsdHeaderRatingsState(cfg = {}) {
   const pauseCfg = cfg?.pauseOverlay || {};
   const hasPauseKey = (key) =>
@@ -151,14 +161,8 @@ function pickBestNowPlayingSession(sessions, userId) {
 }
 
 function buildStarRatingHtml(communityRating) {
-  const raw = Array.isArray(communityRating)
-    ? communityRating.reduce((a, b) => a + Number(b || 0), 0) /
-      Math.max(1, communityRating.length)
-    : Number(communityRating);
-
-  if (!Number.isFinite(raw) || raw <= 0) return "";
-
-  const ratingValue = Math.round(raw * 10) / 10;
+  const ratingValue = getCommunityRatingValue(communityRating);
+  if (ratingValue == null) return "";
   const ratingPercentage = ratingValue * 10;
 
   return `

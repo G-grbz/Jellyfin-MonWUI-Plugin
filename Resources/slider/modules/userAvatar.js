@@ -96,9 +96,61 @@ function getValidParamsForStyle(style) {
        if (s?.accessToken) return s;
      } catch {}
      await new Promise(r => setTimeout(r, 250));
-   }
-   return null;
  }
+ return null;
+ }
+
+function normalizeAvatarNumber(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function resolveAvatarRenderOptions(options = {}) {
+  const config = getConfig() || {};
+  const width = normalizeAvatarNumber(
+    options.width ?? options.size,
+    normalizeAvatarNumber(config.avatarWidth, 18)
+  );
+  const height = normalizeAvatarNumber(
+    options.height ?? options.size,
+    normalizeAvatarNumber(config.avatarHeight, 18)
+  );
+  const fitSlot = options.fitSlot === true;
+  const scale = normalizeAvatarNumber(
+    options.scale,
+    fitSlot ? 1 : normalizeAvatarNumber(config.avatarScale, 1)
+  );
+  const fontSize = normalizeAvatarNumber(
+    options.fontSize,
+    fitSlot
+      ? Math.max(12, Math.round(Math.min(width, height) * 0.42))
+      : normalizeAvatarNumber(config.avatarFontSize, 15)
+  );
+
+  return {
+    config,
+    width,
+    height,
+    widthCss: fitSlot ? "100%" : `${width}px`,
+    heightCss: fitSlot ? "100%" : `${height}px`,
+    scale,
+    fontSize,
+    fitSlot,
+    animate: options.animate !== false,
+    fixedPosition:
+      options.fixedPosition === true ||
+      (options.fixedPosition == null && !fitSlot && !!config.dicebearPosition),
+  };
+}
+
+export async function createConfiguredUserAvatar(user, options = {}) {
+  const config = getConfig?.() || {};
+  if (!user || config.createAvatar === false) return null;
+
+  return config.avatarStyle === 'dicebear' && config.dicebearStyle
+    ? await createDicebearAvatar(user, options)
+    : createInitialsAvatar(user, options);
+}
 
 
 export async function updateHeaderUserAvatar() {
@@ -196,13 +248,12 @@ async function createAvatar(user) {
   return avatar;
 }
 
-async function createDicebearAvatar(user) {
+async function createDicebearAvatar(user, options = {}) {
   try {
-    const config = getConfig();
+    const { config, width, height, widthCss, heightCss, scale, fixedPosition } = resolveAvatarRenderOptions(options);
     const style = config.dicebearStyle || 'initials';
     const seed = encodeURIComponent(user.Name || user.Id + Date.now());
-    const size = Math.max(config.avatarWidth, config.avatarHeight, 64);
-    const scale = parseFloat(getConfig().avatarScale) || 1;
+    const size = Math.max(width, height, 64);
 
     const params = new URLSearchParams();
     params.append('seed', seed);
@@ -241,12 +292,16 @@ async function createDicebearAvatar(user) {
     }
 
     const svgElement = svgDoc.documentElement;
-    svgElement.setAttribute('width', `${config.avatarWidth}px`);
-    svgElement.setAttribute('height', `${config.avatarHeight}px`);
+    svgElement.setAttribute('width', widthCss);
+    svgElement.setAttribute('height', heightCss);
+    svgElement.style.width = widthCss;
+    svgElement.style.height = heightCss;
+    svgElement.style.display = 'block';
     svgElement.style.transformOrigin = 'center';
     svgElement.style.borderRadius = `${config.dicebearRadius || 50}%`;
     svgElement.style.transform = `scale(${scale})`;
-    svgElement.style.position = config.dicebearPosition ? 'fixed' : 'relative';
+    svgElement.style.position = fixedPosition ? 'fixed' : 'relative';
+    svgElement.style.pointerEvents = 'none';
     svgElement.setAttribute('role','img');
     svgElement.setAttribute('aria-label', (user?.Name || 'User') + ' avatar');
 
@@ -262,11 +317,11 @@ async function createDicebearAvatar(user) {
     return svgElement;
   } catch (error) {
     console.error('DiceBear avatar oluşturma hatası, baş harflerle avatar oluşturuluyor:', error);
-    return createInitialsAvatar(user);
+    return createInitialsAvatar(user, options);
   }
 }
 
-function createInitialsAvatar(user) {
+function createInitialsAvatar(user, options = {}) {
   const initials = getInitials(user.Name);
   const initialsDiv = document.createElement("div");
   initialsDiv.textContent = initials;
@@ -274,28 +329,28 @@ function createInitialsAvatar(user) {
   initialsDiv.setAttribute('role','img');
   initialsDiv.setAttribute('aria-label', (user?.Name || 'User') + ' avatar');
 
-  const config = getConfig();
-  const scale = config.avatarScale || 1;
+  const { config, widthCss, heightCss, scale, fontSize, animate } = resolveAvatarRenderOptions(options);
   const avatarColor = getAvatarColor(user.Id);
 
   const style = {
-    width: `${config.avatarWidth}px`,
-    height: `${config.avatarHeight}px`,
+    width: widthCss,
+    height: heightCss,
     transform: `scale(${scale})`,
     transformOrigin: 'center',
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     fontWeight: "bold",
-    fontSize: `${config.avatarFontSize}px`,
+    fontSize: `${fontSize}px`,
     fontFamily: config.avatarFontFamily,
     pointerEvents: "none",
     textShadow: config.avatarTextShadow,
     fontFeatureSettings: '"kern" 1, "liga" 1',
     fontKerning: 'normal',
     textRendering: 'optimizeLegibility',
-    opacity: '0',
-    transition: 'opacity 0.3s ease'
+    lineHeight: '1',
+    opacity: animate ? '0' : '1',
+    transition: animate ? 'opacity 0.3s ease' : 'none'
   };
 
   if (config.avatarColorMethod === 'gradient') {

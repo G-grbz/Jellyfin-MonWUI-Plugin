@@ -1,9 +1,10 @@
-import { getSessionInfo, getEmbyHeaders, makeApiRequest } from "./api.js";
+import { getSessionInfo, getEmbyHeaders, makeApiRequest, updateFavoriteStatus } from "./api.js";
 import { getConfig } from './config.js';
 import { getLanguageLabels } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";
 import { waitForAnyVisible } from "../main.js";
 import { withServer } from "./jfUrl.js";
+import { ensureWatchlistLoaded, getCachedWatchlistMembership, getWatchlistButtonText } from "./watchlist.js";
 
 const config = getConfig();
 const MANUAL_IDS = {};
@@ -237,9 +238,11 @@ function setPopoverContent(studioName, items) {
     const posterUrl = buildPosterUrl(item, 300, 95);
     let ratingVal = item.CommunityRating || item.CriticRating;
     let rating = (typeof ratingVal === "number") ? ratingVal.toFixed(1) : (config.languageLabels.noRating || 'N/A');
-    let isFavorite = !!(item.UserData?.IsFavorite);
-    const favAddText = config.languageLabels.addToFavorites || 'Favorilere ekle';
-    const favRemoveText = config.languageLabels.removeFromFavorites || 'Favorilerden çıkar';
+    let isFavorite = getCachedWatchlistMembership(item.Id, item.UserData?.IsFavorite);
+    item.UserData = item.UserData || {};
+    item.UserData.IsFavorite = isFavorite;
+    const favAddText = getWatchlistButtonText(item, false);
+    const favRemoveText = getWatchlistButtonText(item, true);
     itemEl.innerHTML = `
       <img class="hub-preview-poster" src="${posterUrl || withServer('/css/images/placeholder.png')}" alt="${item.Name}" loading="lazy">
       <div class="hub-preview-info">
@@ -260,7 +263,7 @@ function setPopoverContent(studioName, items) {
       if (favoriteBtn.__busy) return;
       favoriteBtn.__busy = true;
       const next = !isFavorite;
-      const ok = await toggleFavorite(item.Id, next, favoriteBtn);
+      const ok = await toggleFavorite(item.Id, next, favoriteBtn, item);
       favoriteBtn.__busy = false;
       if (ok) {
         isFavorite = next;
@@ -271,6 +274,15 @@ function setPopoverContent(studioName, items) {
         favoriteBtn.setAttribute('aria-label', isFavorite ? favRemoveText : favAddText);
       }
     });
+
+    ensureWatchlistLoaded().then(() => {
+      const synced = getCachedWatchlistMembership(item.Id, isFavorite);
+      isFavorite = synced;
+      item.UserData.IsFavorite = synced;
+      favoriteBtn.classList.toggle('favorited', synced);
+      favoriteBtn.innerHTML = synced ? '❤️' : '🤍';
+      favoriteBtn.setAttribute('aria-label', synced ? favRemoveText : favAddText);
+    }).catch(() => {});
 
     itemEl.addEventListener('click', (e) => {
       if (!e.target.closest('.favorite-heart')) {
@@ -286,35 +298,23 @@ function setPopoverContent(studioName, items) {
   return pop;
 }
 
-async function toggleFavorite(itemId, isFavorite, buttonElement) {
-  const { userId } = getSessionInfo();
-  const favAddText = config.languageLabels.addToFavorites || 'Favorilere ekle';
-  const favRemoveText = config.languageLabels.removeFromFavorites || 'Favorilerden çıkar';
+async function toggleFavorite(itemId, isFavorite, buttonElement, item) {
+  const favAddText = getWatchlistButtonText(item, false);
+  const favRemoveText = getWatchlistButtonText(item, true);
   try {
-    const response = await fetch(withServer(`/Users/${userId}/FavoriteItems/${itemId}`), {
-      method: isFavorite ? 'POST' : 'DELETE',
-      headers: getEmbyHeaders({ 'Content-Type': 'application/json', 'Accept': 'application/json' }),
-      credentials: 'same-origin'
-    });
-    if (response.ok) {
-      if (isFavorite) {
-        buttonElement.innerHTML = '❤️';
-        buttonElement.classList.add('favorited');
-        buttonElement.setAttribute('aria-label', favRemoveText);
-      } else {
-        buttonElement.innerHTML = '🤍';
-        buttonElement.classList.remove('favorited');
-        buttonElement.setAttribute('aria-label', favAddText);
-      }
-      buttonElement.style.transform = 'scale(1.2)';
-      setTimeout(() => { buttonElement.style.transform = 'scale(1)'; }, 200);
-      return true;
+    await updateFavoriteStatus(itemId, isFavorite, { item });
+    if (isFavorite) {
+      buttonElement.innerHTML = '❤️';
+      buttonElement.classList.add('favorited');
+      buttonElement.setAttribute('aria-label', favRemoveText);
     } else {
-      console.error('Favori durumu değiştirilemedi:', response.status);
-      buttonElement.style.animation = 'shake 0.5s';
-      setTimeout(() => { buttonElement.style.animation = ''; }, 500);
-      return false;
+      buttonElement.innerHTML = '🤍';
+      buttonElement.classList.remove('favorited');
+      buttonElement.setAttribute('aria-label', favAddText);
     }
+    buttonElement.style.transform = 'scale(1.2)';
+    setTimeout(() => { buttonElement.style.transform = 'scale(1)'; }, 200);
+    return true;
   } catch (error) {
     console.error('Favori işlemi hatası:', error);
     buttonElement.style.animation = 'shake 0.5s';

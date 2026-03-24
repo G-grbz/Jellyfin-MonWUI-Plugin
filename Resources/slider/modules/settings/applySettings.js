@@ -5,6 +5,7 @@ import { createCheckbox, createImageTypeSelect, bindCheckboxKontrol, bindTersChe
 import { updateHeaderUserAvatar, updateAvatarStyles, clearAvatarCache } from "../userAvatar.js";
 import { showNotification } from "../player/ui/notification.js";
 import { initOsdHeaderRatings } from "../osdHeaderRatings.js";
+import { updateJmsPluginConfig } from "../jmsPluginConfig.js";
 
 const _intOr = (v, def) => {
   const n = parseInt(v, 10);
@@ -452,6 +453,8 @@ const USER_ONLY_KEYS = [
             watchBackgroundImageType: formData.get('watchBackgroundImageType'),
             showFavoriteButton: formData.get('showFavoriteButton') === 'on',
             favoriteBackgroundImageType: formData.get('favoriteBackgroundImageType'),
+            watchlistTabsSliderEnabled: formData.get('watchlistTabsSliderEnabled') === 'on',
+            watchlistAutoRemovePlayed: formData.get('watchlistAutoRemovePlayed') === 'on',
             showPlayedButton: formData.get('showPlayedButton') === 'on',
             playedBackgroundImageType: formData.get('playedBackgroundImageType'),
             buttonBackgroundBlur: parseInt(formData.get('buttonBackgroundBlur')),
@@ -664,7 +667,17 @@ const USER_ONLY_KEYS = [
             ? pick(updatedConfig, USER_ONLY_KEYS)
             : updatedConfig;
 
+        const hasTmdbApiKeyField = formData.has('TmdbApiKey');
+        const tmdbApiKey = String(formData.get('TmdbApiKey') || '').trim();
+
         updateConfig(toSave);
+        if (isAdmin && hasTmdbApiKeyField) {
+          await updateJmsPluginConfig({ TmdbApiKey: tmdbApiKey });
+        }
+        try {
+          const watchlistModule = await import("../watchlist.js");
+          watchlistModule?.refreshWatchlistUi?.();
+        } catch {}
         try { window.__jmsOsdHeaderRatings?.destroy?.(); } catch {}
         try { initOsdHeaderRatings(); } catch {}
         localStorage.removeItem('gradientOverlayImageType');

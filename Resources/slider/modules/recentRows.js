@@ -7,7 +7,13 @@ import { createTrailerIframe } from "./utils.js";
 import { setupScroller } from "./personalRecommendations.js";
 import { openDetailsModal } from "./detailsModal.js";
 import { openDirRowsDB, makeScope, upsertItemsBatchIdle, getMeta, setMeta, getItemsByIds, } from "./recentRowsDb.js";
-import { withServer, withServerSrcset } from "./jfUrl.js";
+import {
+  withServer,
+  withServerSrcset,
+  isKnownMissingImage,
+  markImageMissing,
+  clearMissingImage
+} from "./jfUrl.js";
 import { faIconHtml } from "./faIcons.js";
 
 const config = getConfig();
@@ -64,6 +70,8 @@ const EFFECTIVE_OTHER_EP_CNT       = IS_MOBILE ? Math.min(OTHER_EP_CARD_COUNT, 8
 const HOVER_MODE = (config.recentRowsHoverPreviewMode === "studioMini" || config.recentRowsHoverPreviewMode === "modal")
   ? config.recentRowsHoverPreviewMode
   : "inherit";
+const RECENT_ROW_RENDER_CONCURRENCY = 2;
+const IMAGE_RETRY_LIMITS = { lq: 2, hi: 2 };
 
 const STATE = {
     started: false,
@@ -78,6 +86,8 @@ const STATE = {
     db: null,
     scope: null,
 };
+
+const __albumPreviewTrackCache = new Map();
 
 let __wrapInserted = false;
 let __recentMountRetryTimer = null;
@@ -114,10 +124,20 @@ async function readCachedList(kind, type, ttlMs) {
   if (!STATE.db || !STATE.scope) return { ids: [], fresh: false };
   try {
     const rec = await getMeta(STATE.db, metaKey(kind, type) + "|" + STATE.scope);
-    const ids = Array.isArray(rec?.ids) ? rec.ids.filter(Boolean) : [];
+    const ids = Array.isArray(rec?.ids) ? Array.from(new Set(rec.ids.filter(Boolean))) : [];
     const updatedAt = Number(rec?.updatedAt) || 0;
     const fresh = (Date.now() - updatedAt) <= ttlMs;
-    return { ids, fresh };
+
+    let liveIds = ids;
+    try {
+      const reconciled = await filterExistingCachedIds(ids);
+      liveIds = reconciled.ids;
+      if (reconciled.validated && !sameIdList(ids, liveIds)) {
+        await writeCachedList(kind, type, liveIds);
+      }
+    } catch {}
+
+    return { ids: liveIds, fresh };
   } catch { return { ids: [], fresh: false }; }
 }
 
@@ -129,6 +149,41 @@ async function writeCachedList(kind, type, ids) {
       updatedAt: Date.now(),
     });
   } catch {}
+}
+
+async function filterExistingCachedIds(ids) {
+  const clean = Array.isArray(ids)
+    ? Array.from(new Set(ids.map((x) => String(x || "").trim()).filter(Boolean)))
+    : [];
+  if (!clean.length || !STATE.userId) return { ids: clean, validated: false };
+
+  const out = new Set();
+  const failed = new Set();
+  let validated = false;
+  const chunkSize = 80;
+
+  for (let i = 0; i < clean.length; i += chunkSize) {
+    const chunk = clean.slice(i, i + chunkSize);
+    const url =
+      `/Users/${encodeURIComponent(STATE.userId)}/Items?` +
+      `Ids=${encodeURIComponent(chunk.join(","))}&Fields=Id`;
+    try {
+      const data = await makeApiRequest(url);
+      const items = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data) ? data : []);
+      validated = true;
+      for (const it of items) {
+        if (it?.Id) out.add(String(it.Id));
+      }
+    } catch {
+      for (const id of chunk) failed.add(id);
+    }
+  }
+
+  if (!validated) return { ids: clean, validated: false };
+  return {
+    ids: clean.filter((id) => out.has(id) || failed.has(id)),
+    validated: true,
+  };
 }
 
 function sameIdList(a, b) {
@@ -148,7 +203,16 @@ const COMMON_FIELDS = [
   "Type",
   "PrimaryImageAspectRatio",
   "ImageTags",
+  "PrimaryImageTag",
+  "ThumbImageTag",
   "BackdropImageTags",
+  "BackdropImageTag",
+  "LogoImageTag",
+  "AlbumId",
+  "AlbumPrimaryImageTag",
+  "ParentBackdropItemId",
+  "ParentBackdropImageTags",
+  "SeriesBackdropImageTag",
   "CommunityRating",
   "Genres",
   "OfficialRating",
@@ -200,22 +264,67 @@ function shouldPreferTaglessImages(item) {
   return item?.__preferTaglessImages === true;
 }
 
-function buildPosterUrl(item, height = 540, quality = 72, { omitTag = false } = {}) {
-  if (!item?.Id) return null;
-  const tag = item?.ImageTags?.Primary || item?.PrimaryImageTag || null;
-  if (!tag) return null;
+function getPrimaryImageCandidate(item) {
+  const itemId = item?.Id || item?.AlbumId || null;
+  const tag =
+    item?.ImageTags?.Primary ||
+    item?.PrimaryImageTag ||
+    item?.AlbumPrimaryImageTag ||
+    null;
+  if (!itemId || !tag) return null;
+  return { itemId, imageType: "Primary", tag };
+}
+
+function getThumbImageCandidate(item) {
+  const itemId = item?.Id || null;
+  const tag = item?.ImageTags?.Thumb || item?.ThumbImageTag || null;
+  if (!itemId || !tag) return null;
+  return { itemId, imageType: "Thumb", tag, aspectRatio: 16 / 9 };
+}
+
+function getBackdropImageCandidate(item) {
+  const itemId = item?.ParentBackdropItemId || item?.Id || null;
+  const tag =
+    (Array.isArray(item?.ParentBackdropImageTags) && item.ParentBackdropImageTags[0]) ||
+    (Array.isArray(item?.BackdropImageTags) && item.BackdropImageTags[0]) ||
+    item?.SeriesBackdropImageTag ||
+    item?.BackdropImageTag ||
+    item?.ImageTags?.Backdrop ||
+    null;
+  if (!itemId || !tag) return null;
+  return { itemId, imageType: "Backdrop", tag, aspectRatio: 16 / 9 };
+}
+
+function getPosterLikeImageCandidate(item) {
+  return (
+    getPrimaryImageCandidate(item) ||
+    getThumbImageCandidate(item) ||
+    getBackdropImageCandidate(item) ||
+    null
+  );
+}
+
+function buildCandidateImageUrl(item, candidate, height = 540, quality = 72, { omitTag = false } = {}) {
+  if (!candidate?.itemId || !candidate?.imageType) return null;
   const skipTag = omitTag || shouldPreferTaglessImages(item);
 
-  const base = `/Items/${item.Id}/Images/Primary`;
   const parts = [];
-  if (!skipTag) parts.push(`tag=${encodeURIComponent(tag)}`);
-  parts.push(`maxHeight=${height}`);
+  if (!skipTag && candidate.tag) parts.push(`tag=${encodeURIComponent(candidate.tag)}`);
+  if (candidate.imageType === "Primary") {
+    parts.push(`maxHeight=${height}`);
+  } else {
+    const aspectRatio = Number(candidate.aspectRatio) || (16 / 9);
+    parts.push(`maxWidth=${Math.max(96, Math.round(height * aspectRatio))}`);
+  }
   parts.push(`quality=${quality}`);
   parts.push(`EnableImageEnhancers=false`);
-  const qs = `?${parts.join("&")}`;
-  const path = base + qs;
 
-  return withServer(path);
+  return withServer(`/Items/${candidate.itemId}/Images/${candidate.imageType}?${parts.join("&")}`);
+}
+
+function buildPosterUrl(item, height = 540, quality = 72, { omitTag = false } = {}) {
+  const candidate = getPosterLikeImageCandidate(item);
+  return buildCandidateImageUrl(item, candidate, height, quality, { omitTag });
 }
 
 function buildPosterUrlHQ(item){ return buildPosterUrl(item, 540, 72); }
@@ -261,7 +370,7 @@ function promoteTaglessImageData(data) {
   return data;
 }
 
-function markImageSettled(img, src) {
+function markImageSettled(img, src, { disableRecovery = false } = {}) {
   if (!img) return;
   try { img.removeAttribute("srcset"); } catch {}
   if (src) {
@@ -272,6 +381,21 @@ function markImageSettled(img, src) {
   img.classList.add("__hydrated");
   img.classList.remove("is-lqip");
   img.__hydrated = true;
+  img.__disableRecovery = disableRecovery === true;
+  if (disableRecovery) {
+    try { __imgIO.unobserve(img); } catch {}
+  }
+}
+
+function hasKnownMissingImage(data) {
+  return !!(isKnownMissingImage(data?.lqSrc) || isKnownMissingImage(data?.hqSrc));
+}
+
+function markImageTerminalFailure(img, data, fallbackSrc = PLACEHOLDER_URL) {
+  const brokenUrl = data?.lqSrc || data?.hqSrc || img?.currentSrc || img?.src || "";
+  if (brokenUrl) markImageMissing(brokenUrl);
+  markImageSettled(img, fallbackSrc, { disableRecovery: true });
+  img.__disableHi = true;
 }
 
 function buildLogoUrl(item, width = 220, quality = 80) {
@@ -300,18 +424,12 @@ function buildLogoUrl(item, width = 220, quality = 80) {
 
 function buildBackdropUrl(item, width = 1920, quality = 80) {
   if (!item) return null;
-
-  const tag =
-    (Array.isArray(item.BackdropImageTags) && item.BackdropImageTags[0]) ||
-    item.BackdropImageTag ||
-    (item.ImageTags && item.ImageTags.Backdrop);
-
-  if (!item?.Id) return null;
-  if (!tag) return null;
+  const candidate = getBackdropImageCandidate(item);
+  if (!candidate) return null;
   const omitTag = shouldPreferTaglessImages(item);
-  const base = `/Items/${item.Id}/Images/Backdrop`;
+  const base = `/Items/${candidate.itemId}/Images/Backdrop`;
   const parts = [];
-  if (!omitTag) parts.push(`tag=${encodeURIComponent(tag)}`);
+  if (!omitTag && candidate.tag) parts.push(`tag=${encodeURIComponent(candidate.tag)}`);
   parts.push(`maxWidth=${width}`);
   parts.push(`quality=${quality}`);
   parts.push(`EnableImageEnhancers=false`);
@@ -321,6 +439,7 @@ function buildBackdropUrl(item, width = 1920, quality = 80) {
   return withServer(path);
 }
 
+function buildBackdropUrlLQ(item){ return buildBackdropUrl(item, 420, 25); }
 function buildBackdropUrlHQ(item){ return buildBackdropUrl(item, 1920, 80); }
 
 function withCacheBust(url) {
@@ -329,16 +448,26 @@ function withCacheBust(url) {
   return `${url}${sep}cb=${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
 }
 
+const __rIC = window.requestIdleCallback || ((fn) => setTimeout(fn, 0));
+
 function scheduleImgRetry(img, phase, delayMs) {
   if (!img || !img.isConnected) return false;
   const st = (img.__retryState ||= { lq: { tries: 0 }, hi: { tries: 0 } });
   const slot = st[phase] || (st[phase] = { tries: 0 });
-  slot.tries = Math.min((slot.tries || 0) + 1, 64);
   clearTimeout(slot.tid);
+  if (img.__disableRecovery) return false;
+
+  const limit = IMAGE_RETRY_LIMITS[phase] || 2;
+  if ((slot.tries || 0) >= limit) return false;
+  slot.tries = (slot.tries || 0) + 1;
 
   slot.tid = setTimeout(() => {
     if (!img || !img.isConnected) return;
     const data = img.__data || {};
+    if (img.__disableRecovery || hasKnownMissingImage(data)) {
+      markImageTerminalFailure(img, data, data.fallback || PLACEHOLDER_URL);
+      return;
+    }
     img.__fallbackRecoveryActive = false;
 
     try { img.removeAttribute("srcset"); } catch {}
@@ -349,7 +478,7 @@ function scheduleImgRetry(img, phase, delayMs) {
       img.__phase = "hi";
       img.__hiRequested = true;
       img.src = withCacheBust(data.hqSrc);
-      requestIdleCallback(() => {
+      __rIC(() => {
         if (data.hqSrcset) img.srcset = data.hqSrcset;
       });
       return;
@@ -364,25 +493,18 @@ function scheduleImgRetry(img, phase, delayMs) {
 }
 
 function buildPosterSrcSet(item) {
+  const primaryCandidate = getPrimaryImageCandidate(item);
+  if (!primaryCandidate) return "";
+
   const hs = [240, 360, 540];
   const q  = 50;
   const ar = Number(item.PrimaryImageAspectRatio) || 0.6667;
-  if (!item?.Id) return "";
-  const tag0 = item?.ImageTags?.Primary || item?.PrimaryImageTag || null;
-  if (!tag0) return "";
   const omitTag = shouldPreferTaglessImages(item);
 
   const raw = hs
     .map(h => {
-      const base = `/Items/${item.Id}/Images/Primary`;
-      const parts = [];
-      if (!omitTag) parts.push(`tag=${encodeURIComponent(tag0)}`);
-      parts.push(`maxHeight=${h}`);
-      parts.push(`quality=${q}`);
-      parts.push(`EnableImageEnhancers=false`);
-      const qs = `?${parts.join("&")}`;
-      const path = base + qs;
-      return `${path} ${Math.round(h * ar)}w`;
+      const url = buildCandidateImageUrl(item, primaryCandidate, h, q, { omitTag });
+      return url ? `${url} ${Math.round(h * ar)}w` : "";
     })
     .filter(Boolean)
     .join(", ");
@@ -397,12 +519,15 @@ if (!__imgIO) {
       if (!ent.isIntersecting) continue;
       const img = ent.target;
       const data = img.__data || {};
+      if (img.__disableRecovery === true || img.__disableHi === true || hasKnownMissingImage(data)) {
+        continue;
+      }
       if (!img.__hiRequested) {
         img.__hiRequested = true;
         img.__phase = "hi";
         if (data.hqSrc) {
           img.src = data.hqSrc;
-          requestIdleCallback(() => {
+          __rIC(() => {
             if (img.__hiRequested && data.hqSrcset) img.srcset = data.hqSrcset;
           });
         }
@@ -430,12 +555,12 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
     delete img.__fallbackState;
     try { img.removeAttribute("srcset"); } catch {}
     const staticSrc = hqSrc || lqSrc || fb;
-    if (img.__mobileStaticSrc === staticSrc && img.src === staticSrc) return;
+    const alreadyStatic = (img.__mobileStaticSrc === staticSrc && img.src === staticSrc);
     try { img.loading = "lazy"; } catch {}
-    if (img.src !== staticSrc) img.src = staticSrc;
+    if (!alreadyStatic && img.src !== staticSrc) img.src = staticSrc;
     img.__mobileStaticSrc = staticSrc;
     img.classList.remove("is-lqip");
-    img.classList.remove("__hydrated");
+    img.classList.add("__hydrated");
     img.__phase = "static";
     img.__hiRequested = true;
     img.__disableHi = true;
@@ -447,18 +572,30 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
   const hqSrcNoTag = toNoTagUrl(hqSrc);
   const hqSrcsetNoTag = toNoTagSrcset(hqSrcset);
 
+  try { __imgIO.unobserve(img); } catch {}
+  try { if (img.__onErr) img.removeEventListener("error", img.__onErr); } catch {}
+  try { if (img.__onLoad) img.removeEventListener("load",  img.__onLoad); } catch {}
+
   img.__data = { lqSrc, hqSrc, hqSrcset, lqSrcNoTag, hqSrcNoTag, hqSrcsetNoTag, fallback: fb };
   img.__phase = "lq";
   img.__hiRequested = false;
   img.__fallbackState = { lqNoTagTried: false, hiNoTagTried: false };
+  delete img.__disableRecovery;
+  delete img.__disableHi;
 
   try {
     img.removeAttribute("srcset");
-    img.loading = "lazy";
+    if (img.getAttribute("loading") !== "eager") img.loading = "lazy";
   } catch {}
+
+  if (hasKnownMissingImage(img.__data)) {
+    markImageSettled(img, fb, { disableRecovery: true });
+    return;
+  }
 
   img.src = lqSrc || fb;
   img.classList.add("is-lqip");
+  try { img.classList.remove("__hydrated"); } catch {}
   img.__hydrated = false;
 
   const onError = () => {
@@ -476,7 +613,7 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
       img.__phase = "hi";
       img.__hiRequested = true;
       img.src = withCacheBust(data.hqSrc);
-      requestIdleCallback(() => {
+      __rIC(() => {
         if (img.__hiRequested && data.hqSrcset) img.srcset = data.hqSrcset;
       });
       return;
@@ -489,8 +626,9 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
     const delay = 800 * Math.min(6, (img.__retryState?.hi?.tries || 0) + 1);
     const queued = scheduleImgRetry(img, "hi", delay);
     if (!queued) {
-      const settleSrc = img.currentSrc || img.src || data.lqSrc || fb;
-      markImageSettled(img, settleSrc);
+      const settleSrc = data.lqSrc || img.currentSrc || img.src || fb;
+      img.__disableHi = true;
+      markImageSettled(img, settleSrc, { disableRecovery: true });
     }
   } else {
     if (!st.lqNoTagTried && data.lqSrcNoTag && data.lqSrcNoTag !== data.lqSrc) {
@@ -506,12 +644,13 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
     const delay = 600 * Math.min(5, (img.__retryState?.lq?.tries || 0) + 1);
     const queued = scheduleImgRetry(img, "lq", delay);
     if (!queued) {
-      markImageSettled(img, fb);
+      markImageTerminalFailure(img, data, fb);
     }
   }
 };
 
 const onLoad = () => {
+  const data = img.__data || {};
   const fallbackRecoveryActive = !!img.__fallbackRecoveryActive;
 
   if (img.__retryState && !fallbackRecoveryActive) {
@@ -525,6 +664,13 @@ const onLoad = () => {
     img.classList.add("__hydrated");
     img.classList.remove("is-lqip");
     img.__hydrated = true;
+  }
+
+  const loadedSrc = img.currentSrc || img.src || "";
+  if (loadedSrc && loadedSrc !== fb) {
+    clearMissingImage(loadedSrc);
+    clearMissingImage(data.lqSrc);
+    clearMissingImage(data.hqSrc);
   }
 
   if (!fallbackRecoveryActive) {
@@ -554,17 +700,19 @@ function unobserveImage(img) {
   delete img.__retryState;
   delete img.__fallbackState;
   delete img.__fallbackRecoveryActive;
+  delete img.__disableRecovery;
+  delete img.__disableHi;
 }
 
 function retryRecoverableImages() {
   document.querySelectorAll("img.cardImage, img.dir-row-hero-bg").forEach((img) => {
     if (!img?.__data || !img.isConnected) return;
+    if (img.__disableRecovery === true || hasKnownMissingImage(img.__data)) return;
 
     const hasRetries =
       !!((img.__retryState?.lq?.tries || 0) > 0 || (img.__retryState?.hi?.tries || 0) > 0);
     const shouldRetry =
       img.__fallbackRecoveryActive === true ||
-      img.__phase === "settled" ||
       img.__hydrated === false ||
       hasRetries ||
       (img.complete && img.naturalWidth === 0);
@@ -1224,20 +1372,123 @@ function getSeriesIdFromItem(it) {
   return null;
 }
 
-function createRowHeroCard(item, serverId, labelText, { showProgress = false } = {}) {
+function isAudioPreviewItem(item) {
+  if (!item) return false;
+  const type = String(item.Type || "");
+  return type === "Audio" || type === "MusicVideo";
+}
+
+function getMusicAlbumId(item) {
+  if (!item) return null;
+  if (item.Type === "MusicAlbum") return item.Id || null;
+  if (isAudioPreviewItem(item)) return item.AlbumId || item.ParentId || null;
+  return null;
+}
+
+async function attachMusicPosterSources(items) {
+  const list = Array.isArray(items) ? items.filter(Boolean) : [];
+  if (!list.length) return list;
+
+  const albumIds = [];
+  for (const it of list) {
+    if (!it?.Id) continue;
+    if (it.Type === "MusicAlbum") {
+      it.__posterSource = it;
+      continue;
+    }
+    if (!isAudioPreviewItem(it)) continue;
+    const albumId = getMusicAlbumId(it);
+    if (albumId) albumIds.push(albumId);
+  }
+
+  const uniqAlbumIds = Array.from(new Set(albumIds.filter(Boolean)));
+  if (!uniqAlbumIds.length) return list;
+
+  let albums = [];
+  try {
+    albums = await fetchItemsByIds(uniqAlbumIds);
+  } catch (e) {
+    console.warn("recentRows: music poster source resolve error:", e);
+    return list;
+  }
+
+  const albumById = new Map((albums || []).filter(x => x?.Id).map(x => [x.Id, x]));
+  for (const it of list) {
+    if (!it?.Id || !isAudioPreviewItem(it) || it.__posterSource) continue;
+    const albumId = getMusicAlbumId(it);
+    const album = albumId ? albumById.get(albumId) : null;
+    if (album) it.__posterSource = album;
+  }
+  return list;
+}
+
+async function fetchAlbumPreviewTrackId(albumId) {
+  const key = String(albumId || "").trim();
+  if (!key || !STATE.userId) return null;
+  if (__albumPreviewTrackCache.has(key)) {
+    return await __albumPreviewTrackCache.get(key);
+  }
+
+  const task = (async () => {
+    const url =
+      `/Users/${STATE.userId}/Items?` +
+      `ParentId=${encodeURIComponent(key)}&` +
+      `IncludeItemTypes=Audio&Recursive=true&` +
+      `Fields=${encodeURIComponent(COMMON_FIELDS)}&` +
+      `EnableUserData=true&` +
+      `SortBy=ParentIndexNumber,IndexNumber,SortName,DateCreated&SortOrder=Ascending&Limit=1&` +
+      `ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop,Logo`;
+    try {
+      const data = await makeApiRequest(url);
+      const best = Array.isArray(data?.Items) ? data.Items.find(x => x?.Id) : null;
+      try {
+        if (best?.Id && STATE.db && STATE.scope) {
+          upsertItemsBatchIdle(STATE.db, STATE.scope, [best], { timeout: 1500 });
+        }
+      } catch {}
+      return best?.Id || null;
+    } catch (e) {
+      console.warn("recentRows: album preview track resolve error:", e);
+      return null;
+    }
+  })();
+
+  __albumPreviewTrackCache.set(key, task);
+  const resolved = await task;
+  __albumPreviewTrackCache.set(key, resolved);
+  return resolved;
+}
+
+async function resolveHeroPreviewItemId(item) {
+  if (!item?.Id) return null;
+  if (isAudioPreviewItem(item)) return item.Id;
+  if (item.Type === "MusicAlbum") {
+    return await fetchAlbumPreviewTrackId(item.Id);
+  }
+  return item.Id;
+}
+
+async function createRowHeroCard(item, serverId, labelText, { showProgress = false } = {}) {
   const hero = document.createElement("div");
   hero.className = "dir-row-hero";
   hero.dataset.itemId = item.Id;
 
+  try {
+    await attachMusicPosterSources([item]);
+  } catch {}
+
   const posterSource = item?.__posterSource || item;
-  const bg   = buildBackdropUrlHQ(posterSource) || buildPosterUrlHQ(posterSource) || PLACEHOLDER_URL;
+  const bgLQ = buildBackdropUrlLQ(posterSource) || buildPosterUrlLQ(posterSource) || null;
+  const bgHQ = buildBackdropUrlHQ(posterSource) || buildPosterUrlHQ(posterSource) || null;
   const logo = buildLogoUrl(posterSource);
   const year = posterSource.ProductionYear || "";
-  const plot = clampText(posterSource.Overview, 1200);
+  const plot = clampText(item.Overview || posterSource.Overview, 1200);
   const ageChip = normalizeAgeChip(posterSource.OfficialRating || "");
   const isSeries = posterSource.Type === "Series";
   const isEpisode = item.Type === "Episode";
   const isSeason  = item.Type === "Season";
+  const isMusicAlbum = item.Type === "MusicAlbum";
+  const isAudio = isAudioPreviewItem(item);
   const isPhoto = item.Type === "Photo";
   const isPhotoAlbum = item.Type === "PhotoAlbum";
   const isVideo = item.Type === "Video";
@@ -1263,6 +1514,8 @@ function createRowHeroCard(item, serverId, labelText, { showProgress = false } =
   const typeLabel =
     isPhoto ? (config.languageLabels.photo || "Fotoğraf") :
     isPhotoAlbum ? (config.languageLabels.photoAlbum || "Albüm") :
+    isMusicAlbum ? (config.languageLabels.album || "Albüm") :
+    isAudio ? (config.languageLabels.track || "Parça") :
     isVideo ? (config.languageLabels.video || "Video") :
     isFolder ? (config.languageLabels.folder || "Klasör") :
     isEpisode ? (config.languageLabels.episode || "Bölüm") :
@@ -1291,11 +1544,15 @@ function createRowHeroCard(item, serverId, labelText, { showProgress = false } =
   const heroTitle =
     (isEpisode || isSeason)
       ? (item.SeriesName || posterSource.Name || item.Name)
-      : (posterSource.Name || item.Name || "");
+      : (isAudio ? (item.Name || posterSource.Name || "") : (posterSource.Name || item.Name || ""));
 
   hero.innerHTML = `
     <div class="dir-row-hero-bg-wrap">
-      <img class="dir-row-hero-bg" src="${bg}" alt="${escapeHtml(heroTitle)}">
+      <img class="dir-row-hero-bg"
+           alt="${escapeHtml(heroTitle)}"
+           decoding="async"
+           loading="${IS_MOBILE ? "eager" : "lazy"}"
+           ${IS_MOBILE ? 'fetchpriority="high"' : ""}>
     </div>
 
     <div class="dir-row-hero-inner">
@@ -1344,11 +1601,31 @@ function createRowHeroCard(item, serverId, labelText, { showProgress = false } =
 
   try {
     const backdropImg = hero.querySelector(".dir-row-hero-bg");
+    if (backdropImg) {
+      if (bgHQ || bgLQ) {
+        hydrateBlurUp(backdropImg, {
+          lqSrc: bgLQ,
+          hqSrc: bgHQ || PLACEHOLDER_URL,
+          hqSrcset: "",
+          fallback: PLACEHOLDER_URL
+        });
+      } else {
+        backdropImg.src = PLACEHOLDER_URL;
+        backdropImg.classList.add("__hydrated");
+      }
+    }
+  } catch (e) {
+    console.warn("recentRows hero bg hydrate failed:", e);
+  }
+
+  try {
+    const backdropImg = hero.querySelector(".dir-row-hero-bg");
     const RemoteTrailers =
       posterSource.RemoteTrailers ||
       posterSource.RemoteTrailerItems ||
       posterSource.RemoteTrailerUrls ||
       [];
+    const previewItemId = await resolveHeroPreviewItemId(item);
 
     createTrailerIframe({
       config,
@@ -1356,6 +1633,7 @@ function createRowHeroCard(item, serverId, labelText, { showProgress = false } =
       slide: hero,
       backdropImg,
       itemId: item.Id,
+      previewItemId: previewItemId || item.Id,
       serverId,
       detailsUrl: getDetailsUrl(item.Id, serverId),
       detailsText: config.languageLabels.details || "Ayrıntılar",
@@ -1366,6 +1644,10 @@ function createRowHeroCard(item, serverId, labelText, { showProgress = false } =
   }
 
   hero.addEventListener("jms:cleanup", () => {
+    try {
+      const backdropImg = hero.querySelector(".dir-row-hero-bg");
+      if (backdropImg) unobserveImage(backdropImg);
+    } catch {}
     detachPreviewHandlers(hero);
   }, { once: true });
 
@@ -1876,12 +2158,13 @@ async function fillSectionWithItems({
     try {
       await (async () => {
         const pool = cachedItems.slice();
+        await attachMusicPosterSources(pool);
         const best = pool[0] || null;
         const remaining = best ? pool.filter(x => x?.Id && x.Id !== best.Id) : pool.slice();
 
         heroHost.innerHTML = "";
         if (SHOW_RECENT_ROWS_HERO_CARDS && best) {
-          heroHost.appendChild(createRowHeroCard(best, STATE.serverId, heroLabel, { showProgress }));
+          heroHost.appendChild(await createRowHeroCard(best, STATE.serverId, heroLabel, { showProgress }));
         }
 
         row.innerHTML = "";
@@ -1935,6 +2218,7 @@ async function fillSectionWithItems({
   }
 
   const pool = items.slice();
+  await attachMusicPosterSources(pool);
 
   let best = null;
   if (pool.length) {
@@ -1950,7 +2234,7 @@ async function fillSectionWithItems({
 
   heroHost.innerHTML = "";
   if (SHOW_RECENT_ROWS_HERO_CARDS && best) {
-    heroHost.appendChild(createRowHeroCard(best, STATE.serverId, heroLabel, { showProgress }));
+    heroHost.appendChild(await createRowHeroCard(best, STATE.serverId, heroLabel, { showProgress }));
   }
 
   row.innerHTML = "";
@@ -1967,7 +2251,26 @@ async function fillSectionWithItems({
     return true;
   }
 
-  const initialCount = IS_MOBILE ? 3 : 4;
+  if (IS_MOBILE) {
+    const mobileFrag = document.createDocumentFragment();
+    const mobileLimit = Math.min(remaining.length, cardCount);
+    for (let i = 0; i < mobileLimit; i++) {
+      mobileFrag.appendChild(createRecommendationCard(remaining[i], STATE.serverId, {
+        aboveFold: i < 4,
+        showProgress
+      }));
+    }
+    row.appendChild(mobileFrag);
+    setupScroller(row);
+    try { scrollWrap?.classList?.remove("rr-scroll-pending"); } catch {}
+    try {
+      if (btnL) { btnL.style.visibility = ""; btnL.style.pointerEvents = ""; btnL.disabled = false; }
+      if (btnR) { btnR.style.visibility = ""; btnR.style.pointerEvents = ""; btnR.disabled = false; }
+    } catch {}
+    return true;
+  }
+
+  const initialCount = 4;
   const fragment = document.createDocumentFragment();
   for (let i = 0; i < Math.min(initialCount, remaining.length); i++) {
     fragment.appendChild(createRecommendationCard(remaining[i], STATE.serverId, {
@@ -2323,7 +2626,7 @@ async function initAndRender(wrap) {
   if (ENABLE_RECENT_TRACKS) {
   pushPlan(continuePlans, () => fillSectionWithItems({
     wrap,
-    titleText: (config.languageLabels.recentlyPlayedTracks || config.languageLabels.recentTracks) || "Son dinlenen parçalar",
+    titleText: (config.languageLabels.recentlyPlayedTracks || config.languageLabels.recRecentTracks) || "Son dinlenen parçalar",
     badgeType: "continue",
     heroLabel: (config.languageLabels.recentlyPlayedTracksHero || config.languageLabels.recentTracksHero) || "Son dinlenen parça",
     cardCount: EFFECTIVE_RECENT_TRACKS_COUNT,
@@ -2603,7 +2906,7 @@ async function initAndRender(wrap) {
     return Promise.allSettled(results);
   }
 
-  const limit = IS_MOBILE ? 1 : 2;
+  const limit = RECENT_ROW_RENDER_CONCURRENCY;
   if (runners.length) {
     await runWithLimit(
       runners.map((run) => async () => {

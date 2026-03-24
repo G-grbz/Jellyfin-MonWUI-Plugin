@@ -5,6 +5,7 @@ import { loadAvailableDevices, getDeviceIcon, startPlayback, showNotification, h
 import { getProviderUrl } from './utils.js';
 import { applyContainerStyles } from './positionUtils.js';
 import { withServer } from "./jfUrl.js";
+import { ensureWatchlistLoaded, getCachedWatchlistMembership, getWatchlistButtonText } from "./watchlist.js";
 
 let _menuCloserAttached = false;
 function attachGlobalMenuCloser() {
@@ -311,29 +312,56 @@ export function createButtons(slide, config, UserData, itemId, RemoteTrailers, u
 }
 
 if (config.showFavoriteButton) {
-    const isFavorited = UserData && UserData.IsFavorite;
+    const favoriteSource = item || { Id: itemId, Type: item?.Type };
+    const isFavorited = getCachedWatchlistMembership(itemId, UserData && UserData.IsFavorite);
+    if (UserData) UserData.IsFavorite = isFavorited;
     const favoriteBtnContainer = createButtonWithBackground(
         "favorite",
         isFavorited ? '<i class="fa-solid fa-heart" style="color: #FFC107;"></i>' : '<i class="fa-regular fa-heart"></i>',
-        isFavorited ? config.languageLabels.favorilendi : config.languageLabels.favori,
-        (event, buttonElement) => {
+        getWatchlistButtonText(favoriteSource, isFavorited),
+        async (event, buttonElement) => {
+            if (buttonElement.dataset.busy === "1") return;
+            buttonElement.dataset.busy = "1";
             const iconWrapper = buttonElement.querySelector('.icon-wrapper');
             const textSpan = buttonElement.nextElementSibling;
+            const nextValue = !buttonElement.classList.contains("favorited");
 
-            if (buttonElement.classList.contains("favorited")) {
-                buttonElement.classList.remove("favorited");
-                iconWrapper.innerHTML = '<i class="fa-regular fa-heart"></i>';
-                textSpan.textContent = config.languageLabels.favori;
-                updateFavoriteStatus(itemId, false);
-            } else {
-                buttonElement.classList.add("favorited");
-                iconWrapper.innerHTML = '<i class="fa-solid fa-heart" style="color: #FFC107;"></i>';
-                textSpan.textContent = config.languageLabels.favorilendi;
-                updateFavoriteStatus(itemId, true);
+            try {
+                await updateFavoriteStatus(itemId, nextValue, { item: favoriteSource });
+                if (UserData) UserData.IsFavorite = nextValue;
+
+                if (nextValue) {
+                    buttonElement.classList.add("favorited");
+                    iconWrapper.innerHTML = '<i class="fa-solid fa-heart" style="color: #FFC107;"></i>';
+                } else {
+                    buttonElement.classList.remove("favorited");
+                    iconWrapper.innerHTML = '<i class="fa-regular fa-heart"></i>';
+                }
+                textSpan.textContent = getWatchlistButtonText(favoriteSource, nextValue);
+            } catch (error) {
+                console.error("Liste butonu güncellenemedi:", error);
+            } finally {
+                buttonElement.dataset.busy = "0";
             }
         },
         isFavorited ? "favorited" : ""
     );
+
+    ensureWatchlistLoaded().then(() => {
+        const buttonElement = favoriteBtnContainer.querySelector(".favorite-btn");
+        const textSpan = favoriteBtnContainer.querySelector(".btn-text");
+        const iconWrapper = buttonElement?.querySelector(".icon-wrapper");
+        const nextValue = getCachedWatchlistMembership(itemId, isFavorited);
+        if (UserData) UserData.IsFavorite = nextValue;
+        if (!buttonElement || !textSpan || !iconWrapper) return;
+
+        buttonElement.classList.toggle("favorited", nextValue);
+        iconWrapper.innerHTML = nextValue
+            ? '<i class="fa-solid fa-heart" style="color: #FFC107;"></i>'
+            : '<i class="fa-regular fa-heart"></i>';
+        textSpan.textContent = getWatchlistButtonText(favoriteSource, nextValue);
+    }).catch(() => {});
+
     buttonContainer.appendChild(favoriteBtnContainer);
 }
 

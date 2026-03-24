@@ -18,6 +18,95 @@ const S = (u) => {
   return withServer(u);
 };
 
+function ensureAudioPreviewCssOnce() {
+  if (document.getElementById("jms-audio-preview-css")) return;
+  const style = document.createElement("style");
+  style.id = "jms-audio-preview-css";
+  style.textContent = `
+    .jms-audio-preview-overlay {
+      align-items: flex-end;
+      background:
+        radial-gradient(circle at 76% 22%, rgba(255,255,255,.14), transparent 24%),
+        linear-gradient(180deg, rgba(6,10,18,.12), rgba(6,10,18,.58));
+      display: none;
+      inset: 0;
+      justify-content: flex-start;
+      pointer-events: none;
+      position: absolute;
+      z-index: 3;
+    }
+    .jms-audio-preview-overlay__panel {
+      backdrop-filter: blur(6px);
+      background: linear-gradient(135deg, rgba(10,18,26,.78), rgba(19,31,43,.56));
+      border: 1px solid rgba(255,255,255,.14);
+      border-radius: 16px;
+      box-shadow: 0 18px 36px rgba(0,0,0,.24);
+      color: #f5f8fb;
+      display: grid;
+      gap: 10px;
+      margin: 18px;
+      max-width: min(360px, calc(100% - 36px));
+      padding: 14px 16px;
+    }
+    .jms-audio-preview-overlay__eyebrow {
+      align-items: center;
+      color: rgba(235,244,255,.72);
+      display: inline-flex;
+      font-size: 11px;
+      font-weight: 700;
+      gap: 8px;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .jms-audio-preview-overlay__title {
+      display: -webkit-box;
+      font-size: 20px;
+      font-weight: 700;
+      line-height: 1.08;
+      margin: 0;
+      overflow: hidden;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
+    .jms-audio-preview-overlay__subtitle {
+      color: rgba(232,241,247,.78);
+      display: -webkit-box;
+      font-size: 13px;
+      line-height: 1.35;
+      margin: 0;
+      overflow: hidden;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
+    .jms-audio-preview-overlay__bars {
+      align-items: end;
+      display: flex;
+      gap: 5px;
+      height: 22px;
+    }
+    .jms-audio-preview-overlay__bars span {
+      animation: jms-audio-preview-bars 1.4s ease-in-out infinite;
+      background: linear-gradient(180deg, rgba(255,255,255,.94), rgba(94,214,177,.86));
+      border-radius: 999px;
+      display: block;
+      height: 100%;
+      transform-origin: center bottom;
+      width: 4px;
+    }
+    .jms-audio-preview-overlay__bars span:nth-child(2) { animation-delay: .16s; }
+    .jms-audio-preview-overlay__bars span:nth-child(3) { animation-delay: .32s; }
+    .jms-audio-preview-overlay__bars span:nth-child(4) { animation-delay: .48s; }
+    @keyframes jms-audio-preview-bars {
+      0%, 100% { transform: scaleY(.38); opacity: .62; }
+      45% { transform: scaleY(1); opacity: 1; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .jms-audio-preview-overlay__bars span { animation: none; transform: scaleY(.72); }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 export function getYoutubeEmbedUrl(input) {
   if (!input || typeof input !== "string") return input;
 
@@ -344,6 +433,7 @@ export function createTrailerIframe({
   slide,
   backdropImg,
   itemId,
+  previewItemId = null,
   serverId,
   detailsUrl,
   detailsText,
@@ -361,10 +451,13 @@ export function createTrailerIframe({
     const cs = getComputedStyle(slide);
     if (cs.position === "static") slide.style.position = "relative";
   } catch {}
+  ensureAudioPreviewCssOnce();
 
   const _detailsHref =
   detailsUrl ||
   (itemId && serverId ? `#/details?id=${itemId}&serverId=${encodeURIComponent(serverId)}` : null);
+
+  const previewMediaItemId = previewItemId || itemId;
 
   let arrowIntervalId = null;
 
@@ -479,6 +572,27 @@ export function createTrailerIframe({
   videoElement.style.opacity = "0";
 
   videoContainer.appendChild(videoElement);
+
+  const audioOverlay = document.createElement("div");
+  audioOverlay.className = "jms-audio-preview-overlay";
+  audioOverlay.innerHTML = `
+    <div class="jms-audio-preview-overlay__panel">
+      <div class="jms-audio-preview-overlay__eyebrow">
+        <i class="fa-solid fa-wave-square"></i>
+        <span>${config?.languageLabels?.track || "Parça"}</span>
+      </div>
+      <div class="jms-audio-preview-overlay__title"></div>
+      <div class="jms-audio-preview-overlay__subtitle"></div>
+      <div class="jms-audio-preview-overlay__bars" aria-hidden="true">
+        <span></span>
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+    </div>
+  `;
+  videoContainer.appendChild(audioOverlay);
+
   const backdropContainer = slide?.__backdropContainer || slide?.querySelector?.(".bckdrp-cntnr");
   (backdropContainer || slide).appendChild(videoContainer);
 
@@ -534,9 +648,46 @@ function clearPreviewPlaybackFlag() {
     } catch {}
   };
 
+  const isAudioLikeItem = (it) => {
+    const type = String(it?.Type || "");
+    const mediaType = String(it?.MediaType || "");
+    return type === "Audio" || type === "MusicVideo" || mediaType === "Audio";
+  };
+
+  const setAudioOverlayState = (active, itemDetails = null) => {
+    if (!audioOverlay) return;
+
+    if (!active) {
+      audioOverlay.style.display = "none";
+      slide.classList.remove("jms-audio-preview-active");
+      videoElement.style.display = "block";
+      videoElement.style.opacity = "0";
+      return;
+    }
+
+    const titleEl = audioOverlay.querySelector(".jms-audio-preview-overlay__title");
+    const subtitleEl = audioOverlay.querySelector(".jms-audio-preview-overlay__subtitle");
+    const titleText = itemDetails?.Name || "";
+    const artistText =
+      (Array.isArray(itemDetails?.Artists) && itemDetails.Artists.filter(Boolean).join(", ")) ||
+      itemDetails?.AlbumArtist ||
+      itemDetails?.Album ||
+      "";
+
+    if (titleEl) titleEl.textContent = titleText;
+    if (subtitleEl) subtitleEl.textContent = artistText;
+
+    audioOverlay.style.display = "flex";
+    slide.classList.add("jms-audio-preview-active");
+    videoElement.style.display = "none";
+    videoElement.style.opacity = "0";
+    showBackdrop();
+  };
+
   videoElement.addEventListener("ended", () => {
     clearVideoHideTimer();
     clearPreviewPlaybackFlag();
+    setAudioOverlayState(false);
     try { videoElement.style.opacity = "0"; } catch {}
     showBackdrop();
     slide.classList.remove("video-active", "intro-active", "trailer-active");
@@ -622,6 +773,7 @@ function clearPreviewPlaybackFlag() {
   const hardStopVideo = ({ immediate = false } = {}) => {
     clearPreviewPlaybackFlag();
     clearVideoHideTimer();
+    setAudioOverlayState(false);
     try { videoElement.pause(); } catch {}
 
     const finalize = () => {
@@ -651,6 +803,7 @@ function clearPreviewPlaybackFlag() {
   const hardStopIframe = () => {
     clearPreviewPlaybackFlag();
     clearYtRevealTimer();
+    setAudioOverlayState(false);
     if (ytIframe) {
       try { stopYoutube(ytIframe); } catch {}
       try { ytIframe.src = "about:blank"; } catch {}
@@ -662,6 +815,7 @@ function clearPreviewPlaybackFlag() {
 
   const fullCleanup = () => {
     clearPreviewPlaybackFlag();
+    setAudioOverlayState(false);
     hideDetailsOverlay();
     showBackdrop();
     hardStopVideo({ immediate: false });
@@ -670,7 +824,7 @@ function clearPreviewPlaybackFlag() {
     playingKind = null;
   };
 
-  async function loadStreamFor(itemIdToPlay, hoverId, startSeconds = 0) {
+  async function loadStreamFor(itemIdToPlay, hoverId, startSeconds = 0, { previewDetails = null } = {}) {
     const introUrl = await getVideoStreamUrl(
       itemIdToPlay,
       1920,
@@ -685,6 +839,11 @@ function clearPreviewPlaybackFlag() {
     );
     if (!isMouseOver || hoverId !== latestHoverId) throw new Error("HoverAbortError");
     if (!introUrl || introUrl === "null") return false;
+    const audioPreview = isAudioLikeItem(previewDetails);
+    if (audioPreview) {
+      try { videoElement.style.opacity = "0"; } catch {}
+      showBackdrop();
+    }
 
     if (
       enableHls &&
@@ -706,8 +865,13 @@ function clearPreviewPlaybackFlag() {
         videoElement
           .play()
           .then(() => {
-            videoElement.style.opacity = "1";
-            hideBackdrop();
+            if (audioPreview) {
+              setAudioOverlayState(true, previewDetails);
+            } else {
+              videoElement.style.display = "block";
+              videoElement.style.opacity = "1";
+              hideBackdrop();
+            }
           })
           .catch(() => {});
       });
@@ -728,8 +892,13 @@ function clearPreviewPlaybackFlag() {
         videoElement
           .play()
           .then(() => {
-            videoElement.style.opacity = "1";
-            hideBackdrop();
+            if (audioPreview) {
+              setAudioOverlayState(true, previewDetails);
+            } else {
+              videoElement.style.display = "block";
+              videoElement.style.opacity = "1";
+              hideBackdrop();
+            }
           })
           .catch(() => {});
       };
@@ -740,7 +909,7 @@ function clearPreviewPlaybackFlag() {
 
   async function tryPlayLocalTrailer(hoverId) {
     if (!isActiveSlide()) return false;
-    const locals = await fetchLocalTrailers(itemId, { signal: abortController.signal });
+    const locals = await fetchLocalTrailers(previewMediaItemId, { signal: abortController.signal });
     if (!isMouseOver || hoverId !== latestHoverId || !isActiveSlide()) throw new Error("HoverAbortError");
     const best = pickBestLocalTrailer(locals);
     if (!best?.Id) return false;
@@ -813,15 +982,17 @@ function clearPreviewPlaybackFlag() {
 
   async function playMainVideo(hoverId) {
     if (!isActiveSlide()) return false;
+    const previewDetails = await getDetailsCached(previewMediaItemId, { signal: abortController.signal });
+    if (!isMouseOver || hoverId !== latestHoverId || !isActiveSlide()) throw new Error("HoverAbortError");
     hardStopIframe();
     clearVideoHideTimer();
     videoContainer.style.display = "block";
     showDetailsOverlay();
     slide.classList.add("video-active", "intro-active", "trailer-active");
     playingKind = "video";
-    setPreviewPlaybackFlag("videoPreview", itemId);
-    const startSeconds = await getSmartStartSeconds(itemId, { signal: abortController.signal });
-    const ok = await loadStreamFor(itemId, hoverId, startSeconds);
+    setPreviewPlaybackFlag("videoPreview", previewMediaItemId);
+    const startSeconds = await getSmartStartSeconds(previewMediaItemId, { signal: abortController.signal });
+    const ok = await loadStreamFor(previewMediaItemId, hoverId, startSeconds, { previewDetails });
     if (!ok) {
       fullCleanup();
       return false;
@@ -1290,30 +1461,57 @@ export async function getHighResImageUrls(item, backdropIndex) {
   const logoHeight = Math.floor(720 * pixelRatio);
   const fmtValue = supportsWebP() ? "webp" : "";
   const index = backdropIndex !== undefined ? backdropIndex : "0";
+  const indexNum = Math.max(0, Number(index) || 0);
   const backdropMaxWidth = (config.backdropMaxWidth || 1920) * pixelRatio;
   const backdropTags = Array.isArray(item?.BackdropImageTags) ? item.BackdropImageTags : [];
   const backdropTagFromImageTags = Array.isArray(item?.ImageTags?.Backdrop)
-    ? item.ImageTags.Backdrop[Number(index) || 0]
-    : ((Number(index) || 0) === 0 ? item?.ImageTags?.Backdrop : "");
-  const backdropTag = backdropTags[Number(index) || 0] || backdropTagFromImageTags || "";
+    ? item.ImageTags.Backdrop[indexNum]
+    : (indexNum === 0 ? item?.ImageTags?.Backdrop : "");
+  const backdropTag = backdropTags[indexNum] || backdropTagFromImageTags || "";
+  const thumbTag = item?.ImageTags?.Thumb || "";
+  const primaryTag = item?.ImageTags?.Primary || item?.PrimaryImageTag || "";
+  const albumPrimaryTag = item?.AlbumPrimaryImageTag || "";
+  const fallbackPrimaryTag = primaryTag || albumPrimaryTag || "";
+  const fallbackPrimaryItemId = primaryTag
+    ? itemId
+    : (albumPrimaryTag && item?.AlbumId ? item.AlbumId : itemId);
 
   const backdropQs = new URLSearchParams();
-  if (backdropTag) backdropQs.set("tag", backdropTag);
   backdropQs.set("quality", "90");
   backdropQs.set("maxWidth", String(Math.floor(backdropMaxWidth)));
   if (fmtValue) backdropQs.set("format", fmtValue);
-  const backdropUrl = S(`/Items/${itemId}/Images/Backdrop/${index}?${backdropQs.toString()}`);
+  let backdropUrl = "";
+  if (backdropTag) {
+    backdropUrl = S(`/Items/${itemId}/Images/Backdrop/${index}?${backdropQs.toString()}`);
+  } else if (thumbTag) {
+    backdropQs.set("tag", thumbTag);
+    backdropUrl = S(`/Items/${itemId}/Images/Thumb?${backdropQs.toString()}`);
+  } else if (fallbackPrimaryTag) {
+    backdropQs.set("tag", fallbackPrimaryTag);
+    backdropUrl = S(`/Items/${fallbackPrimaryItemId}/Images/Primary?${backdropQs.toString()}`);
+  } else {
+    backdropUrl = S(`/Items/${itemId}/Images/Primary?${backdropQs.toString()}`);
+  }
 
   const placeholderQs = new URLSearchParams();
   placeholderQs.set("quality", "20");
   placeholderQs.set("maxWidth", String(Math.max(96, Math.floor(160 * pixelRatio))));
   placeholderQs.set("blur", "15");
   if (fmtValue) placeholderQs.set("format", fmtValue);
-  const placeholderPath = backdropTag
-    ? `/Items/${itemId}/Images/Backdrop/${index}`
-    : `/Items/${itemId}/Images/Primary`;
-  if (!backdropTag && !placeholderQs.has("maxHeight")) placeholderQs.set("maxHeight", "50");
-  const placeholderUrl = S(`${placeholderPath}?${placeholderQs.toString()}`);
+  let placeholderUrl = "";
+  if (backdropTag) {
+    placeholderUrl = S(`/Items/${itemId}/Images/Backdrop/${index}?${placeholderQs.toString()}`);
+  } else if (thumbTag) {
+    placeholderQs.set("tag", thumbTag);
+    placeholderUrl = S(`/Items/${itemId}/Images/Thumb?${placeholderQs.toString()}`);
+  } else if (fallbackPrimaryTag) {
+    placeholderQs.set("tag", fallbackPrimaryTag);
+    placeholderQs.set("maxHeight", "50");
+    placeholderUrl = S(`/Items/${fallbackPrimaryItemId}/Images/Primary?${placeholderQs.toString()}`);
+  } else {
+    placeholderQs.set("maxHeight", "50");
+    placeholderUrl = S(`/Items/${itemId}/Images/Primary?${placeholderQs.toString()}`);
+  }
 
   const logoQs = new URLSearchParams();
   if (logoTag) logoQs.set("tag", logoTag);

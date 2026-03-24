@@ -5,6 +5,7 @@ import {
   pickBestLocalTrailer,
   getVideoStreamUrl
 } from "./api.js";
+import { cleanupImageResourceRefs } from "./imageResourceCleanup.js";
 
 let __pop = null;
 let __timer = null;
@@ -103,11 +104,34 @@ function ensureEl() {
 function destroyPopover() {
   if (!__pop) return;
   try {
+    stopAndClearMedia();
+    cleanupImageResourceRefs(__pop, { revokeDetachedBlobs: true });
     const host = __pop.querySelector(".mtp-player");
     if (host) host.innerHTML = "";
     __pop.remove();
   } catch {}
   __pop = null;
+}
+
+function clearPlayerContainer(container) {
+  if (!container) return;
+
+  const vid = container.querySelector("video");
+  if (vid) {
+    try {
+      vid.pause();
+      vid.removeAttribute("src");
+      vid.load();
+    } catch {}
+  }
+
+  const iframe = container.querySelector("iframe");
+  if (iframe) {
+    try { iframe.src = ""; } catch {}
+  }
+
+  try { cleanupImageResourceRefs(container, { revokeDetachedBlobs: true }); } catch {}
+  container.innerHTML = "";
 }
 
 function measure(pop) {
@@ -347,7 +371,7 @@ async function resolveBestTrailerUrl(itemId) {
 }
 
 function renderPlayer(container, kind, src) {
-  container.innerHTML = "";
+  clearPlayerContainer(container);
   if (kind === "youtube") {
     const iframe = document.createElement("iframe");
     iframe.src = src;
@@ -377,17 +401,7 @@ function stopAndClearMedia() {
   const host = __pop.querySelector(".mtp-player");
   if (!host) return;
 
-  const vid = host.querySelector("video");
-  if (vid) {
-    try {
-      vid.pause();
-      vid.removeAttribute("src");
-      vid.load();
-    } catch {}
-  }
-  const iframe = host.querySelector("iframe");
-  if (iframe) iframe.src = "";
-  host.innerHTML = "";
+  clearPlayerContainer(host);
   clearPopoverWillChange();
 }
 

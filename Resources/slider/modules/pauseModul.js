@@ -14,6 +14,16 @@ function _msFromConfig(pathValue, fallbackMs) {
   return Math.max(0, n);
 }
 
+function getCommunityRatingValue(communityRating) {
+  const raw = Array.isArray(communityRating)
+    ? communityRating.reduce((sum, value) => sum + Number(value || 0), 0) /
+      Math.max(1, communityRating.length)
+    : Number(communityRating);
+
+  if (!Number.isFinite(raw) || raw <= 0) return null;
+  return Math.round(raw * 10) / 10;
+}
+
 const DEBUG_PO = !!(getConfig()?.pauseOverlay?.debug);
 function dlog(...args) { if (DEBUG_PO) console.log(...args); }
 function ddbg(...args) { if (DEBUG_PO) console.debug(...args); }
@@ -2407,6 +2417,7 @@ function hideOverlay(opts = {}) {
   async function refreshData(data) {
     currentMediaData = data;
     resetContent();
+    const communityRatingValue = getCommunityRatingValue(data?.CommunityRating);
 
     const ep = data._episodeData || null;
     if (config.pauseOverlay.showBackdrop) {
@@ -2434,7 +2445,7 @@ function hideOverlay(opts = {}) {
     if (config.pauseOverlay.showMetadata) {
       const rows = [
         genRow("📅 " + labels.showYearInfo, data.ProductionYear),
-        genRow("⭐ " + labels.showCommunityRating, data.CommunityRating ? Math.round(data.CommunityRating) + "/10" : ""),
+        genRow("⭐ " + labels.showCommunityRating, communityRatingValue != null ? `${communityRatingValue}/10` : ""),
         genRow("👨‍⚖️ " + labels.showCriticRating, data.CriticRating ? Math.round(data.CriticRating) + "%" : ""),
         genRow("👥 " + labels.voteCount, data.VoteCount),
         genRow("🔞 " + labels.showOfficialRating, data.OfficialRating || labels.derecelendirmeyok),

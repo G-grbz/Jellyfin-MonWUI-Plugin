@@ -1,6 +1,6 @@
 import { stopSlideTimer, startSlideTimer, SLIDE_DURATION, clearAllTimers } from "./timer.js";
 import { resetProgressBar, updateProgressBarPosition, useSecondsMode } from "./progressBar.js";
-import { getConfig } from './config.js';
+import { getConfig, getDeviceProfileAuto } from './config.js';
 import { getLanguageLabels, getDefaultLanguage } from '../language/index.js';
 import { getCurrentIndex, setCurrentIndex, setRemainingTime } from "./sliderState.js";
 import { applyContainerStyles } from "./positionUtils.js";
@@ -163,12 +163,25 @@ function isLowPowerPeakRuntime() {
   try {
     const ua = String((typeof navigator !== 'undefined' && navigator.userAgent) || '');
     const uaMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(ua);
-    const coarse = window.matchMedia?.('(pointer: coarse)')?.matches === true || IS_TOUCH;
+    const coarse = window.matchMedia?.('(pointer: coarse)')?.matches === true;
+    const anyCoarse = window.matchMedia?.('(any-pointer: coarse)')?.matches === true;
+    const fine = window.matchMedia?.('(pointer: fine)')?.matches === true;
     const shortestSide = Math.min(
       window.innerWidth || window.screen?.width || 0,
       window.innerHeight || window.screen?.height || 0
     );
-    return coarse && (!!window.ReactNativeWebView || uaMobile || (shortestSide > 0 && shortestSide <= 1280));
+    const autoMobileProfile = getDeviceProfileAuto() === 'mobile';
+    const touchOnlyLikeMobile = (coarse || anyCoarse || IS_TOUCH) && !fine;
+
+    // Touch-enabled desktop/laptop devices can expose maxTouchPoints > 0 even when
+    // they should still use the desktop peak layout. Gate low-power mode behind the
+    // mobile profile heuristic so diagonal neighbor counts are not collapsed to 1/1.
+    return autoMobileProfile && (
+      !!window.ReactNativeWebView ||
+      uaMobile ||
+      touchOnlyLikeMobile ||
+      (shortestSide > 0 && shortestSide <= 1280)
+    );
   } catch {
     return false;
   }

@@ -19,6 +19,7 @@ import { createStudioHubsPanel } from './settings/studioHubsPage.js';
 import { createHoverTrailerPanel } from './settings/hoverTrailerPage.js';
 import { createTrailersPanel } from './settings/trailersPage.js';
 import { createProfileChooserPanel } from './settings/profileChooserPage.js';
+import { createWatchlistPanel } from './settings/watchlistPage.js';
 
 let settingsModal = null;
 
@@ -151,6 +152,7 @@ export function createSettingsModal() {
     const studioTab = createTab('studio', 'fa-building', labels.studioHubs || 'Stüdyo Koleksiyonları Ayarı', true);
     const avatarTab = createTab('avatar', 'fa-user', labels.avatarCreateInput || 'Avatar Ayarları', true);
     const notificationsTab = createTab('notifications', 'fa-bell', labels.notificationsSettings || 'Bildirim Ayarları', true);
+    const watchlistSettingsTab = createTab('watchlist-settings', 'fa-bookmark', labels.watchlistSettingsTab || 'İzleme Listesi Ayarları', true);
     const logoTitleTab = createTab('logo-title', 'fa-image', labels.logoOrTitleHeader || 'Logo/Başlık', true);
     const statusRatingTab = createTab('status-rating', 'fa-star', labels.statusRatingInfo || 'Durum ve Puan Bilgileri', true);
     const actorTab = createTab('actor', 'fa-users', labels.actorInfo || 'Artist Bilgileri', true);
@@ -166,7 +168,7 @@ export function createSettingsModal() {
     tabContainer.append(
         sliderTab, animationTab, profileChooserTab, musicTab, pauseTab, positionTab,
         queryTab, studioTab, hoverTab, trailersTab, avatarTab, notificationsTab, statusRatingTab, actorTab, directorTab,
-        languageTab, logoTitleTab, descriptionTab, providerTab,
+        languageTab, watchlistSettingsTab, logoTitleTab, descriptionTab, providerTab,
         buttonsTab, infoTab, exporterTab, aboutTab
     );
 
@@ -193,10 +195,11 @@ export function createSettingsModal() {
     const exporterPanel = createExporterPanel(config, labels);
     const aboutPanel = createAboutPanel(labels);
     const notificationsPanel = createNotificationsPanel(config, labels);
+    const watchlistSettingsPanel = createWatchlistPanel(config, labels);
     [
         sliderPanel, animationPanel, musicPanel, positionPanel, queryPanel,
          hoverPanel, trailersPanel, studioPanel, avatarPanel, notificationsPanel, statusRatingPanel,
-        actorPanel, directorPanel, languagePanel, logoTitlePanel,
+        actorPanel, directorPanel, languagePanel, watchlistSettingsPanel, logoTitlePanel,
         descriptionPanel, providerPanel, buttonsPanel, infoPanel,
         pausePanel, exporterPanel, aboutPanel, profileChooserPanel
     ].forEach(panel => {
@@ -206,7 +209,7 @@ export function createSettingsModal() {
 
     tabContent.append(
         sliderPanel, animationPanel, profileChooserPanel, musicPanel, statusRatingPanel, actorPanel,
-        directorPanel, queryPanel, hoverPanel, trailersPanel, studioPanel, avatarPanel, languagePanel, logoTitlePanel,
+        directorPanel, queryPanel, hoverPanel, trailersPanel, studioPanel, avatarPanel, languagePanel, watchlistSettingsPanel, logoTitlePanel,
         descriptionPanel, providerPanel, buttonsPanel, infoPanel,
         pausePanel, positionPanel, aboutPanel, exporterPanel, notificationsPanel
     );
@@ -214,7 +217,7 @@ export function createSettingsModal() {
     [
         sliderTab, animationTab, profileChooserTab, musicTab, queryTab, hoverTab,
         trailersTab, studioTab, avatarTab, notificationsTab, statusRatingTab,
-        actorTab, directorTab, languageTab, logoTitleTab,
+        actorTab, directorTab, languageTab, watchlistSettingsTab, logoTitleTab,
         descriptionTab, providerTab, buttonsTab, infoTab,
         positionTab, pauseTab, aboutTab, exporterTab
     ].forEach(tab => {
@@ -222,7 +225,7 @@ export function createSettingsModal() {
             [
                 sliderTab, animationTab, profileChooserTab, musicTab, queryTab, hoverTab,
                 trailersTab, studioTab, avatarTab, notificationsTab, statusRatingTab,
-                actorTab, directorTab, languageTab, logoTitleTab,
+                actorTab, directorTab, languageTab, watchlistSettingsTab, logoTitleTab,
                 descriptionTab, providerTab, buttonsTab, infoTab,
                 positionTab, pauseTab, aboutTab, exporterTab
             ].forEach(t => {
@@ -230,7 +233,7 @@ export function createSettingsModal() {
             });
             [
                 sliderPanel, animationPanel, profileChooserPanel, statusRatingPanel, actorPanel, directorPanel,
-                musicPanel, queryPanel, hoverPanel, trailersPanel, studioPanel, avatarPanel, languagePanel, logoTitlePanel,
+                musicPanel, queryPanel, hoverPanel, trailersPanel, studioPanel, avatarPanel, languagePanel, watchlistSettingsPanel, logoTitlePanel,
                 descriptionPanel, providerPanel, buttonsPanel, infoPanel,
                 positionPanel, aboutPanel, exporterPanel, pausePanel, notificationsPanel
             ].forEach(panel => {

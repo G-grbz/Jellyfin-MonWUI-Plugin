@@ -6,7 +6,13 @@ import { openGenreExplorer, openPersonalExplorer } from "./genreExplorer.js";
 import { REOPEN_COOLDOWN_MS, OPEN_HOVER_DELAY_MS } from "./hoverTrailerModal.js";
 import { createTrailerIframe } from "./utils.js";
 import { openDetailsModal } from "./detailsModal.js";
-import { withServer, withServerSrcset } from "./jfUrl.js";
+import {
+  withServer,
+  withServerSrcset,
+  isKnownMissingImage,
+  markImageMissing,
+  clearMissingImage
+} from "./jfUrl.js";
 import { faIconHtml, findFaIcon } from "./faIcons.js";
 import {
   openPrcDB,
@@ -28,6 +34,7 @@ const MIN_RATING = Number.isFinite(config.studioHubsMinRating)
   ? Math.max(0, Number(config.studioHubsMinRating))
   : 0;
 const PLACEHOLDER_URL = (config.placeholderImage) || './slider/src/images/placeholder.png';
+const PRC_IMAGE_RETRY_LIMITS = { lq: 2, hi: 2 };
 const ENABLE_GENRE_HUBS = !!config.enableGenreHubs;
 const GENRE_ROWS_COUNT = Number.isFinite(config.studioHubsGenreRowsCount)
   ? Math.max(1, config.studioHubsGenreRowsCount | 0)
@@ -46,7 +53,8 @@ const __cooldownUntil= new WeakMap();
 const __openTokenMap = new WeakMap();
 const __boundPreview = new WeakMap();
 const GENRE_LAZY = true;
-const GENRE_BATCH_SIZE = Number(getConfig()?.genreRowsBatchSize) || (IS_MOBILE ? 1 : 1);
+const MOBILE_ROW_BATCH_SIZE = 2;
+const GENRE_BATCH_SIZE = Number(getConfig()?.genreRowsBatchSize) || (IS_MOBILE ? MOBILE_ROW_BATCH_SIZE : 1);
 const GENRE_ROOT_MARGIN = '500px 0px';
 const GENRE_FIRST_SCROLL_PX = Number(getConfig()?.genreRowsFirstBatchScrollPx) || 200;
 const PRC_LOCK_DOWN_SCROLL = (getConfig()?.prcLockDownScrollDuringLoad === true);
@@ -307,12 +315,15 @@ async function dbWriteThroughItems(db, scope, items) {
 
 async function filterOutPlayedIds(userId, ids) {
   const cfg = __prcCfg();
-  const clean = (ids || []).filter(Boolean);
+  const clean = Array.isArray(ids) ? Array.from(new Set(ids.filter(Boolean))) : [];
   if (!cfg.validateUserData || !clean.length) return clean;
 
   const played = new Set();
+  const alive = new Set();
+  const failed = new Set();
   const CHUNK = 60;
   const PAR = 2;
+  let hadSuccess = false;
 
   try {
     for (let i = 0; i < clean.length; i += CHUNK * PAR) {
@@ -326,17 +337,23 @@ async function filterOutPlayedIds(userId, ids) {
         ps.push(
           makeApiRequest(url)
             .then((r) => {
+              hadSuccess = true;
               const items = Array.isArray(r?.Items) ? r.Items : (Array.isArray(r) ? r : []);
               for (const it of items) {
-                if (it?.Id && it?.UserData?.Played === true) played.add(it.Id);
+                if (!it?.Id) continue;
+                alive.add(it.Id);
+                if (it?.UserData?.Played === true) played.add(it.Id);
               }
             })
-            .catch(() => {})
+            .catch(() => {
+              for (const id of chunk) failed.add(id);
+            })
         );
       }
       await Promise.all(ps);
     }
-    return clean.filter(id => !played.has(id));
+    if (!hadSuccess) return clean;
+    return clean.filter(id => (alive.has(id) && !played.has(id)) || failed.has(id));
   } catch {
     return clean;
   }
@@ -652,8 +669,18 @@ function __shouldRequestHiRes() {
   return true;
 }
 
+function clearHeroHost(heroHost) {
+  if (!heroHost) return;
+  try {
+    heroHost.querySelectorAll('.dir-row-hero').forEach(el => {
+      try { el.dispatchEvent(new Event('jms:cleanup')); } catch {}
+    });
+  } catch {}
+  heroHost.innerHTML = '';
+}
+
 function mountHero(heroHost, heroItem, serverId, heroLabel, { aboveFold=false } = {}) {
-  if (!heroHost || !heroItem?.Id) return;
+  if (!heroHost || !heroItem?.Id) return { hero: null, changed: false };
 
   const existing = heroHost.querySelector('.dir-row-hero');
   const same = existing && (existing.dataset.itemId === String(heroItem.Id));
@@ -661,18 +688,68 @@ function mountHero(heroHost, heroItem, serverId, heroLabel, { aboveFold=false } 
   if (same) {
     const lbl = existing.querySelector('.dir-row-hero-label');
     if (lbl && heroLabel) lbl.textContent = heroLabel;
-    return;
+    return { hero: existing, changed: false };
   }
 
   if (existing) {
-    existing.classList.add('is-leaving');
-    setTimeout(() => { try { existing.remove(); } catch {} }, 180);
+    clearHeroHost(heroHost);
   }
 
   const hero = createGenreHeroCard(heroItem, serverId, heroLabel, { aboveFold });
   hero.classList.add('is-entering');
   heroHost.appendChild(hero);
   requestAnimationFrame(() => hero.classList.remove('is-entering'));
+  return { hero, changed: true };
+}
+
+function hasKnownMissingImage(data) {
+  return !!(isKnownMissingImage(data?.lqSrc) || isKnownMissingImage(data?.hqSrc));
+}
+
+function getImageFailureCounts(img) {
+  return (img.__imageFailureCounts ||= { lq: 0, hi: 0 });
+}
+
+function incrementImageFailure(img, phase) {
+  const counts = getImageFailureCounts(img);
+  counts[phase] = (counts[phase] || 0) + 1;
+  return counts[phase];
+}
+
+function resetImageFailures(img, phase = null) {
+  if (!img) return;
+  const counts = getImageFailureCounts(img);
+  if (!phase) {
+    counts.lq = 0;
+    counts.hi = 0;
+    return;
+  }
+  counts[phase] = 0;
+}
+
+function markImageSettled(img, src, { disableRecovery = false, disableHi = false } = {}) {
+  if (!img) return;
+  try { img.removeAttribute('srcset'); } catch {}
+  if (src) {
+    try { img.src = src; } catch {}
+  }
+  img.__phase = 'settled';
+  img.__hiRequested = false;
+  img.__hiFailed = false;
+  img.__hydrated = true;
+  img.__disableRecovery = disableRecovery === true;
+  if (disableHi) img.__disableHi = true;
+  delete img.__allowLqHydrate;
+  delete img.__retryAfter;
+  img.classList.add('__hydrated');
+  img.classList.remove('is-lqip');
+  try { __imgIO.unobserve(img); } catch {}
+}
+
+function markImageTerminalFailure(img, data, fallbackSrc = PLACEHOLDER_URL) {
+  const brokenUrl = data?.lqSrc || data?.hqSrc || img?.currentSrc || img?.src || '';
+  if (brokenUrl) markImageMissing(brokenUrl);
+  markImageSettled(img, fallbackSrc, { disableRecovery: true, disableHi: true });
 }
 
 const __imgIO = new IntersectionObserver((entries) => {
@@ -680,16 +757,21 @@ const __imgIO = new IntersectionObserver((entries) => {
     const img = ent.target;
     const data = img.__data || {};
     if (ent.isIntersecting) {
+        if (img.__disableRecovery || hasKnownMissingImage(data)) {
+          markImageSettled(img, data.fallback || PLACEHOLDER_URL, { disableRecovery: true, disableHi: true });
+          continue;
+        }
         if (img.__disableHi) continue;
         if (!__shouldRequestHiRes()) continue;
 
         const now = Date.now();
         const retryAfter = Number(img.__retryAfter || 0);
         const canRetry = !retryAfter || now >= retryAfter;
+        const retryingHi = img.__hiFailed === true;
 
-        if (img.__hiFailed && !canRetry) continue;
+        if (retryingHi && !canRetry) continue;
 
-        if (!img.__hiRequested || (img.__hiFailed && canRetry)) {
+        if (!img.__hiRequested || (retryingHi && canRetry)) {
           img.__hiRequested = true;
           img.__hiFailed = false;
           img.__phase = 'hi';
@@ -697,7 +779,7 @@ const __imgIO = new IntersectionObserver((entries) => {
           const data = img.__data || {};
           const token = (img.__retryToken = (Number(img.__retryToken || 0) + 1));
           const hqSrc = data.hqSrc
-            ? (img.__hiFailed ? __appendCb(data.hqSrc, `${now}-${token}`) : data.hqSrc)
+            ? (retryingHi ? __appendCb(data.hqSrc, `${now}-${token}`) : data.hqSrc)
             : null;
           const hqSrcset = data.hqSrcset
             ? data.hqSrcset.split(',')
@@ -706,7 +788,7 @@ const __imgIO = new IntersectionObserver((entries) => {
                 .map(part => {
                   const m = part.match(/^(\S+)\s+(.*)$/);
                   if (!m) return part;
-                  const u = img.__hiFailed ? __appendCb(m[1], `${now}-${token}`) : m[1];
+                  const u = retryingHi ? __appendCb(m[1], `${now}-${token}`) : m[1];
                   return `${u} ${m[2]}`;
                 })
                 .join(', ')
@@ -720,6 +802,12 @@ const __imgIO = new IntersectionObserver((entries) => {
             if (hqSrcset) { try { img.srcset = hqSrcset; } catch {} }
             if (hqSrc)    { try { img.src = hqSrc; } catch {} }
           })().catch(() => {
+            const hiFailures = incrementImageFailure(img, 'hi');
+            if (hiFailures >= (PRC_IMAGE_RETRY_LIMITS.hi || 2)) {
+              const settleSrc = img.currentSrc || img.src || data.lqSrc || data.fallback || PLACEHOLDER_URL;
+              markImageSettled(img, settleSrc, { disableRecovery: true, disableHi: true });
+              return;
+            }
             img.__hiFailed = true;
             img.__hiRequested = false;
             img.__phase = 'lq';
@@ -775,6 +863,63 @@ function shouldPreferTaglessImages(item) {
   return item?.__preferTaglessImages === true;
 }
 
+function getPrimaryImageCandidate(item) {
+  const itemId = item?.Id || item?.AlbumId || null;
+  const tag =
+    item?.ImageTags?.Primary ||
+    item?.PrimaryImageTag ||
+    item?.AlbumPrimaryImageTag ||
+    null;
+  if (!itemId || !tag) return null;
+  return { itemId, imageType: "Primary", tag };
+}
+
+function getThumbImageCandidate(item) {
+  const itemId = item?.Id || null;
+  const tag = item?.ImageTags?.Thumb || item?.ThumbImageTag || null;
+  if (!itemId || !tag) return null;
+  return { itemId, imageType: "Thumb", tag, aspectRatio: 16 / 9 };
+}
+
+function getBackdropImageCandidate(item) {
+  const itemId = item?.ParentBackdropItemId || item?.Id || null;
+  const tag =
+    (Array.isArray(item?.ParentBackdropImageTags) && item.ParentBackdropImageTags[0]) ||
+    (Array.isArray(item?.BackdropImageTags) && item.BackdropImageTags[0]) ||
+    item?.BackdropImageTag ||
+    item?.ImageTags?.Backdrop ||
+    null;
+  if (!itemId || !tag) return null;
+  return { itemId, imageType: "Backdrop", tag, aspectRatio: 16 / 9 };
+}
+
+function getPosterLikeImageCandidate(item) {
+  return (
+    getPrimaryImageCandidate(item) ||
+    getThumbImageCandidate(item) ||
+    getBackdropImageCandidate(item) ||
+    null
+  );
+}
+
+function buildCandidateImageUrl(item, candidate, height = 540, quality = 72, { omitTag = false } = {}) {
+  if (!candidate?.itemId || !candidate?.imageType) return null;
+  const skipTag = omitTag || shouldPreferTaglessImages(item);
+  const parts = [];
+
+  if (!skipTag && candidate.tag) parts.push(`tag=${encodeURIComponent(candidate.tag)}`);
+  if (candidate.imageType === "Primary") {
+    parts.push(`maxHeight=${height}`);
+  } else {
+    const aspectRatio = Number(candidate.aspectRatio) || (16 / 9);
+    parts.push(`maxWidth=${Math.max(96, Math.round(height * aspectRatio))}`);
+  }
+  parts.push(`quality=${quality}`);
+  parts.push(`EnableImageEnhancers=false`);
+
+  return withServer(`/Items/${candidate.itemId}/Images/${candidate.imageType}?${parts.join("&")}`);
+}
+
 function buildLogoUrl(item, width = 220, quality = 80) {
   if (!item) return null;
 
@@ -797,21 +942,16 @@ function buildLogoUrl(item, width = 220, quality = 80) {
 
 function buildBackdropUrl(item, width = "auto", quality = 90) {
   if (!item) return null;
-
-  const tag =
-    (Array.isArray(item.BackdropImageTags) && item.BackdropImageTags[0]) ||
-    item.BackdropImageTag ||
-    (item.ImageTags && item.ImageTags.Backdrop);
-
-  if (!tag) return null;
+  const candidate = getBackdropImageCandidate(item);
+  if (!candidate) return null;
 
   const omitTag = shouldPreferTaglessImages(item);
   const parts = [];
-  if (!omitTag) parts.push(`tag=${encodeURIComponent(tag)}`);
+  if (!omitTag && candidate.tag) parts.push(`tag=${encodeURIComponent(candidate.tag)}`);
   parts.push(`maxWidth=${width}`);
   parts.push(`quality=${quality}`);
   parts.push(`EnableImageEnhancers=false`);
-  const url = `/Items/${item.Id}/Images/Backdrop?${parts.join("&")}`;
+  const url = `/Items/${candidate.itemId}/Images/Backdrop?${parts.join("&")}`;
   return withServer(url);
 }
 
@@ -1021,13 +1161,15 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
     delete img.__onErr;
     delete img.__onLoad;
     try { img.removeAttribute('srcset'); } catch {}
-    const staticSrc = hqSrc || lqSrc || fb;
-    if (img.__mobileStaticSrc === staticSrc && img.src === staticSrc) return;
+    const staticSrc = (isKnownMissingImage(hqSrc) || isKnownMissingImage(lqSrc))
+      ? fb
+      : (hqSrc || lqSrc || fb);
+    const alreadyStatic = (img.__mobileStaticSrc === staticSrc && img.src === staticSrc);
     try { img.loading = "lazy"; } catch {}
-    if (img.src !== staticSrc) img.src = staticSrc;
+    if (!alreadyStatic && img.src !== staticSrc) img.src = staticSrc;
     img.__mobileStaticSrc = staticSrc;
     img.classList.remove('is-lqip');
-    img.classList.remove('__hydrated');
+    img.classList.add('__hydrated');
     img.__phase = 'static';
     img.__hiRequested = true;
     img.__disableHi = true;
@@ -1051,9 +1193,15 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
   img.__disableHi = false;
   img.__allowLqHydrate = false;
   img.__fallbackState = { lqNoTagTried: false, hiNoTagTried: false };
+  img.__disableRecovery = false;
+  img.__imageFailureCounts = { lq: 0, hi: 0 };
 
   try { img.removeAttribute('srcset'); } catch {}
   try { img.classList.remove('__hydrated'); } catch {}
+  if (hasKnownMissingImage(img.__data)) {
+    markImageSettled(img, fb, { disableRecovery: true, disableHi: true });
+    return;
+  }
   if (lqSrc) {
     if (img.src !== lqSrc) img.src = lqSrc;
   } else {
@@ -1078,6 +1226,13 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
           try { img.srcset = __appendCbToSrcset(data.hqSrcset, cb); } catch {}
         }
         try { img.src = __appendCb(data.hqSrc, cb); } catch {}
+        return;
+      }
+
+      const hiFailures = incrementImageFailure(img, 'hi');
+      if (hiFailures >= (PRC_IMAGE_RETRY_LIMITS.hi || 2)) {
+        const settleSrc = data.lqSrc || img.currentSrc || img.src || fb;
+        markImageSettled(img, settleSrc, { disableRecovery: true, disableHi: true });
         return;
       }
 
@@ -1117,13 +1272,28 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
         if (img.src !== lqNoTag) img.src = lqNoTag;
         return;
       }
+      const lqFailures = incrementImageFailure(img, 'lq');
+      if (lqFailures >= (PRC_IMAGE_RETRY_LIMITS.lq || 2) || hasKnownMissingImage(data)) {
+        markImageTerminalFailure(img, data, fb);
+        return;
+      }
       img.__allowLqHydrate = true;
+      img.__retryAfter = Date.now() + 12_000;
       try { img.src = fb; } catch {}
     }
   };
 
   const onLoad = () => {
+    const data = img.__data || {};
     const fallbackRecoveryActive = !!img.__allowLqHydrate;
+
+    const loadedSrc = img.currentSrc || img.src || '';
+    if (loadedSrc && loadedSrc !== fb) {
+      clearMissingImage(loadedSrc);
+      clearMissingImage(data.lqSrc);
+      clearMissingImage(data.hqSrc);
+      resetImageFailures(img);
+    }
 
     if (img.__phase === 'hi' || !wantsHi) {
       img.classList.add('__hydrated');
@@ -1169,10 +1339,12 @@ function unobserveImage(img) {
   delete img.__hiFailed;
   delete img.__hiRequested;
   delete img.__disableHi;
+  delete img.__disableRecovery;
   delete img.__allowLqHydrate;
   delete img.__retryAfter;
   delete img.__retryToken;
   delete img.__fallbackState;
+  delete img.__imageFailureCounts;
   if (img) {
     try { img.removeAttribute('srcset'); } catch {}
     try { delete img.__data; } catch {}
@@ -1380,7 +1552,7 @@ function ensureBecauseContainer(indexPage, key = "0") {
     if (heroHost) {
       const showHero = isPersonalRecsHeroEnabled();
       heroHost.style.display = showHero ? '' : 'none';
-      if (!showHero) heroHost.innerHTML = '';
+      if (!showHero) clearHeroHost(heroHost);
     }
     try { enforceOrder(parent); } catch {}
     return existing;
@@ -1665,6 +1837,8 @@ async function renderBecauseYouWatchedAuto(indexPage) {
     shuffleCrypto(items);
     clearRowWithCleanup(row);
     if (!items || !items.length) {
+      const heroHost = section.__heroHost || section.querySelector('.dir-row-hero-host');
+      if (heroHost) clearHeroHost(heroHost);
       row.innerHTML = `<div class="no-recommendations">${(config.languageLabels?.noRecommendations) || labels.noRecommendations || "Öneri bulunamadı"}</div>`;
       triggerScrollerUpdate(row);
       return;
@@ -1675,32 +1849,36 @@ async function renderBecauseYouWatchedAuto(indexPage) {
       if (heroHost) {
         const showHero = isPersonalRecsHeroEnabled();
         heroHost.style.display = showHero ? '' : 'none';
-        heroHost.innerHTML = '';
-        if (showHero) {
+        if (!showHero) {
+          clearHeroHost(heroHost);
+        } else {
           const heroItem = seed || items[0];
           if (heroItem?.Id) {
             const heroLabel = formatBecauseYouWatchedTitle(seedName);
-            mountHero(heroHost, heroItem, serverId, heroLabel, { aboveFold: i === 0 });
+            const { hero: heroEl, changed } = mountHero(heroHost, heroItem, serverId, heroLabel, { aboveFold: i === 0 });
             try {
-              const heroEl = heroHost.querySelector('.dir-row-hero');
               const backdropImg = heroEl?.querySelector?.('.dir-row-hero-bg');
               const RemoteTrailers =
                 heroItem.RemoteTrailers ||
                 heroItem.RemoteTrailerItems ||
                 heroItem.RemoteTrailerUrls ||
                 [];
-            createTrailerIframe({
-              config,
-              RemoteTrailers,
-              slide: heroEl,
-              backdropImg,
-              itemId: heroItem.Id,
-              serverId,
-              detailsUrl: getDetailsUrl(heroItem.Id, serverId),
-              detailsText: (config.languageLabels?.details || labels.details || "Ayrıntılar"),
-              showDetailsOverlay: false,
-            });
+              if (heroEl && (changed || !heroEl.querySelector('.intro-video-container'))) {
+                createTrailerIframe({
+                  config,
+                  RemoteTrailers,
+                  slide: heroEl,
+                  backdropImg,
+                  itemId: heroItem.Id,
+                  serverId,
+                  detailsUrl: getDetailsUrl(heroItem.Id, serverId),
+                  detailsText: (config.languageLabels?.details || labels.details || "Ayrıntılar"),
+                  showDetailsOverlay: false,
+                });
+              }
             } catch {}
+          } else {
+            clearHeroHost(heroHost);
           }
         }
       }
@@ -1715,7 +1893,7 @@ async function renderBecauseYouWatchedAuto(indexPage) {
     triggerScrollerUpdate(row);
   });
 
-  await runWithConcurrency(jobs, IS_MOBILE ? 1 : 2);
+  await runWithConcurrency(jobs, IS_MOBILE ? MOBILE_ROW_BATCH_SIZE : 2);
 }
 
 function ensurePersonalRecsContainer(indexPage) {
@@ -2034,6 +2212,26 @@ function renderRecommendationCards(row, items, serverId) {
   const unique = items;
   const rIC = window.requestIdleCallback || ((fn)=>setTimeout(fn,0));
   const slice = unique;
+  if (IS_MOBILE) {
+    const mobileCards = [];
+    const mobileFrag = document.createDocumentFragment();
+    const limit = Math.min(slice.length, EFFECTIVE_CARD_COUNT);
+
+    for (let i = 0; i < limit; i++) {
+      const c = createRecommendationCard(slice[i], serverId, i < 4);
+      mobileCards.push(c);
+      mobileFrag.appendChild(c);
+    }
+
+    row.appendChild(mobileFrag);
+
+    try {
+      const { userId } = getSessionInfo();
+      scheduleResumeLabels(mobileCards, userId);
+    } catch {}
+    return;
+  }
+
   const aboveFoldCount = IS_MOBILE ? Math.min(4, slice.length) : Math.min(6, slice.length);
   const f1 = document.createDocumentFragment();
   const domSeen = new Set();
@@ -2098,7 +2296,11 @@ const LIGHT_FIELDS = [
   "Type",
   "PrimaryImageAspectRatio",
   "ImageTags",
+  "PrimaryImageTag",
+  "ThumbImageTag",
   "BackdropImageTags",
+  "BackdropImageTag",
+  "LogoImageTag",
   "CommunityRating",
   "Genres",
   "OfficialRating",
@@ -2111,7 +2313,11 @@ const COMMON_FIELDS = [
   "Type",
   "PrimaryImageAspectRatio",
   "ImageTags",
+  "PrimaryImageTag",
+  "ThumbImageTag",
   "BackdropImageTags",
+  "BackdropImageTag",
+  "LogoImageTag",
   "CommunityRating",
   "Genres",
   "OfficialRating",
@@ -2123,13 +2329,16 @@ const COMMON_FIELDS = [
 ].join(",");
 
 function buildPosterSrcSet(item) {
+  const primaryCandidate = getPrimaryImageCandidate(item);
+  if (!primaryCandidate) return "";
+
   const hs = [240, 360, 540, 720];
   const q  = 50;
   const ar = Number(item.PrimaryImageAspectRatio) || 0.6667;
   const omitTag = shouldPreferTaglessImages(item);
   const raw = hs
     .map(h => {
-      const u = buildPosterUrl(item, h, q, { omitTag });
+      const u = buildCandidateImageUrl(item, primaryCandidate, h, q, { omitTag });
       return u ? `${u} ${Math.round(h * ar)}w` : "";
     })
     .filter(Boolean)
@@ -2179,19 +2388,8 @@ function getDetailsUrl(itemId, serverId) {
 }
 
 function buildPosterUrl(item, height = 540, quality = 72, { omitTag = false } = {}) {
-  if (!item?.Id) return null;
-  const tag = item.ImageTags?.Primary || item.PrimaryImageTag;
-  if (!tag) return null;
-  const skipTag = omitTag || shouldPreferTaglessImages(item);
-
-  const parts = [];
-  if (!skipTag) parts.push(`tag=${encodeURIComponent(tag)}`);
-  parts.push(`maxHeight=${height}`);
-  parts.push(`quality=${quality}`);
-  parts.push(`EnableImageEnhancers=false`);
-
-  const url = `/Items/${item.Id}/Images/Primary?${parts.join("&")}`;
-  return withServer(url);
+  const candidate = getPosterLikeImageCandidate(item);
+  return buildCandidateImageUrl(item, candidate, height, quality, { omitTag });
 }
 
 function toNoTagUrl(url) {
@@ -2668,8 +2866,11 @@ async function renderGenreHubs(indexPage) {
   GENRE_STATE.loading   = false;
   GENRE_STATE.serverId  = serverId;
 
-  await ensureGenreLoaded(0);
-  GENRE_STATE.nextIndex = 1;
+  const initialLoads = Math.min(GENRE_BATCH_SIZE, picked.length);
+  const initialJobs = [];
+  for (let i = 0; i < initialLoads; i++) initialJobs.push(ensureGenreLoaded(i));
+  await Promise.allSettled(initialJobs);
+  GENRE_STATE.nextIndex = initialLoads;
 
   __maybeSignalGenreHubsDone();
 
@@ -2813,7 +3014,7 @@ async function ensureGenreLoaded(idx) {
 
       if (!items || !items.length) {
         row.innerHTML = `<div class="no-recommendations">${labels.noRecommendations || "Uygun içerik yok"}</div>`;
-        if (heroHost) heroHost.innerHTML = "";
+        if (heroHost) clearHeroHost(heroHost);
         triggerScrollerUpdate(row);
         return;
       }
@@ -2846,24 +3047,26 @@ async function ensureGenreLoaded(idx) {
       if (heroHost) {
         const showHero = isPersonalRecsHeroEnabled();
         heroHost.style.display = showHero ? '' : 'none';
-        heroHost.innerHTML = "";
-        if (showHero && best) {
-          mountHero(heroHost, best, serverId, genre, { aboveFold: idx === 0 });
+        if (!showHero || !best) {
+          clearHeroHost(heroHost);
+        } else {
+          const { hero: heroEl, changed } = mountHero(heroHost, best, serverId, genre, { aboveFold: idx === 0 });
           try {
-            const heroEl = heroHost.querySelector('.dir-row-hero');
             const backdropImg = heroEl?.querySelector?.('.dir-row-hero-bg');
             const RemoteTrailers = best.RemoteTrailers || best.RemoteTrailerItems || best.RemoteTrailerUrls || [];
-            createTrailerIframe({
-              config,
-              RemoteTrailers,
-              slide: heroEl,
-              backdropImg,
-              itemId: best.Id,
-              serverId,
-              detailsUrl: getDetailsUrl(best.Id, serverId),
-              detailsText: (config.languageLabels?.details || labels.details || "Ayrıntılar"),
-              showDetailsOverlay: false,
-            });
+            if (heroEl && (changed || !heroEl.querySelector('.intro-video-container'))) {
+              createTrailerIframe({
+                config,
+                RemoteTrailers,
+                slide: heroEl,
+                backdropImg,
+                itemId: best.Id,
+                serverId,
+                detailsUrl: getDetailsUrl(best.Id, serverId),
+                detailsText: (config.languageLabels?.details || labels.details || "Ayrıntılar"),
+                showDetailsOverlay: false,
+              });
+            }
           } catch {}
         }
       }
@@ -2875,7 +3078,24 @@ async function ensureGenreLoaded(idx) {
       }
 
       const unique = remaining.slice(0, GENRE_ROW_CARD_COUNT);
-      const head = Math.min(unique.length, IS_MOBILE ? 4 : 6);
+
+      if (IS_MOBILE) {
+        const mobileFrag = document.createDocumentFragment();
+        for (let i = 0; i < unique.length; i++) {
+          mobileFrag.appendChild(createRecommendationCard(unique[i], serverId, i < 4));
+        }
+        row.appendChild(mobileFrag);
+        triggerScrollerUpdate(row);
+
+        if (rec.seq === mySeq) rec.loaded = true;
+        if (idx === 0 && !window.__jmsGenreFirstReady) {
+          window.__jmsGenreFirstReady = true;
+          try { document.dispatchEvent(new Event("jms:genre-first-ready")); } catch {}
+        }
+        return;
+      }
+
+      const head = Math.min(unique.length, 6);
 
       const f1 = document.createDocumentFragment();
       for (let i = 0; i < head; i++) {
@@ -2897,7 +3117,7 @@ async function ensureGenreLoaded(idx) {
       console.warn('Genre hub load failed:', rec?.genre, err);
       try {
         row.innerHTML = `<div class="no-recommendations">${labels.noRecommendations || "Uygun içerik yok"}</div>`;
-        if (heroHost) heroHost.innerHTML = "";
+        if (heroHost) clearHeroHost(heroHost);
         setupScroller(row);
         triggerScrollerUpdate(row);
       } catch {}
@@ -3353,11 +3573,12 @@ function scheduleHomeScrollerRefresh(ms = 120) {
 function __forceRetryAllBroken() {
   document.querySelectorAll('img.cardImage, img.dir-row-hero-bg').forEach(img => {
     if (!img?.__data || !img.isConnected) return;
+    if (img.__disableRecovery === true || hasKnownMissingImage(img.__data)) return;
     const retryAt = Number(img.__retryAfter || 0);
     const retryDue = retryAt > 0 && retryAt <= Date.now();
 
     const shouldRetry =
-      img.__allowLqHydrate === true ||
+      (img.__allowLqHydrate === true && (retryAt === 0 || retryDue)) ||
       (img.__hiFailed === true && (retryAt === 0 || retryDue)) ||
       img.__hydrated === false ||
       retryDue ||

@@ -1,6 +1,7 @@
 import { getSessionInfo, makeApiRequest, getAuthHeader, getEmbyHeaders, fetchItemDetails,  jms, updateFavoriteStatus, goToDetailsPage, getDetailsUrl } from "./api.js";
 import { getConfig } from "./config.js";
 import { withServer } from "./jfUrl.js";
+import { getWatchlistButtonText, getWatchlistToast } from "./watchlist.js";
 
 const config = getConfig();
 
@@ -290,8 +291,8 @@ async function showNowPlayingModal(nowPlayingItem, device) {
               </button>
               <button class="castcontrol-button" data-item-id="${itemId}" data-is-favorite="${isFavorite}">
                 ${isFavorite
-                  ? '💔 ' + config.languageLabels.removeFromFavorites
-                  : '❤️ ' + config.languageLabels.addToFavorites
+                  ? '💔 ' + getWatchlistButtonText(itemDetails, true)
+                  : '❤️ ' + getWatchlistButtonText(itemDetails, false)
                 }
               </button>
               ${createVolumeControls(modal, device, isMuted, volumeLevel)}
@@ -705,21 +706,17 @@ async function togglePlayback(sessionId, currentlyPaused) {
 
 async function toggleFavorite(itemId, makeFavorite) {
   try {
-    await updateFavoriteStatus(itemId, makeFavorite);
+    const itemDetails = await fetchItemDetails(itemId).catch(() => null);
+    await updateFavoriteStatus(itemId, makeFavorite, { item: itemDetails || { Id: itemId, Type: itemDetails?.Type } });
     const buttons = document.querySelectorAll(`[data-item-id="${itemId}"]`);
     buttons.forEach(button => {
       button.dataset.isFavorite = makeFavorite;
       button.innerHTML = makeFavorite
-        ? '💔 ' + (config.languageLabels.removeFromFavorites || "Favoriden Kaldır")
-        : '❤️ ' + (config.languageLabels.addToFavorites || "Favoriye Ekle");
+        ? '💔 ' + getWatchlistButtonText(itemDetails, true)
+        : '❤️ ' + getWatchlistButtonText(itemDetails, false);
     });
 
-    showNotification(
-      makeFavorite
-        ? config.languageLabels.favorieklemesuccess
-        : config.languageLabels.favoricikarmasuccess,
-      'success'
-    );
+    showNotification(getWatchlistToast(itemDetails, makeFavorite), 'success');
   } catch (err) {
     console.error("Favori işlem hatası:", err);
     showNotification(`${config.languageLabels.favorihata}: ${err.message}`, 'error');

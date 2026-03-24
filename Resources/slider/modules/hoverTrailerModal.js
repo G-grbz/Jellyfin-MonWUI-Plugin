@@ -10,9 +10,10 @@ import { applyDotPosterAnimation } from "./animations.js";
 import { getCurrentIndex } from "./sliderState.js";
 import { openDetailsModal } from "./detailsModal.js";
 import { withServer } from "./jfUrl.js";
+import { getWatchlistButtonTitle, hydrateWatchlistState } from "./watchlist.js";
+import { cleanupImageResourceRefs } from "./imageResourceCleanup.js";
 
 const REOPEN_BLOCK_MS = 600;
-const IS_TOUCH = (typeof window !== 'undefined') && (('ontouchstart' in window) || (navigator.maxTouchPoints > 0));
 const HARD_CLOSE_BUFFER_MS = 20;
 export const REOPEN_COOLDOWN_MS    = 400;
 const CROSS_ITEM_SETTLE_MS  = 80;
@@ -90,6 +91,29 @@ function isTouchDevice() {
   return (typeof window !== 'undefined') && (('ontouchstart' in window) || (navigator.maxTouchPoints > 0));
 }
 
+function isTouchRuntime() {
+  return shouldEnableTouchDeviceClass();
+}
+
+function shouldEnableTouchDeviceClass() {
+  if (!isTouchDevice()) return false;
+  try {
+    if (window.matchMedia) {
+      return window.matchMedia('(max-width: 750px)').matches;
+    }
+  } catch {}
+  return (window.innerWidth || 0) <= 750;
+}
+
+function syncTouchDeviceClass() {
+  try {
+    document.documentElement.classList.toggle('touch-device', shouldEnableTouchDeviceClass());
+  } catch {}
+  try {
+    syncTrailerBadgeRuntime();
+  } catch {}
+}
+
 function ensureHoverInfra() {
   if (__hoverInfraReady) return;
   __hoverInfraReady = true;
@@ -101,7 +125,9 @@ function isInsideDotArea(node) {
 }
 
 try {
-  if (isTouchDevice()) document.documentElement.classList.add('touch-device');
+  syncTouchDeviceClass();
+  window.addEventListener('resize', syncTouchDeviceClass, { passive: true });
+  window.addEventListener('orientationchange', syncTouchDeviceClass, { passive: true });
 } catch {}
 
 function isMobileAppEnv() {
@@ -151,9 +177,11 @@ function hardWipeModalDom(modal = modalState.videoModal) {
       matchBtn.style.display = 'none';
     }
   } catch {}
+  try { cleanupImageResourceRefs(modal, { revokeDetachedBlobs: true }); } catch {}
 }
 
 export async function updateModalContent(item, videoUrl) {
+  await hydrateWatchlistState(item).catch(() => {});
   const modal = modalState.videoModal;
   if (!modal || !document.body.contains(modal)) return;
   if (modal?.dataset?.itemId && item?.Id && String(item.Id) !== String(modal.dataset.itemId)) return;
@@ -188,7 +216,7 @@ export async function updateModalContent(item, videoUrl) {
 
   const showYT = (labelText) => {
     const iframe = getOrCreateTrailerIframe(modal);
-    const wantSoundStart = ((isMobileAppEnv() || !IS_TOUCH) && !!modalState._soundOn);
+    const wantSoundStart = ((isMobileAppEnv() || !isTouchRuntime()) && !!modalState._soundOn);
     iframe.src = ensureYTParams(trailerUrl, {
       autoplay: true,
       muteInitial: !wantSoundStart,
@@ -352,6 +380,8 @@ export async function updateModalContent(item, videoUrl) {
   modalState.modalPlayButton.innerHTML = `<i class="fa-solid fa-play"></i> ${getPlayButtonText({ isPlayed, hasPartialPlayback })}`;
   modalState.modalFavoriteButton.classList.toggle('favorited', isFavorite);
   modalState.modalFavoriteButton.innerHTML = isFavorite ? '<i class="fa-solid fa-check"></i>' : '<i class="fa-solid fa-plus"></i>';
+  modalState.modalFavoriteButton.title = getWatchlistButtonTitle(item, isFavorite);
+  modalState.modalFavoriteButton.dataset.itemType = item?.Type || "";
 
   if (modalState.modalButtonsContainer) {
     modalState.modalButtonsContainer.style.opacity = '1';
@@ -547,10 +577,16 @@ export function createVideoModal({ showButtons = true, context = 'dot' } = {}) {
     if (!itemId) return;
     try {
       const isFavorite = favoriteButton.classList.contains('favorited');
-      await updateFavoriteStatus(itemId, !isFavorite);
+      await updateFavoriteStatus(itemId, !isFavorite, {
+        item: {
+          Id: itemId,
+          Type: favoriteButton.dataset.itemType || ""
+        }
+      });
 
       favoriteButton.classList.toggle('favorited', !isFavorite);
       favoriteButton.innerHTML = isFavorite ? '<i class="fa-solid fa-plus"></i>' : '<i class="fa-solid fa-check"></i>';
+      favoriteButton.title = getWatchlistButtonTitle({ Type: favoriteButton.dataset.itemType || "" }, !isFavorite);
       const slide = document.querySelector(`.slide[data-item-id="${itemId}"]`);
       if (slide) {
         const item = await fetchItemDetails(itemId);
@@ -1030,7 +1066,6 @@ function ensureTrailerBadgeCSS() {
     height: 18px;
   }
   .touch-device .jms-trailer-badge { display: flex; }
-  @media (max-width: 750px) { .jms-trailer-badge { display: flex; } }
   `;
   document.head.appendChild(s);
 }
@@ -1049,7 +1084,7 @@ function getItemIdFromCard(card) {
 
 let __badgeIO;
 function ensureBadgeIO() {
-  if (!shouldShowTrailerBadge()) {
+  if (!shouldRunTrailerBadge()) {
     return {
       observe(){}, unobserve(){}, disconnect(){},
     };
@@ -1083,10 +1118,21 @@ function disconnectObservers() {
   try { window.__studioMiniObs?.disconnect?.(); } catch {}
   try { window.__jmsTrailerBadgeMO?.disconnect?.(); } catch {}
   try { __badgeIO?.disconnect?.(); } catch {}
+  try { __trailerBadgeObserver?.disconnect?.(); } catch {}
+  window.__jmsTrailerBadgeMO = null;
+  __badgeIO = null;
+  __trailerBadgeObserver = null;
+  try {
+    document.querySelectorAll('.cardImageContainer').forEach((card) => {
+      card.__jmsTrailerObserved = false;
+      card.__jmsTrailerBadgeObserved = false;
+      card.__jmsTrailerBadgePending = false;
+    });
+  } catch {}
 }
 
 function observeCardForTrailer(card) {
-  if (!shouldShowTrailerBadge()) return;
+  if (!shouldRunTrailerBadge()) return;
   if (!card || card.__jmsTrailerObserved) return;
   card.__jmsTrailerObserved = true;
   ensureTrailerBadgeCSS();
@@ -1094,7 +1140,7 @@ function observeCardForTrailer(card) {
 }
 
 function rescanAllCardsForBadge(root = document) {
-  if (!shouldShowTrailerBadge()) return;
+  if (!shouldRunTrailerBadge()) return;
   try {
     const list = root.querySelectorAll?.('.cardImageContainer');
     if (!list || !list.length) return;
@@ -1103,33 +1149,45 @@ function rescanAllCardsForBadge(root = document) {
 }
 
 function installTrailerBadgeAutobind() {
-  if (window.__jmsTrailerBadgeObsInstalled) return;
-  if (!shouldShowTrailerBadge()) return;
+  if (window.__jmsTrailerBadgeObsInstalled) {
+    if (shouldRunTrailerBadge()) {
+      try { window.__jmsTrailerBadgeStartObserver?.(); } catch {}
+    }
+    return;
+  }
+  if (!shouldRunTrailerBadge()) return;
   window.__jmsTrailerBadgeObsInstalled = true;
   onFirstInteraction(() => rescanAllCardsForBadge(), 1200);
   const deb = (fn, ms=120) => { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms);} };
   const rebind = deb(() => rescanAllCardsForBadge(document), 120);
+  const startObserver = () => {
+    if (!shouldRunTrailerBadge()) return;
+    if (window.__jmsTrailerBadgeMO) return;
+
+    const mo = new MutationObserver((mutList) => {
+      if (!shouldRunTrailerBadge()) return;
+      let need = false;
+      for (const m of mutList) {
+        for (const n of m.addedNodes) {
+          if (n.nodeType !== 1) continue;
+          if (n.classList?.contains('cardImageContainer')) {
+            observeCardForTrailer(n);
+            need = false;
+          } else if (n.querySelector?.('.cardImageContainer')) {
+            need = true;
+          }
+        }
+      }
+      if (need) rescanAllCardsForBadge();
+    });
+    mo.observe(document.body, { childList: true, subtree: true });
+    window.__jmsTrailerBadgeMO = mo;
+  };
+  window.__jmsTrailerBadgeStartObserver = startObserver;
 
   window.addEventListener('hashchange', rebind, true);
   window.addEventListener('popstate',   rebind, true);
-
-  const mo = new MutationObserver((mutList) => {
-    let need = false;
-    for (const m of mutList) {
-      for (const n of m.addedNodes) {
-        if (n.nodeType !== 1) continue;
-        if (n.classList?.contains('cardImageContainer')) {
-          observeCardForTrailer(n);
-          need = false;
-        } else if (n.querySelector?.('.cardImageContainer')) {
-          need = true;
-        }
-      }
-    }
-    if (need) rescanAllCardsForBadge();
-  });
-  mo.observe(document.body, { childList: true, subtree: true });
-  window.__jmsTrailerBadgeMO = mo;
+  startObserver();
   window.addEventListener('jms:globalPreviewModeChanged', () => rebind(), { passive: true });
   document.addEventListener('dialogopen', () => rescanAllCardsForBadge(document), { passive: true });
   document.addEventListener('dialogopened', () => rescanAllCardsForBadge(document), { passive: true });
@@ -1145,10 +1203,22 @@ function shouldShowTrailerBadge() {
   } catch { return false; }
 }
 
+function shouldRunTrailerBadge() {
+  return shouldShowTrailerBadge() && shouldEnableTouchDeviceClass();
+}
+
 function hideAllTrailerBadges() {
   try {
     document.querySelectorAll('.jms-trailer-badge').forEach(n => {
       n.style.display = 'none';
+    });
+  } catch {}
+}
+
+function showAllTrailerBadges() {
+  try {
+    document.querySelectorAll('.jms-trailer-badge').forEach(n => {
+      n.style.display = '';
     });
   } catch {}
 }
@@ -1161,31 +1231,36 @@ function ensureTrailerBadgeGlobalCSSLock() {
     style.id = id;
     document.head.appendChild(style);
   }
-  style.textContent = shouldShowTrailerBadge()
+  style.textContent = shouldRunTrailerBadge()
     ? ''
     : '.jms-trailer-badge{display:none!important}';
 }
 
-if (shouldShowTrailerBadge()) {
-  installTrailerBadgeAutobind();
-} else {
+function syncTrailerBadgeRuntime() {
   ensureTrailerBadgeGlobalCSSLock();
-  hideAllTrailerBadges();
-}
-
-window.addEventListener('jms:globalPreviewModeChanged', () => {
-  ensureTrailerBadgeGlobalCSSLock();
-  if (shouldShowTrailerBadge()) {
+  if (shouldRunTrailerBadge()) {
+    showAllTrailerBadges();
     installTrailerBadgeAutobind();
     try { rescanAllCardsForBadge(document); } catch {}
   } else {
     try { disconnectObservers(); } catch {}
     hideAllTrailerBadges();
   }
+}
+
+syncTrailerBadgeRuntime();
+
+window.addEventListener('jms:globalPreviewModeChanged', () => {
+  syncTrailerBadgeRuntime();
 }, { passive:true });
 
 function mountTrailerBadge(card, text = 'Fragman') {
-  if (!card || card.querySelector('.jms-trailer-badge')) return;
+  if (!card) return;
+  const existing = card.querySelector('.jms-trailer-badge');
+  if (existing) {
+    existing.style.display = '';
+    return;
+  }
   try { if (getComputedStyle(card).position === 'static') card.style.position = 'relative'; } catch {}
   const el = document.createElement('div');
   el.className = 'jms-trailer-badge';
@@ -1219,6 +1294,7 @@ function mountTrailerBadge(card, text = 'Fragman') {
 }
 
 function scanAndMarkCardsForTrailers() {
+  if (!shouldRunTrailerBadge()) return;
   ensureTrailerBadgeCSS();
   const items = document.querySelectorAll('.cardImageContainer');
   if (!items.length) return;
@@ -1312,7 +1388,7 @@ function getYTPlayerForIframe(iframe) {
   try {
     const root = iframe?.closest?.('.video-preview-modal') || document.querySelector('.video-preview-modal');
     const btn = root?.querySelector?.('.preview-volume-button');
-     if (IS_TOUCH) {
+     if (isTouchRuntime()) {
        if (typeof ev.target.mute === 'function') ev.target.mute();
      } else {
        if (modalState._soundOn) {
@@ -1575,7 +1651,7 @@ function handleVisibilityChange() {
 }
 
 function handleWindowBlur() {
-  if (IS_TOUCH) return;
+  if (isTouchRuntime()) return;
   try {
     const iframe = modalState.videoModal?.querySelector?.('.preview-trailer-iframe');
     const ytShown = !!(iframe && iframe.style.display !== 'none');
@@ -1617,6 +1693,7 @@ export function destroyVideoModal() {
         delete modalState.modalVideo._hls;
       }
     }
+    try { hardWipeModalDom(modalState.videoModal); } catch {}
     try { modalState.videoModal.remove(); } catch {}
     modalState.videoModal = null;
     modalState.modalVideo = null;
@@ -1776,7 +1853,7 @@ function installYTPlayer(iframe) {
                 : '<i class="fa-solid fa-volume-xmark"></i>';
             }
 
-            if ((isMobileAppEnv() || !IS_TOUCH) && modalState._soundOn) {
+            if ((isMobileAppEnv() || !isTouchRuntime()) && modalState._soundOn) {
               ev.target.unMute?.();
               ev.target.setVolume?.(100);
               try { ev.target.playVideo?.(); } catch {}
@@ -2401,7 +2478,7 @@ function shouldHideModal() { return !modalState.isMouseInModal; }
 
 export function startModalHideTimer() {
   clearTimeout(modalState.modalHideTimeout);
-  if (IS_TOUCH) return;
+  if (isTouchRuntime()) return;
   modalState.modalHideTimeout = setTimeout(() => {
     if (shouldHideModal() && modalState.videoModal) {
       modalState._isModalClosing = true;
@@ -2467,10 +2544,8 @@ export function setupHoverForAllItems() {
   if (!config || config.allPreviewModal === false) return;
   installHoverOpenSuppressors();
   scanAndMarkCardsForTrailers();
-  const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+  const isTouch = isTouchRuntime();
   const mode = config.globalPreviewMode || 'modal';
-
-  const items = document.querySelectorAll('.cardImageContainer');
   if (isTouch) {
     if (!__hoverTouchDelegatesBound) {
       __hoverTouchDelegatesBound = true;
@@ -2579,9 +2654,8 @@ export function setupHoverForAllItems() {
     return;
   }
 
-  if (!items.length) return;
-
   if (mode === 'studioMini') {
+    const items = document.querySelectorAll('.cardImageContainer');
     installStudioMiniAutobind();
     destroyVideoModal();
     items.forEach(item => {

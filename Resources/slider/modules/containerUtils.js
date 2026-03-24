@@ -6,6 +6,38 @@ import { withServer } from "./jfUrl.js";
 import { getTomatoIconHtml } from "./customIcons.js";
 
 const config = getConfig();
+const QUALITY_SVG_BY_LEVEL = {
+  sd: "./slider/src/images/quality/sd.svg",
+  hd: "./slider/src/images/quality/hd.svg",
+  fhd: "./slider/src/images/quality/fhd.svg",
+  "4k": "./slider/src/images/quality/4k.svg"
+};
+
+function getNormalizedDimension(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function getVideoQualityInfo(videoStream) {
+  const width = getNormalizedDimension(videoStream?.Width);
+  const height = getNormalizedDimension(videoStream?.Height);
+  const longerEdge = Math.max(width, height);
+  const shorterEdge = Math.min(width, height);
+
+  let baseQuality = "sd";
+  if (longerEdge >= 3800 || shorterEdge >= 2160) {
+    baseQuality = "4k";
+  } else if (longerEdge >= 1900 || shorterEdge >= 1080) {
+    baseQuality = "fhd";
+  } else if (longerEdge >= 1200 || shorterEdge >= 720) {
+    baseQuality = "hd";
+  }
+
+  return {
+    baseQuality,
+    qualitySvg: QUALITY_SVG_BY_LEVEL[baseQuality] || QUALITY_SVG_BY_LEVEL.sd
+  };
+}
 
 export function createSlidesContainer(indexPage) {
   let slidesContainer = indexPage.querySelector("#slides-container");
@@ -128,15 +160,7 @@ export function createStatusContainer(itemType, config, UserData, ChildCount, Ru
   if (videoStream && config.showQualityInfo) {
     const qualitySpan = document.createElement("span");
     qualitySpan.className = "video-quality";
-
-    let qualitySvg = `./slider/src/images/quality/sd.svg`;
-    if (videoStream.Width >= 3800) {
-      qualitySvg = `./slider/src/images/quality/4k.svg`;
-    } else if (videoStream.Width >= 1900) {
-      qualitySvg = `./slider/src/images/quality/fhd.svg`;
-    } else if (videoStream.Width >= 1200) {
-      qualitySvg = `./slider/src/images/quality/hd.svg`;
-    }
+    const { qualitySvg } = getVideoQualityInfo(videoStream);
 
     let rangeSvg = `./slider/src/images/quality/sdr.svg`;
     if (videoStream.VideoRangeType && videoStream.VideoRangeType.toUpperCase().includes("HDR")) {
@@ -667,22 +691,7 @@ export function createTitleContainer({ config, Taglines, title, OriginalTitle, T
 export function getVideoQualityText(videoStream) {
   if (!videoStream) return "";
 
-  let baseQuality = "sd";
-  let qualitySvg = `./slider/src/images/quality/sd.svg`;
-
-  if (videoStream.Height >= 3800) {
-    baseQuality = "4k";
-    qualitySvg = `./slider/src/images/quality/4k.svg`;
-  } else if (videoStream.Width >= 2500) {
-    baseQuality = "fhd";
-    qualitySvg = `./slider/src/images/quality/fhd.svg`;
-  } else if (videoStream.Width >= 1900) {
-    baseQuality = "fhd";
-    qualitySvg = `./slider/src/images/quality/fhd.svg`;
-  } else if (videoStream.Width >= 1200) {
-    baseQuality = "hd";
-    qualitySvg = `./slider/src/images/quality/hd.svg`;
-  }
+  const { baseQuality, qualitySvg } = getVideoQualityInfo(videoStream);
 
   let iconSvg;
   if (videoStream.VideoRangeType && videoStream.VideoRangeType.toUpperCase().includes("HDR")) {

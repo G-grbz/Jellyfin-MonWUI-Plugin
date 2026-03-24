@@ -1,9 +1,11 @@
-import { makeApiRequest, fetchItemDetailsFull, getDetailsUrl, playNow, fetchLocalTrailers, pickBestLocalTrailer, getVideoStreamUrl } from "./api.js";
+import { makeApiRequest, fetchItemDetailsFull, getDetailsUrl, playNow, fetchLocalTrailers, pickBestLocalTrailer, getVideoStreamUrl, updateFavoriteStatus } from "./api.js";
 import { withServer } from "./jfUrl.js";
 import { getConfig } from "./config.js";
 import { getLanguageLabels } from "../language/index.js";
 import { CollectionCacheDB } from "./collectionCacheDb.js";
 import { getYoutubeEmbedUrl } from "./utils.js";
+import { getGlobalTmdbApiKey, sanitizeTmdbApiKey } from "./jmsPluginConfig.js";
+import { WATCHLIST_MODAL_ID, getWatchlistButtonText, getWatchlistTabKey, getWatchlistToast, openWatchlistModal } from "./watchlist.js";
 
 const config = getConfig();
 const labels =
@@ -28,6 +30,11 @@ let _openOrigin = null;
 let _ytApiPromise = null;
 const _boxSetCache = new Map();
 const TTL_MOVIE_BOXSET = 7 * 24 * 60 * 60 * 1000;
+const NESTED_MODAL_SCROLL_ALLOW_SELECTOR = [
+  `#${MODAL_ID} .jmsdm-card`,
+  `#${WATCHLIST_MODAL_ID}.visible .monwuiwl-card`,
+  `#${WATCHLIST_MODAL_ID}.visible .monwuiwl-share-card`
+].join(", ");
 
 function notifyDetailsModalPlay(itemId) {
   try {
@@ -306,16 +313,14 @@ function ensureRoot() {
   return root;
 }
 
-const LS_TMDB_KEY  = 'jms_tmdb_api_key';
 const LS_TMDB_LANG = 'jms_tmdb_reviews_lang';
 
 
-function getTmdbApiKey() {
-  const k1 = (config?.TmdbApiKey || config?.tmdbApiKey || '').toString().trim();
-  if (k1) return k1;
+async function getTmdbApiKey() {
+  const direct = sanitizeTmdbApiKey(config?.TmdbApiKey || config?.tmdbApiKey || '');
+  if (direct) return direct;
   try {
-    const k2 = (localStorage.getItem(LS_TMDB_KEY) || '').trim();
-    if (k2) return k2;
+    return await getGlobalTmdbApiKey();
   } catch {}
   return '';
 }
@@ -367,7 +372,7 @@ function getProviderId(item, key) {
 }
 
 async function tmdbFetchJson(path, { signal } = {}) {
-  const apiKey = getTmdbApiKey();
+  const apiKey = await getTmdbApiKey();
   if (!apiKey) throw new Error('TMDb API key missing');
 
   const base = 'https://api.themoviedb.org/3';
@@ -721,7 +726,7 @@ async function loadTmdbReviewsInto(root, displayItem, { signal } = {}) {
 
     const loadReviewsContent = async () => {
         try {
-            const key = getTmdbApiKey();
+            const key = await getTmdbApiKey();
             if (!key) {
                 container.innerHTML = `<div style="color:rgba(255,255,255,.7);font-size:13px;line-height:1.5;">${config.languageLabels.tmdbKeyMissing || 'TMDb API key girilmemiş. Ayarlardan ekleyebilirsin.'}</div>`;
                 return;
@@ -871,7 +876,7 @@ async function loadTmdbReviewsInto(root, displayItem, { signal } = {}) {
     };
 
     try {
-        const key = getTmdbApiKey();
+        const key = await getTmdbApiKey();
         if (key) {
             const { tmdbId, kind } = await getTmdbIdForItem(displayItem, { signal: null });
             if (tmdbId && kind) {
@@ -890,15 +895,28 @@ async function loadTmdbReviewsInto(root, displayItem, { signal } = {}) {
 
 function stopHeroMedia(root) {
   try {
-    const v = root?.querySelector?.(".jmsdm-hero video[data-jms-hero-preview='1']");
+    const hero = root?.querySelector?.(".jmsdm-hero");
+    const media = hero?.querySelector?.(".jmsdm-hero-media");
+    const heroImg = hero?.querySelector?.("img");
+    const replayBtn = hero?.querySelector?.(".jmsdm-hero-replay");
+    const v = hero?.querySelector?.("video[data-jms-hero-preview='1']");
     if (v) {
       try { v.pause(); } catch {}
       try { v.removeAttribute("src"); v.load(); } catch {}
+      try { v.remove(); } catch {}
     }
-    const f = root?.querySelector?.(".jmsdm-hero iframe[data-jms-hero-preview='1']");
+    const f = hero?.querySelector?.("iframe[data-jms-hero-preview='1']");
     if (f) {
+      try { f.__ytPlayer?.destroy?.(); } catch {}
+      try { f.__ytPlayer = null; } catch {}
       try { f.src = "about:blank"; } catch {}
+      try { f.remove(); } catch {}
     }
+    try { if (media) media.innerHTML = ""; } catch {}
+    try { media?.remove?.(); } catch {}
+    try { if (heroImg) heroImg.style.opacity = "1"; } catch {}
+    try { if (replayBtn) replayBtn.disabled = false; } catch {}
+    setHeroReplayVisible(replayBtn, true);
   } catch {}
 }
 
@@ -1128,14 +1146,11 @@ function lockScroll(lock) {
         document.body.style.left = `-${x}px`;
         document.body.style.right = "0";
         document.body.style.width = "100%";
-        document.body.style.touchAction = "none";
       }
 
       const blocker = (e) => {
-        const root = document.getElementById(MODAL_ID);
-        const card = root?.querySelector?.(".jmsdm-card");
-        if (!card) { e.preventDefault(); return; }
-        if (e.target && card.contains(e.target)) return;
+        const target = e.target?.nodeType === 1 ? e.target : e.target?.parentElement;
+        if (target?.closest?.(NESTED_MODAL_SCROLL_ALLOW_SELECTOR)) return;
         e.preventDefault();
       };
 
@@ -1345,15 +1360,8 @@ async function getResumeTicksForContainer(containerId, { signal } = {}) {
 
 async function toggleFavorite(itemId, makeFav, { signal } = {}) {
   try {
-    const userId =
-      (window.ApiClient?.getCurrentUserId?.() || window.ApiClient?._currentUserId) || "";
-    if (!userId || !itemId) throw new Error("UserId/ItemId missing");
-
-    const path = makeFav
-      ? `/Users/${encodeURIComponent(userId)}/FavoriteItems/${encodeURIComponent(itemId)}`
-      : `/Users/${encodeURIComponent(userId)}/FavoriteItems/${encodeURIComponent(itemId)}`;
-
-    await makeApiRequest(path, { method: makeFav ? "POST" : "DELETE", signal });
+    if (!itemId) throw new Error("ItemId missing");
+    await updateFavoriteStatus(itemId, makeFav);
     return true;
   } catch (e) {
     if (!signal?.aborted) console.warn("toggleFavorite error:", e);
@@ -2745,7 +2753,10 @@ wireMiniCardDelegation();
                 </button>
                 <button class="jmsdm-btn jmsdm-fav" aria-pressed="${isFavorite ? "true" : "false"}">
                   ${icon(isFavorite ? "M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" : "M12.1 18.55l-.1.1-.11-.1C7.14 14.24 4 11.39 4 8.5 4 6.5 5.5 5 7.5 5c1.54 0 3.04.99 3.57 2.36h1.87C13.46 5.99 14.96 5 16.5 5 18.5 5 20 6.5 20 8.5c0 2.89-3.14 5.74-7.9 10.05z")}
-                  ${isFavorite ? (config.languageLabels.removeFromFavorites || "Favoriden Çıkar") : (config.languageLabels.addToFavorites || "Favoriye Al")}
+                  ${getWatchlistButtonText(baseItem, isFavorite)}
+                </button>
+                <button class="jmsdm-btn jmsdm-watchlist-open">
+                  ${icon("M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z")} ${config.languageLabels.watchlistOpen || "İzleme Listesi"}
                 </button>
               </div>
               <div class="jmsdm-overview">${overview}</div>
@@ -2798,13 +2809,14 @@ wireMiniCardDelegation();
 
   const openBtn = root.querySelector(".jmsdm-openpage");
   const favBtn  = root.querySelector(".jmsdm-fav");
+  const watchlistBtn = root.querySelector(".jmsdm-watchlist-open");
 
   const updateFavUi = () => {
     if (!favBtn) return;
     favBtn.setAttribute("aria-pressed", isFavorite ? "true" : "false");
     favBtn.innerHTML = `
       ${icon(isFavorite ? "M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" : "M12.1 18.55l-.1.1-.11-.1C7.14 14.24 4 11.39 4 8.5 4 6.5 5.5 5 7.5 5c1.54 0 3.04.99 3.57 2.36h1.87C13.46 5.99 14.96 5 16.5 5 18.5 5 20 6.5 20 8.5c0 2.89-3.14 5.74-7.9 10.05z")}
-      ${isFavorite ? (config.languageLabels.removeFromFavorites || "Favoriden Çıkar") : (config.languageLabels.addToFavorites || "Favoriye Al")}
+      ${getWatchlistButtonText(baseItem, isFavorite)}
     `;
     favBtn.classList.toggle("active", !!isFavorite);
   };
@@ -2840,6 +2852,18 @@ wireMiniCardDelegation();
 
   addEventListener(playBtn, "click", playHandler);
   addEventListener(openBtn, "click", openHandler);
+  if (watchlistBtn) {
+    addEventListener(watchlistBtn, "click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      stopHeroMedia(root);
+      await openWatchlistModal({
+        initialTab: getWatchlistTabKey(baseItem),
+        itemId: baseItem?.Id,
+        item: baseItem
+      });
+    });
+  }
 
   if (favBtn) {
     addEventListener(favBtn, "click", async (e) => {
@@ -2848,7 +2872,7 @@ wireMiniCardDelegation();
       try {
         favBtn.disabled = true;
         const next = !isFavorite;
-        const ok = await toggleFavorite(baseItem.Id, next, { signal: _abort?.signal });
+        const ok = await updateFavoriteStatus(baseItem.Id, next, { item: baseItem });
         if (ok) {
           isFavorite = next;
           try {
@@ -2856,18 +2880,13 @@ wireMiniCardDelegation();
             if (displayItem?.UserData) displayItem.UserData.IsFavorite = isFavorite;
           } catch {}
           updateFavUi();
-          window.showMessage?.(
-            isFavorite
-              ? (config.languageLabels.addedToFavorites || "Favorilere eklendi")
-              : (config.languageLabels.removedFromFavorites || "Favorilerden çıkarıldı"),
-            "success"
-          );
+          window.showMessage?.(getWatchlistToast(baseItem, isFavorite), "success");
         } else {
-          window.showMessage?.(config.languageLabels.favoriteError || "Favori işlemi başarısız", "error");
+          window.showMessage?.(config.languageLabels.favoriteError || "Liste işlemi başarısız", "error");
         }
       } catch (err) {
         console.warn("fav click error:", err);
-        window.showMessage?.(config.languageLabels.favoriteError || "Favori işlemi başarısız", "error");
+        window.showMessage?.(config.languageLabels.favoriteError || "Liste işlemi başarısız", "error");
       } finally {
         try { favBtn.disabled = false; } catch {}
       }
