@@ -11,10 +11,10 @@ let _menuCloserAttached = false;
 function attachGlobalMenuCloser() {
   if (_menuCloserAttached) return;
   document.addEventListener('click', (e) => {
-    document.querySelectorAll('.main-button-container.open')
+    document.querySelectorAll('.monwui-main-button-container.open')
       .forEach(cont => {
         if (!cont.contains(e.target)) {
-          const bc = cont.querySelector('.button-container');
+          const bc = cont.querySelector('.monwui-button-container');
           if (bc) { bc.classList.remove('visible'); bc.classList.add('hidden'); }
           cont.classList.remove('open');
         }
@@ -92,25 +92,25 @@ function pickTrailers(RemoteTrailers, item) {
 export function createButtons(slide, config, UserData, itemId, RemoteTrailers, updatePlayedStatus, updateFavoriteStatus, openTrailerModal, item) {
     const trailers = pickTrailers(RemoteTrailers, item);
     const mainContainer = document.createElement('div');
-    mainContainer.className = 'main-button-container';
+    mainContainer.className = 'monwui-main-button-container';
     applyContainerStyles(mainContainer, 'button');
 
     const buttonContainer = document.createElement('div');
-    buttonContainer.className = 'button-container hidden';
+    buttonContainer.className = 'monwui-button-container hidden';
 
     const buttonGradientOverlay = document.createElement('div');
-    buttonGradientOverlay.className = 'button-gradient-overlay';
+    buttonGradientOverlay.className = 'monwui-button-gradient-overlay';
 
     const mainButton = document.createElement('button');
-    mainButton.className = 'main-btn';
+    mainButton.className = 'monwui-main-btn';
     mainButton.innerHTML = `
-        <span class="icon-wrapper">
+        <span class="monwui-icon-wrapper">
             <i class="fa-solid fa-ellipsis"></i>
         </span>
     `;
 
     const mainButtonContainer = document.createElement('div');
-    mainButtonContainer.className = 'btn-container main-btn-container';
+    mainButtonContainer.className = 'monwui-btn-container monwui-main-btn-container';
     mainButtonContainer.style.position = "relative";
     mainButtonContainer.style.display = "inline-block";
 
@@ -160,12 +160,12 @@ export function createButtons(slide, config, UserData, itemId, RemoteTrailers, u
     }
 
     const btnContainer = document.createElement("div");
-    btnContainer.className = "btn-container";
+    btnContainer.className = "monwui-btn-container";
     if (!bgImage) btnContainer.classList.add("no-bg-image");
 
     if (bgImage) {
         const bgLayer = document.createElement("div");
-        bgLayer.className = "button-bg-layer";
+        bgLayer.className = "monwui-button-bg-layer";
         bgLayer.style.backgroundImage = `url(${bgImage})`;
         bgLayer.style.opacity = config.buttonBackgroundOpacity || 0.3;
         bgLayer.style.filter = `blur(${config.buttonBackgroundBlur}px)`;
@@ -173,18 +173,18 @@ export function createButtons(slide, config, UserData, itemId, RemoteTrailers, u
     }
 
     const contentDiv = document.createElement("div");
-    contentDiv.className = "btn-content";
+    contentDiv.className = "monwui-btn-content";
 
     const btn = document.createElement("button");
-    btn.className = `${buttonType}-btn ${initialClass}`;
+    btn.className = `monwui-${buttonType}-btn ${initialClass}`;
     btn.innerHTML = `
-        <span class="icon-wrapper">
+        <span class="monwui-icon-wrapper">
             ${iconHtml}
         </span>
     `;
 
     const textSpan = document.createElement("span");
-    textSpan.className = "btn-text";
+    textSpan.className = "monwui-btn-text";
     textSpan.textContent = text;
 
     contentDiv.appendChild(btn);
@@ -291,7 +291,7 @@ export function createButtons(slide, config, UserData, itemId, RemoteTrailers, u
         isPlayed ? '<i class="fa-solid fa-check" style="color: #FFC107;"></i>' : '<i class="fa-regular fa-circle-check"></i>',
         isPlayed ? config.languageLabels.izlendi : config.languageLabels.izlenmedi,
         (event, buttonElement) => {
-            const iconWrapper = buttonElement.querySelector('.icon-wrapper');
+            const iconWrapper = buttonElement.querySelector('.monwui-icon-wrapper');
             const textSpan = buttonElement.nextElementSibling;
 
             if (buttonElement.classList.contains("played")) {
@@ -322,7 +322,7 @@ if (config.showFavoriteButton) {
         async (event, buttonElement) => {
             if (buttonElement.dataset.busy === "1") return;
             buttonElement.dataset.busy = "1";
-            const iconWrapper = buttonElement.querySelector('.icon-wrapper');
+            const iconWrapper = buttonElement.querySelector('.monwui-icon-wrapper');
             const textSpan = buttonElement.nextElementSibling;
             const nextValue = !buttonElement.classList.contains("favorited");
 
@@ -348,9 +348,9 @@ if (config.showFavoriteButton) {
     );
 
     ensureWatchlistLoaded().then(() => {
-        const buttonElement = favoriteBtnContainer.querySelector(".favorite-btn");
-        const textSpan = favoriteBtnContainer.querySelector(".btn-text");
-        const iconWrapper = buttonElement?.querySelector(".icon-wrapper");
+        const buttonElement = favoriteBtnContainer.querySelector(".monwui-favorite-btn");
+        const textSpan = favoriteBtnContainer.querySelector(".monwui-btn-text");
+        const iconWrapper = buttonElement?.querySelector(".monwui-icon-wrapper");
         const nextValue = getCachedWatchlistMembership(itemId, isFavorited);
         if (UserData) UserData.IsFavorite = nextValue;
         if (!buttonElement || !textSpan || !iconWrapper) return;
@@ -418,7 +418,7 @@ export function createProviderContainer({ config, ProviderIds, RemoteTrailers, i
 
   const pids = ProviderIds || item?.ProviderIds;
   const container = document.createElement("div");
-  container.className = "provider-container";
+  container.className = "monwui-provider-container";
   applyContainerStyles(container, 'provider');
 
   const canEnrichLater = Boolean(itemId) && (config.showTrailerIcon || config.showProviderInfo);
@@ -428,7 +428,7 @@ export function createProviderContainer({ config, ProviderIds, RemoteTrailers, i
 
   const allowedProviders = ["Imdb", "Tmdb", "Tvdb"];
   const providerDiv = document.createElement("div");
-  providerDiv.className = "providericons-container";
+  providerDiv.className = "monwui-providericons-container";
   applyContainerStyles(providerDiv, 'providericons');
 
   const ensureProviderDivMounted = () => {
@@ -437,10 +437,10 @@ export function createProviderContainer({ config, ProviderIds, RemoteTrailers, i
 
   const addTrailerIcon = (url) => {
     if (!url) return;
-    if (providerDiv.querySelector(".provider-link.youtube")) return;
+    if (providerDiv.querySelector(".monwui-provider-link.youtube")) return;
     const trailerLink = document.createElement("span");
     trailerLink.innerHTML = `<i class="fa-brands fa-youtube"></i>`;
-    trailerLink.className = "provider-link youtube";
+    trailerLink.className = "monwui-provider-link youtube";
     trailerLink.title = `${config.languageLabels.youtubetrailer}`;
     trailerLink.addEventListener("click", (event) => {
       event.preventDefault();
@@ -455,19 +455,19 @@ export function createProviderContainer({ config, ProviderIds, RemoteTrailers, i
     if (!providerIds) return;
     allowedProviders.forEach(provider => {
       if (!config.showProviderInfo || !providerIds[provider]) return;
-      const cls = `.provider-link.${provider.toLowerCase()}`;
+      const cls = `.monwui-provider-link.${provider.toLowerCase()}`;
       if (providerDiv.querySelector(cls)) return;
 
       const link = document.createElement("span");
       if (provider === "Imdb") {
         link.innerHTML = `<img src="./slider/src/images/imdb.svg" alt="IMDb">`;
-        link.className = "provider-link imdb";
+        link.className = "monwui-provider-link imdb";
       } else if (provider === "Tmdb") {
         link.innerHTML = `<img src="./slider/src/images/tmdb.svg" alt="TMDb">`;
-        link.className = "provider-link tmdb";
+        link.className = "monwui-provider-link tmdb";
       } else {
         link.innerHTML = `<img src="./slider/src/images/tvdb.svg" alt="TVDb">`;
-        link.className = "provider-link tvdb";
+        link.className = "monwui-provider-link tvdb";
       }
       link.title = `${provider} Profiline Git`;
       link.addEventListener("click", (event) => {
@@ -484,7 +484,7 @@ export function createProviderContainer({ config, ProviderIds, RemoteTrailers, i
   if (config.showSettingsLink) {
     const settingsLink = document.createElement("span");
     settingsLink.innerHTML = `<i class="fa-solid fa-gear"></i>`;
-    settingsLink.className = "provider-link settings";
+    settingsLink.className = "monwui-provider-link settings";
     settingsLink.title = `${config.languageLabels.settingsLink}`;
     settingsLink.addEventListener("click", (e) => {
       e.preventDefault();
@@ -497,18 +497,18 @@ export function createProviderContainer({ config, ProviderIds, RemoteTrailers, i
 
  if (config.showCast) {
     const castContainer = document.createElement("div");
-    castContainer.className = "cast-container provider-link";
+    castContainer.className = "monwui-cast-container monwui-provider-link";
 
     const deviceSelectorContainer = document.createElement("div");
-    deviceSelectorContainer.className = "device-selector-top-container";
+    deviceSelectorContainer.className = "monwui-device-selector-top-container";
 
     const deviceIcon = document.createElement("div");
-    deviceIcon.className = "device-selector-top-icon";
+    deviceIcon.className = "monwui-device-selector-top-icon";
     deviceIcon.innerHTML = `<i class="fa-solid fa-display"></i>`;
     deviceIcon.title = config.languageLabels.castoynat;
 
     const deviceDropdown = document.createElement("div");
-    deviceDropdown.className = "device-selector-top-dropdown hide";
+    deviceDropdown.className = "monwui-device-selector-top-dropdown hide";
 
     deviceIcon.addEventListener('click', async (e) => {
       e.stopPropagation();

@@ -47,112 +47,112 @@ function ensureFlickerFixCSS() {
   const st = document.createElement('style');
   st.id = 'android-flicker-fix';
   st.textContent = `
-    #slides-container.peak-mode .slide {
+    #monwui-slides-container.peak-mode .monwui-slide {
       will-change: transform, opacity;
       backface-visibility: hidden;
     }
-    .slide.is-hidden {
+    .monwui-slide.is-hidden {
       visibility: hidden !important;
       pointer-events: none !important;
     }
-    #slides-container.peak-first-reveal {
+    #monwui-slides-container.peak-first-reveal {
       opacity: 0 !important;
     }
-    #slides-container.peak-first-reveal.peak-first-reveal-active {
+    #monwui-slides-container.peak-first-reveal.peak-first-reveal-active {
       opacity: 1 !important;
       transition: opacity .22s cubic-bezier(.2,.6,.2,1) !important;
     }
-    .slide.is-visible {
+    .monwui-slide.is-visible {
       visibility: visible !important;
       pointer-events: auto !important;
     }
-    .slide.peak-batch-pending,
-    .slide.peak-batch-pending * {
+    .monwui-slide.peak-batch-pending,
+    .monwui-slide.peak-batch-pending * {
       animation: none !important;
       transition: none !important;
     }
-    .slide.peak-batch-pending {
+    .monwui-slide.peak-batch-pending {
       opacity: 0 !important;
       pointer-events: none !important;
       visibility: hidden !important;
     }
-    #slides-container.peak-shifting .slide {
+    #monwui-slides-container.peak-shifting .monwui-slide {
       transition:
         transform var(--peak-shift-ms, 320ms) var(--peak-shift-ease, cubic-bezier(.23,.78,.32,1)),
         opacity var(--peak-shift-opacity-ms, 220ms) ease-out !important;
       will-change: transform, opacity !important;
     }
-    #slides-container.peak-shifting .slide,
-    #slides-container.peak-shifting .slide.active {
+    #monwui-slides-container.peak-shifting .monwui-slide,
+    #monwui-slides-container.peak-shifting .monwui-slide.active {
       box-shadow: none !important;
     }
-    #slides-container.peak-shifting .slide .backdrop {
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-backdrop {
       transition: opacity var(--peak-shift-opacity-ms, 220ms) ease-out !important;
       will-change: opacity !important;
     }
-    #slides-container.peak-shifting .slide .button-container,
-    #slides-container.peak-shifting .slide .button-container *,
-    #slides-container.peak-shifting .slide .director-container,
-    #slides-container.peak-shifting .slide .horizontal-gradient-overlay,
-    #slides-container.peak-shifting .slide .horizontal-gradient-overlay:before,
-    #slides-container.peak-shifting .slide .horizontal-gradient-overlay:after,
-    #slides-container.peak-shifting .slide .info-container,
-    #slides-container.peak-shifting .slide .language-container,
-    #slides-container.peak-shifting .slide .logo-container,
-    #slides-container.peak-shifting .slide .logo-container .logo-img,
-    #slides-container.peak-shifting .slide .main-button-container,
-    #slides-container.peak-shifting .slide .meta-container,
-    #slides-container.peak-shifting .slide .meta-container *,
-    #slides-container.peak-shifting .slide .plot-container,
-    #slides-container.peak-shifting .slide .plot-container *,
-    #slides-container.peak-shifting .slide .provider-container,
-    #slides-container.peak-shifting .slide .provider-container *,
-    #slides-container.peak-shifting .slide .slider-wrapper,
-    #slides-container.peak-shifting .slide .status-container,
-    #slides-container.peak-shifting .slide .status-container *,
-    #slides-container.peak-shifting .slide .title-container,
-    #slides-container.peak-shifting .slide .title-container * {
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-button-container,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-button-container *,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-director-container,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-horizontal-gradient-overlay,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-horizontal-gradient-overlay:before,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-horizontal-gradient-overlay:after,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-info-container,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-language-container,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-logo-container,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-logo-container .logo-img,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-main-button-container,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-meta-container,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-meta-container *,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-plot-container,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-plot-container *,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-provider-container,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-provider-container *,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-slider-wrapper,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-status-container,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-status-container *,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-title-container,
+    #monwui-slides-container.peak-shifting .monwui-slide .monwui-title-container * {
       animation: none !important;
       transition: none !important;
       will-change: auto !important;
     }
-    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) {
+    html[data-css-variant=peakslider] #monwui-slides-container.peak-mode .monwui-slide.active:not(.backdrop-ready) {
       box-shadow: none !important;
       outline: none !important;
     }
-    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .button-container,
-    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .director-container,
-    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .info-container,
-    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .language-container,
-    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .logo-container,
-    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .main-button-container,
-    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .meta-container,
-    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .plot-container,
-    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .provider-container,
-    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .slider-wrapper,
-    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .status-container,
-    html[data-css-variant=peakslider] #slides-container.peak-mode .slide.active:not(.backdrop-ready) .title-container {
+    html[data-css-variant=peakslider] #monwui-slides-container.peak-mode .monwui-slide.active:not(.backdrop-ready) .monwui-button-container,
+    html[data-css-variant=peakslider] #monwui-slides-container.peak-mode .monwui-slide.active:not(.backdrop-ready) .monwui-director-container,
+    html[data-css-variant=peakslider] #monwui-slides-container.peak-mode .monwui-slide.active:not(.backdrop-ready) .monwui-info-container,
+    html[data-css-variant=peakslider] #monwui-slides-container.peak-mode .monwui-slide.active:not(.backdrop-ready) .monwui-language-container,
+    html[data-css-variant=peakslider] #monwui-slides-container.peak-mode .monwui-slide.active:not(.backdrop-ready) .monwui-logo-container,
+    html[data-css-variant=peakslider] #monwui-slides-container.peak-mode .monwui-slide.active:not(.backdrop-ready) .monwui-main-button-container,
+    html[data-css-variant=peakslider] #monwui-slides-container.peak-mode .monwui-slide.active:not(.backdrop-ready) .monwui-meta-container,
+    html[data-css-variant=peakslider] #monwui-slides-container.peak-mode .monwui-slide.active:not(.backdrop-ready) .monwui-plot-container,
+    html[data-css-variant=peakslider] #monwui-slides-container.peak-mode .monwui-slide.active:not(.backdrop-ready) .monwui-provider-container,
+    html[data-css-variant=peakslider] #monwui-slides-container.peak-mode .monwui-slide.active:not(.backdrop-ready) .monwui-slider-wrapper,
+    html[data-css-variant=peakslider] #monwui-slides-container.peak-mode .monwui-slide.active:not(.backdrop-ready) .monwui-status-container,
+    html[data-css-variant=peakslider] #monwui-slides-container.peak-mode .monwui-slide.active:not(.backdrop-ready) .monwui-title-container {
       opacity: 0 !important;
       pointer-events: none !important;
       transform: translateY(4px) !important;
       visibility: hidden !important;
     }
-    #slides-container.peak-ready .slide.peak-snap-in,
-    #slides-container.peak-ready .slide.peak-snap-in * {
+    #monwui-slides-container.peak-ready .monwui-slide.peak-snap-in,
+    #monwui-slides-container.peak-ready .monwui-slide.peak-snap-in * {
       transition: none !important;
       animation: none !important;
     }
-	    #slides-container.peak-ready .slide.off-left,
-	    #slides-container.peak-ready .slide.off-right {
+	    #monwui-slides-container.peak-ready .monwui-slide.off-left,
+	    #monwui-slides-container.peak-ready .monwui-slide.off-right {
 	      visibility: hidden !important;
 	      pointer-events: none !important;
 	      content-visibility: hidden !important;
 	      contain: strict !important;
 	    }
-	    html[data-css-variant=peakslider] #slides-container.peak-ready .slide.off-left {
+	    html[data-css-variant=peakslider] #monwui-slides-container.peak-ready .monwui-slide.off-left {
 	      transform: translate3d(calc(-50% - 220vw), -50%, 0) scale(.82) !important;
 	    }
-	    html[data-css-variant=peakslider] #slides-container.peak-ready .slide.off-right {
+	    html[data-css-variant=peakslider] #monwui-slides-container.peak-ready .monwui-slide.off-right {
 	      transform: translate3d(calc(-50% + 220vw), -50%, 0) scale(.82) !important;
 	    }
 	  `;
@@ -201,13 +201,13 @@ function injectPeakLiteCSS() {
     html.jms-peak-lite .homeSectionsContainer {
       scroll-snap-type: none !important;
     }
-    #slides-container.peak-lite {
+    #monwui-slides-container.peak-lite {
       contain: none !important;
       will-change: auto !important;
       overflow: visible !important;
     }
-    #slides-container.peak-lite .slide,
-    #slides-container.peak-lite .slide .backdrop {
+    #monwui-slides-container.peak-lite .monwui-slide,
+    #monwui-slides-container.peak-lite .monwui-slide .monwui-backdrop {
       contain: none !important;
       contain-intrinsic-size: auto !important;
       content-visibility: visible !important;
@@ -215,40 +215,40 @@ function injectPeakLiteCSS() {
       backface-visibility: hidden !important;
       -webkit-backface-visibility: hidden !important;
     }
-    #slides-container.peak-lite .slide {
+    #monwui-slides-container.peak-lite .monwui-slide {
       transition: none !important;
       animation: none !important;
       box-shadow: none !important;
       outline: none !important;
     }
-    #slides-container.peak-lite .slide.active {
+    #monwui-slides-container.peak-lite .monwui-slide.active {
       box-shadow: 0 10px 18px -12px rgba(28,39,64,.9) !important;
     }
-    #slides-container.peak-lite .backdrop,
-    #slides-container.peak-lite .horizontal-gradient-overlay,
-    #slides-container.peak-lite .button-container,
-    #slides-container.peak-lite .info-container,
-    #slides-container.peak-lite .language-container,
-    #slides-container.peak-lite .meta-container,
-    #slides-container.peak-lite .plot-container,
-    #slides-container.peak-lite .provider-container,
-    #slides-container.peak-lite .status-container,
-    #slides-container.peak-lite .title-container {
+    #monwui-slides-container.peak-lite .monwui-backdrop,
+    #monwui-slides-container.peak-lite .monwui-horizontal-gradient-overlay,
+    #monwui-slides-container.peak-lite .monwui-button-container,
+    #monwui-slides-container.peak-lite .monwui-info-container,
+    #monwui-slides-container.peak-lite .monwui-language-container,
+    #monwui-slides-container.peak-lite .monwui-meta-container,
+    #monwui-slides-container.peak-lite .monwui-plot-container,
+    #monwui-slides-container.peak-lite .monwui-provider-container,
+    #monwui-slides-container.peak-lite .monwui-status-container,
+    #monwui-slides-container.peak-lite .monwui-title-container {
       backdrop-filter: none !important;
       filter: none !important;
       box-shadow: none !important;
     }
-    #slides-container.peak-lite .backdrop,
-    #slides-container.peak-lite .horizontal-gradient-overlay {
+    #monwui-slides-container.peak-lite .monwui-backdrop,
+    #monwui-slides-container.peak-lite .monwui-horizontal-gradient-overlay {
       transition: none !important;
       animation: none !important;
     }
-    #slides-container.peak-lite .slide.active,
-    #slides-container.peak-lite .slide.active .backdrop {
+    #monwui-slides-container.peak-lite .monwui-slide.active,
+    #monwui-slides-container.peak-lite .monwui-slide.active .monwui-backdrop {
       opacity: 1 !important;
       visibility: visible !important;
     }
-    #slides-container.peak-lite .slide.active img.backdrop {
+    #monwui-slides-container.peak-lite .monwui-slide.active img.monwui-backdrop {
       left: 0 !important;
       right: 0 !important;
       width: 100% !important;
@@ -259,7 +259,7 @@ function injectPeakLiteCSS() {
   document.head.appendChild(st);
 }
 
-function syncPeakLiteMode(container = document.querySelector('#slides-container')) {
+function syncPeakLiteMode(container = document.querySelector('#monwui-slides-container')) {
   injectPeakLiteCSS();
   const enabled = !!container && container.classList.contains('peak-mode') && isLowPowerPeakRuntime();
 
@@ -313,7 +313,7 @@ function getPeakActiveIndex(slides) {
 }
 
 function getPeakViewportContainer(root = document) {
-  return root.querySelector?.("#indexPage:not(.hide) #slides-container, #homePage:not(.hide) #slides-container, #slides-container") || null;
+  return root.querySelector?.("#indexPage:not(.hide) #monwui-slides-container, #homePage:not(.hide) #monwui-slides-container, #monwui-slides-container") || null;
 }
 
 function resolveSlidesArray(slides) {
@@ -471,8 +471,8 @@ function applyPeakContainerState(container, diagonal) {
 
 function isPeakViewportMutationNode(node) {
   if (!(node instanceof Element)) return false;
-  if (node.id === 'slides-container' || node.id === 'indexPage' || node.id === 'homePage') return true;
-  return !!node.querySelector?.('#slides-container, #indexPage, #homePage');
+  if (node.id === 'monwui-slides-container' || node.id === 'indexPage' || node.id === 'homePage') return true;
+  return !!node.querySelector?.('#monwui-slides-container, #indexPage, #homePage');
 }
 
 function mutationTouchesPeakViewport(mutations) {
@@ -492,7 +492,7 @@ function isElementInViewport(el) {
 }
 
 function promotePeakBackdrop(activeSlide) {
-  const backdrop = activeSlide?.__backdropImg || activeSlide?.querySelector?.('.backdrop');
+  const backdrop = activeSlide?.__backdropImg || activeSlide?.querySelector?.('.monwui-backdrop');
   if (!backdrop) return;
 
   try { backdrop.style.opacity = '1'; } catch {}
@@ -501,7 +501,7 @@ function promotePeakBackdrop(activeSlide) {
 }
 
 function syncPeakBackdropForState(slide, prevState, nextState) {
-  const backdrop = slide?.__backdropImg || slide?.querySelector?.('.backdrop');
+  const backdrop = slide?.__backdropImg || slide?.querySelector?.('.monwui-backdrop');
   if (!backdrop) return;
   backdrop.__clearPeakHiTimer?.();
 
@@ -542,7 +542,7 @@ function refreshPeakViewport({ forcePrime = false } = {}) {
   if (!lite && !forcePrime) return;
   if (!isElementInViewport(container)) return;
 
-  const slides = container.querySelectorAll('.slide');
+  const slides = container.querySelectorAll('.monwui-slide');
   if (!slides.length) return;
 
   const activeIndex = getPeakActiveIndex(slides);
@@ -703,9 +703,9 @@ function hideSlide(el, { soft = true } = {}) {
 }
 
 function scrollContainerToSlide(index, { smooth = true } = {}) {
-  const container = document.querySelector("#slides-container");
+  const container = document.querySelector("#monwui-slides-container");
   if (!container) return;
-  const slides = container.querySelectorAll(".slide");
+  const slides = container.querySelectorAll(".monwui-slide");
   const target = slides?.[index];
   if (!target) return;
 
@@ -722,7 +722,7 @@ function L(key, fallback = '') {
 }
 function sleep(ms) { return new Promise(res => setTimeout(res, ms)); }
 function hardResetProgressBarEl() {
-  const pb = document.querySelector(".slide-progress-bar");
+  const pb = document.querySelector(".monwui-slide-progress-bar");
   if (!pb) return;
   pb.style.transition = "none";
   pb.style.animation  = "none";
@@ -823,9 +823,9 @@ function microFadeSwap(
 
 
 function getBackdropFromDot(dot) {
-  const img = dot?.querySelector?.('.dot-poster-image');
+  const img = dot?.querySelector?.('.monwui-dot-poster-image');
   if (img?.src) return img.src;
-  const slideEl = document.querySelector(`.slide[data-item-id="${dot?.dataset?.itemId}"]`);
+  const slideEl = document.querySelector(`.monwui-slide[data-item-id="${dot?.dataset?.itemId}"]`);
   if (slideEl) {
     return slideEl.dataset.background || slideEl.dataset.backdrop || slideEl.dataset.primaryimage || null;
   }
@@ -833,17 +833,17 @@ function getBackdropFromDot(dot) {
 }
 
 function enterPeakScrollMode() {
-  const sc = document.querySelector("#slides-container");
+  const sc = document.querySelector("#monwui-slides-container");
   if (!sc) return;
   sc.classList.add("peak-scroll");
-  sc.querySelectorAll(".slide").forEach(slide => {
+  sc.querySelectorAll(".monwui-slide").forEach(slide => {
     slide.removeAttribute("data-side");
     slide.removeAttribute("data-prime-pos");
   });
 }
 
 export function changeSlide(direction) {
-  const slides = getPeakViewportContainer()?.querySelectorAll(".slide") || document.querySelectorAll(".slide");
+  const slides = getPeakViewportContainer()?.querySelectorAll(".monwui-slide") || document.querySelectorAll(".monwui-slide");
   if (!slides.length) return;
 
   clearAllTimers();
@@ -851,7 +851,7 @@ export function changeSlide(direction) {
   const currentIndex = getCurrentIndex();
   const newIndex = (currentIndex + direction + slides.length) % slides.length;
   setCurrentIndex(newIndex);
-  const sc = document.querySelector("#slides-container");
+  const sc = document.querySelector("#monwui-slides-container");
   if (sc && sc.classList.contains("peak-scroll")) {
     scrollContainerToSlide(newIndex, { smooth: true });
   }
@@ -864,7 +864,7 @@ export function changeSlide(direction) {
 
 export function updateActiveDot() {
   const currentIndex = getCurrentIndex();
-  const dots = document.querySelectorAll(".dot");
+  const dots = document.querySelectorAll(".monwui-dot");
   const config = getConfig();
   const lowPower = isLowPowerPeakRuntime();
 
@@ -884,7 +884,7 @@ export function updateActiveDot() {
 export function createDotNavigation() {
   const config = getConfig();
   if (!config.showDotNavigation) {
-    const existingDotContainer = document.querySelector(".dot-navigation-container");
+    const existingDotContainer = document.querySelector(".monwui-dot-navigation-container");
     if (existingDotContainer) {
       teardownAnimations();
       existingDotContainer.remove();
@@ -899,13 +899,13 @@ export function createDotNavigation() {
     return;
   }
 
-  const slides = slidesContainer.querySelectorAll(".slide");
+  const slides = slidesContainer.querySelectorAll(".monwui-slide");
   if (!slides || slides.length === 0) return;
 
-  let dotContainer = slidesContainer.querySelector(".dot-navigation-container");
+  let dotContainer = slidesContainer.querySelector(".monwui-dot-navigation-container");
   if (!dotContainer) {
     dotContainer = document.createElement("div");
-    dotContainer.className = "dot-navigation-container";
+    dotContainer.className = "monwui-dot-navigation-container";
     applyContainerStyles(dotContainer, 'existingDot');
     slidesContainer.appendChild(dotContainer);
   }
@@ -918,19 +918,19 @@ export function createDotNavigation() {
     dotContainer.classList.add("dot-poster-mode");
 
     const scrollWrapper = document.createElement("div");
-    scrollWrapper.className = "dot-scroll-wrapper";
+    scrollWrapper.className = "monwui-dot-scroll-wrapper";
 
     const slidesArray = Array.from(slides);
 
     const dotElements = slidesArray.map((slide, index) => {
     const itemId = slide.dataset.itemId;
     if (!itemId) {
-        console.warn(`Dot oluşturulamadı: slide ${index} için itemId eksik`);
+        console.warn(`Dot oluşturulamadı: monwui-slide ${index} için itemId eksik`);
         return null;
     }
 
     const dot = document.createElement("div");
-    dot.className = "dot poster-dot";
+    dot.className = "monwui-dot monwui-poster-dot";
     dot.dataset.index = index;
     dot.dataset.itemId = itemId;
 
@@ -941,7 +941,7 @@ export function createDotNavigation() {
     if (imageUrl) {
         const image = document.createElement("img");
         image.src = withServer(imageUrl);
-        image.className = "dot-poster-image";
+        image.className = "monwui-dot-poster-image";
         image.style.opacity = config.dotBackgroundOpacity || 0.3;
         image.style.filter = lowPower ? "none" : `blur(${config.dotBackgroundBlur ?? 10}px)`;
         dot.appendChild(image);
@@ -954,7 +954,7 @@ export function createDotNavigation() {
             const qualityText = getVideoQualityText(videoStream);
             if (qualityText) {
                 const qualityBadge = document.createElement("div");
-                qualityBadge.className = "dot-quality-badge";
+                qualityBadge.className = "monwui-dot-quality-badge";
                 qualityBadge.innerHTML = `${qualityText}`;
                 dot.appendChild(qualityBadge);
                 const style = document.createElement("style");
@@ -969,19 +969,19 @@ export function createDotNavigation() {
 
         if (config.showPlaybackProgress && !isNaN(positionTicks) && !isNaN(runtimeTicks) && positionTicks > 0 && positionTicks < runtimeTicks) {
             const progressContainer = document.createElement("div");
-            progressContainer.className = "dot-progress-container";
+            progressContainer.className = "monwui-dot-progress-container";
 
             const barWrapper = document.createElement("div");
-            barWrapper.className = "dot-duration-bar-wrapper";
+            barWrapper.className = "monwui-dot-duration-bar-wrapper";
 
             const bar = document.createElement("div");
-            bar.className = "dot-duration-bar";
+            bar.className = "monwui-dot-duration-bar";
             const percentage = Math.min((positionTicks / runtimeTicks) * 100, 100);
             bar.style.width = `${percentage.toFixed(1)}%`;
 
             const remainingMinutes = Math.round((runtimeTicks - positionTicks) / 600000000);
             const text = document.createElement("span");
-            text.className = "dot-duration-remaining";
+            text.className = "monwui-dot-duration-remaining";
             text.innerHTML = `<i class="fa-solid fa-hourglass-half"></i> ${remainingMinutes} ${config.languageLabels.dakika} ${config.languageLabels.kaldi}`;
 
             barWrapper.appendChild(bar);
@@ -991,10 +991,10 @@ export function createDotNavigation() {
         }
 
         const playButtonContainer = document.createElement("div");
-        playButtonContainer.className = "dot-play-container";
+        playButtonContainer.className = "monwui-dot-play-container";
 
         const playButton = document.createElement("button");
-        playButton.className = "dot-play-button";
+        playButton.className = "monwui-dot-play-button";
         playButton.textContent = config.languageLabels.izle;
 
         playButton.addEventListener('click', async (e) => {
@@ -1016,7 +1016,7 @@ export function createDotNavigation() {
     });
 
         const matchBadge = document.createElement("div");
-        matchBadge.className = "dot-match-div";
+        matchBadge.className = "monwui-dot-match-div";
         matchBadge.textContent = `...% ${config.languageLabels.uygun}`;
 
         playButtonContainer.appendChild(playButton);
@@ -1055,7 +1055,7 @@ export function createDotNavigation() {
       const runtimeTicks  = Number(item.RunTimeTicks || 0);
       const hasPartialPlayback = positionTicks > 0 && positionTicks < runtimeTicks;
 
-      const playButton = dot.querySelector('.dot-play-button');
+      const playButton = dot.querySelector('.monwui-dot-play-button');
       if (playButton) {
         playButton.textContent = getPlayButtonText({
           isPlayed,
@@ -1065,7 +1065,7 @@ export function createDotNavigation() {
       }
 
       const matchPercentage = await calculateMatchPercentage(item.UserData, item);
-      const matchBadge = dot.querySelector('.dot-match-div');
+      const matchBadge = dot.querySelector('.monwui-dot-match-div');
       if (matchBadge) {
         matchBadge.textContent = `${matchPercentage}% ${config.languageLabels.uygun}`;
       }
@@ -1074,7 +1074,7 @@ export function createDotNavigation() {
       dot.dataset.played   = isPlayed.toString();
     } catch (error) {
       if (error?.name !== 'AbortError') {
-        console.error('Poster dot hover hatası:', error);
+        console.error('Poster monwui-dot hover hatası:', error);
         if (modalState.videoModal) modalState.videoModal.style.display = 'none';
       }
     }
@@ -1102,7 +1102,7 @@ export function createDotNavigation() {
 
       if (!lowPower) {
         setTimeout(() => {
-          const createdDots = Array.from(scrollWrapper.querySelectorAll('.poster-dot'));
+          const createdDots = Array.from(scrollWrapper.querySelectorAll('.monwui-poster-dot'));
           createdDots.forEach(dot => {
             const itemId = dot.dataset.itemId;
             if (itemId) preloadVideoPreview(itemId);
@@ -1127,7 +1127,7 @@ export function createDotNavigation() {
               const positionTicks = Number(item.UserData?.PlaybackPositionTicks || 0);
               const runtimeTicks = Number(item.RunTimeTicks || 0);
               const hasPartialPlayback = positionTicks > 0 && positionTicks < runtimeTicks;
-              const playButton = dot.querySelector('.dot-play-button');
+              const playButton = dot.querySelector('.monwui-dot-play-button');
               if (playButton) {
               playButton.textContent = getPlayButtonText({
               isPlayed,
@@ -1136,7 +1136,7 @@ export function createDotNavigation() {
             });
           }
               const matchPercentage = await calculateMatchPercentage(item.UserData, item);
-              const matchBadge = dot.querySelector('.dot-match-div');
+              const matchBadge = dot.querySelector('.monwui-dot-match-div');
               if (matchBadge) {
                   matchBadge.textContent = `${matchPercentage}% ${config.languageLabels.uygun}`;
               }
@@ -1150,14 +1150,14 @@ export function createDotNavigation() {
   }, lowPower ? 350 : 0);
 
     const leftArrow = document.createElement("button");
-    leftArrow.className = "dot-arrow dot-arrow-left";
+    leftArrow.className = "monwui-dot-arrow monwui-dot-arrow-left";
     leftArrow.innerHTML = "&#10094;";
     leftArrow.addEventListener("click", () => {
         scrollWrapper.scrollBy({ left: -scrollWrapper.clientWidth, behavior: lowPower ? "auto" : "smooth" });
     });
 
     const rightArrow = document.createElement("button");
-    rightArrow.className = "dot-arrow dot-arrow-right";
+    rightArrow.className = "monwui-dot-arrow monwui-dot-arrow-right";
     rightArrow.innerHTML = "&#10095;";
     rightArrow.addEventListener("click", () => {
         scrollWrapper.scrollBy({ left: scrollWrapper.clientWidth, behavior: lowPower ? "auto" : "smooth" });
@@ -1177,7 +1177,7 @@ export function createDotNavigation() {
 
   slides.forEach((slide, index) => {
     const dot = document.createElement("span");
-    dot.className = "dot";
+    dot.className = "monwui-dot";
     dot.dataset.index = index;
 
     const imageUrl = dotType === "useSlideBackground"
@@ -1186,7 +1186,7 @@ export function createDotNavigation() {
 
     if (imageUrl) {
       const imageOverlay = document.createElement("div");
-      imageOverlay.className = "dot-image-overlay";
+      imageOverlay.className = "monwui-dot-image-overlay";
       imageOverlay.style.backgroundImage = `url(${imageUrl})`;
       imageOverlay.style.backgroundSize = "cover";
       imageOverlay.style.backgroundPosition = "center";
@@ -1213,7 +1213,7 @@ async function openModalForDot(dot, itemId, signal) {
     hardStopPlayback();
     resetModalInfo(modalState.videoModal);
     resetModalButtons();
-    if (modalState._modalContext !== 'dot') {
+    if (modalState._modalContext !== 'monwui-dot') {
       destroyVideoModal();
     } else {
       modalState.videoModal.style.display = 'none';
@@ -1223,7 +1223,7 @@ async function openModalForDot(dot, itemId, signal) {
   const item = await fetchItemDetails(itemId, { signal });
   if (signal?.aborted) return;
   if (!modalState.videoModal || !document.body.contains(modalState.videoModal)) {
-    const modalElements = createVideoModal({ showButtons: true, context: 'dot' });
+    const modalElements = createVideoModal({ showButtons: true, context: 'monwui-dot' });
     if (!modalElements) return;
     modalState.videoModal = modalElements.modal;
     modalState.modalVideo = modalElements.video;
@@ -1308,8 +1308,8 @@ export function initSwipeEvents() {
 
 export function centerActiveDot({ smooth = true, force = false } = {}) {
   if (isLowPowerPeakRuntime()) smooth = false;
-  const scrollWrapper = document.querySelector(".dot-scroll-wrapper");
-  const activeDot = scrollWrapper?.querySelector(".poster-dot.active");
+  const scrollWrapper = document.querySelector(".monwui-dot-scroll-wrapper");
+  const activeDot = scrollWrapper?.querySelector(".monwui-poster-dot.active");
   if (!scrollWrapper || !activeDot) return;
 
   const wrapperRect = scrollWrapper.getBoundingClientRect();
@@ -1359,17 +1359,17 @@ export function displaySlide(index) {
   const slidesContainer = getPeakViewportContainer();
   if (!slidesContainer) return;
 
-  const slides = slidesContainer.querySelectorAll(".slide");
+  const slides = slidesContainer.querySelectorAll(".monwui-slide");
   if (!slides.length) return;
 
-  if (!document.querySelector(".dot-navigation-container")) {
+  if (!document.querySelector(".monwui-dot-navigation-container")) {
     createDotNavigation();
   }
 
   const currentSlide = slides[index];
   if (!currentSlide) return;
 
-  const activeSlide = slidesContainer.querySelector(".slide.active");
+  const activeSlide = slidesContainer.querySelector(".monwui-slide.active");
   const slidesArr = Array.from(slides);
   const len = slidesArr.length;
 
@@ -1412,8 +1412,8 @@ export function displaySlide(index) {
         showSlide(currentSlide);
         const currentBackdrop =
           currentSlide.__backdropImg ||
-          currentSlide.querySelector?.('img.backdrop') ||
-          currentSlide.querySelector?.('.backdrop') ||
+          currentSlide.querySelector?.('img.monwui-backdrop') ||
+          currentSlide.querySelector?.('.monwui-backdrop') ||
           null;
         if (currentBackdrop) {
           currentBackdrop.style.opacity = "0";
@@ -1468,7 +1468,7 @@ export function displaySlide(index) {
       updateProgressBarPosition();
     }
 
-    const directorContainer = currentSlide.querySelector(".director-container");
+    const directorContainer = currentSlide.querySelector(".monwui-director-container");
     if (directorContainer && !isPeak) {
       showAndHideElementWithAnimation(directorContainer, {
         girisSure: config.girisSure,
@@ -1532,7 +1532,7 @@ export function updatePeakClasses(slides, activeIndex, spanOrOpts = 2) {
       };
     });
 
-    const container = arr[0]?.closest?.('#slides-container') || getPeakViewportContainer();
+    const container = arr[0]?.closest?.('#monwui-slides-container') || getPeakViewportContainer();
     if (container) {
       container.__peakStateCache = null;
       container.classList.remove('peak-ready');
@@ -1543,7 +1543,7 @@ export function updatePeakClasses(slides, activeIndex, spanOrOpts = 2) {
 
   const opts = normalizePeakOptions(spanOrOpts);
   const { spanLeft, spanRight, diagonal } = opts;
-  const container = arr[0]?.closest?.('#slides-container') || getPeakViewportContainer();
+  const container = arr[0]?.closest?.('#monwui-slides-container') || getPeakViewportContainer();
   if (container) {
     applyPeakContainerState(container, diagonal);
   }
@@ -1688,10 +1688,10 @@ function ensurePeakVars(container) {
 
 function syncPeakStructure(root = null, { forcePrime = false } = {}) {
   const base = root && root.nodeType === 1 ? root : document;
-  const container = base.querySelector?.('#slides-container') || getPeakViewportContainer();
+  const container = base.querySelector?.('#monwui-slides-container') || getPeakViewportContainer();
   if (!container || !container.classList.contains('peak-mode')) return;
 
-  const slides = container.querySelectorAll('.slide');
+  const slides = container.querySelectorAll('.monwui-slide');
   if (!slides.length) return;
 
   const activeIndex = getPeakActiveIndex(slides);
@@ -1748,9 +1748,9 @@ export function showAndHideElementWithAnimation(el, config) {
 }
 
 function initSliderArrows(slide) {
-  const actorContainer = slide.querySelector(".artist-container");
-  const leftArrow = slide.querySelector(".slider-arrow.left");
-  const rightArrow = slide.querySelector(".slider-arrow.right");
+  const actorContainer = slide.querySelector(".monwui-artist-container");
+  const leftArrow = slide.querySelector(".monwui-slider-arrow.left");
+  const rightArrow = slide.querySelector(".monwui-slider-arrow.right");
   const lowPower = isLowPowerPeakRuntime();
 
   if (!actorContainer || !leftArrow || !rightArrow) return;
@@ -1862,7 +1862,7 @@ function ensureDotQualityBadgeCSS() {
   const style = document.createElement('style');
   style.id = 'dot-quality-badge-css';
   style.textContent = `
-    .dot-quality-badge {
+    .monwui-dot-quality-badge {
       position: absolute;
       bottom: 24px;
       left: 2px;
@@ -1871,9 +1871,9 @@ function ensureDotQualityBadgeCSS() {
       gap: 2px;
       flex-direction: column;
     }
-    .dot-quality-badge img.range-icon,
-    .dot-quality-badge img.codec-icon,
-    .dot-quality-badge img.quality-icon {
+    .monwui-dot-quality-badge img.range-icon,
+    .monwui-dot-quality-badge img.codec-icon,
+    .monwui-dot-quality-badge img.quality-icon {
       width: 20px;
       height: 14px;
       background: rgba(30,30,40,.7);
@@ -1887,7 +1887,7 @@ function ensureDotQualityBadgeCSS() {
 }
 
 export function enablePeakNeighborActivation() {
-  const container = document.querySelector('#slides-container');
+  const container = document.querySelector('#monwui-slides-container');
   if (!container || container.__peakClickBound) return;
   container.__peakClickBound = true;
 
@@ -1896,11 +1896,11 @@ export function enablePeakNeighborActivation() {
 
     const IG = ['BUTTON','A','INPUT','SELECT','TEXTAREA','LABEL','VIDEO'];
     if (e.defaultPrevented || IG.includes(e.target?.tagName)) return;
-    if (e.target.closest?.('[data-no-peak-activate="1"], .dot-navigation-container')) return;
+    if (e.target.closest?.('[data-no-peak-activate="1"], .monwui-dot-navigation-container')) return;
 
     const x = e.clientX, y = e.clientY;
     const topEl    = document.elementFromPoint(x, y);
-    const topSlide = topEl?.closest?.('.slide');
+    const topSlide = topEl?.closest?.('.monwui-slide');
     if (!topSlide) return;
     if (!topSlide.classList.contains('peak-neighbor')) return;
     if (topSlide.classList.contains('active')) return;
@@ -1908,7 +1908,7 @@ export function enablePeakNeighborActivation() {
     e.preventDefault();
     e.stopPropagation();
 
-    const slides = Array.from(container.querySelectorAll('.slide'));
+    const slides = Array.from(container.querySelectorAll('.monwui-slide'));
     const targetIndex  = slides.indexOf(topSlide);
     const currentIndex = getCurrentIndex();
     if (targetIndex < 0 || targetIndex === currentIndex) return;
@@ -1924,7 +1924,7 @@ export function enablePeakNeighborActivation() {
   if (!document.getElementById('peak-neighbor-cursor-css')) {
     const style = document.createElement('style');
     style.id = 'peak-neighbor-cursor-css';
-    style.textContent = `.peak-ready .slide.peak-neighbor{ cursor:pointer; }`;
+    style.textContent = `.peak-ready .monwui-slide.peak-neighbor{ cursor:pointer; }`;
     document.head.appendChild(style);
   }
 }

@@ -40,10 +40,10 @@ function getVideoQualityInfo(videoStream) {
 }
 
 export function createSlidesContainer(indexPage) {
-  let slidesContainer = indexPage.querySelector("#slides-container");
+  let slidesContainer = indexPage.querySelector("#monwui-slides-container");
   if (!slidesContainer) {
     slidesContainer = document.createElement("div");
-    slidesContainer.id = "slides-container";
+    slidesContainer.id = "monwui-slides-container";
     applyContainerStyles(slidesContainer);
     indexPage.insertBefore(slidesContainer, indexPage.firstChild);
   }
@@ -52,20 +52,20 @@ export function createSlidesContainer(indexPage) {
 
 export function createHorizontalGradientOverlay() {
   const overlay = document.createElement("div");
-  overlay.className = "horizontal-gradient-overlay";
+  overlay.className = "monwui-horizontal-gradient-overlay";
   return overlay;
 }
 
 export function createLogoContainer() {
   const container = document.createElement("div");
-  container.className = "logo-container";
+  container.className = "monwui-logo-container";
   applyContainerStyles(container, 'logo');
   return container;
 }
 
 export function createStatusContainer(itemType, config, UserData, ChildCount, RunTimeTicks, MediaStreams) {
   const statusContainer = document.createElement("div");
-  statusContainer.className = "status-container";
+  statusContainer.className = "monwui-status-container";
   applyContainerStyles(statusContainer, 'status');
 
   if (itemType && config.showTypeInfo) {
@@ -227,18 +227,18 @@ export async function createActorSlider(People, config, item) {
   }
 
   const sliderWrapper = document.createElement("div");
-  sliderWrapper.className = "slider-wrapper";
+  sliderWrapper.className = "monwui-slider-wrapper";
   applyContainerStyles(sliderWrapper, 'slider');
 
   const actorContainer = document.createElement("div");
-  actorContainer.className = "artist-container";
+  actorContainer.className = "monwui-artist-container";
 
   const leftArrow = document.createElement("button");
-  leftArrow.className = "slider-arrow left hidden";
+  leftArrow.className = "monwui-slider-arrow left hidden";
   leftArrow.innerHTML = `<i class="fa-solid fa-chevron-left"></i>`;
 
   const rightArrow = document.createElement("button");
-  rightArrow.className = "slider-arrow right hidden";
+  rightArrow.className = "monwui-slider-arrow right hidden";
   rightArrow.innerHTML = `<i class="fa-solid fa-chevron-right"></i>`;
 
   sliderWrapper.appendChild(leftArrow);
@@ -247,10 +247,10 @@ export async function createActorSlider(People, config, item) {
 
   actorsForSlide.forEach(actor => {
     const actorDiv = document.createElement("div");
-    actorDiv.className = "actor-item";
+    actorDiv.className = "monwui-actor-item";
 
     const actorContent = document.createElement("div");
-    actorContent.className = "actor-content";
+    actorContent.className = "monwui-actor-content";
 
     const actorLink = document.createElement("a");
     actorLink.href = `#/details?id=${actor.Id}${config?.serverId ? `&serverId=${encodeURIComponent(config.serverId)}` : ""}`;
@@ -259,7 +259,7 @@ export async function createActorSlider(People, config, item) {
 
     if (config.showActorImg) {
       const actorImg = document.createElement("img");
-      actorImg.className = "actor-image";
+      actorImg.className = "monwui-actor-image";
       actorImg.loading = "lazy";
       if (actor.PrimaryImageTag) {
         actorImg.src = withServer(`/Items/${actor.Id}/Images/Primary?fillHeight=320&fillWidth=320&quality=80&tag=${actor.PrimaryImageTag}`);
@@ -277,12 +277,12 @@ export async function createActorSlider(People, config, item) {
     actorContent.appendChild(actorLink);
 
     const roleSpan = document.createElement("span");
-    roleSpan.className = "actor-role";
+    roleSpan.className = "monwui-actor-role";
     roleSpan.textContent = config.showActorRole ? actor.Role || "" : "";
     actorContent.appendChild(roleSpan);
 
     const nameSpan = document.createElement("span");
-    nameSpan.className = "actor-name";
+    nameSpan.className = "monwui-actor-name";
     nameSpan.textContent = config.showActorInfo ? actor.Name || "" : "";
     actorContent.appendChild(nameSpan);
 
@@ -295,7 +295,7 @@ export async function createActorSlider(People, config, item) {
 
 export function createInfoContainer({ config, Genres, ProductionYear, ProductionLocations }) {
   const container = document.createElement("div");
-  container.className = "info-container";
+  container.className = "monwui-info-container";
   applyContainerStyles(container, "info");
 
   const normalizeKey = (str) => str?.toString().toLowerCase().replace(/\s+/g, "");
@@ -361,7 +361,7 @@ export function createInfoContainer({ config, Genres, ProductionYear, Production
 
 export async function createDirectorContainer({ config, People, item }) {
   const container = document.createElement("div");
-  container.className = "director-container";
+  container.className = "monwui-director-container";
   applyContainerStyles(container, 'director');
 
   let actualPeople = People;
@@ -387,7 +387,7 @@ export async function createDirectorContainer({ config, People, item }) {
       if (directors.length) {
         const directorNames = directors.map(d => d.Name).join(", ");
         const directorSpan = document.createElement("span");
-        directorSpan.className = "yonetmen";
+        directorSpan.className = "monwui-yonetmen";
         directorSpan.textContent = `${config.languageLabels.yonetmen}: ${directorNames}`;
         container.appendChild(directorSpan);
       }
@@ -423,7 +423,7 @@ export async function createRatingContainer({
   item
 }) {
   const container = document.createElement("div");
-  container.className = "rating-container";
+  container.className = "monwui-rating-container";
   applyContainerStyles(container, 'rating');
 
   let ratingExists = false;
@@ -432,15 +432,15 @@ export async function createRatingContainer({
     if (config.showMatchPercentage && UserData && item) {
       const matchPercentage = await calculateMatchPercentage(UserData, item);
       const matchSpan = document.createElement("span");
-      matchSpan.className = "match-percentage";
+      matchSpan.className = "monwui-match-percentage";
       matchSpan.innerHTML = `
-  <span class="match-rating">
+  <span class="monwui-match-rating">
     <i class="fa-regular fa-heart fa-lg"></i>
-    <span class="heart-filled" style="clip-path: inset(${100 - matchPercentage}% 0 0 0);">
+    <span class="monwui-heart-filled" style="clip-path: inset(${100 - matchPercentage}% 0 0 0);">
       <i class="fa-solid fa-heart fa-lg"></i>
     </span>
   </span>
-  <span class="percentage-text">${matchPercentage}%</span>`;
+  <span class="monwui-percentage-text">${matchPercentage}%</span>`;
       container.appendChild(matchSpan);
       ratingExists = true;
     }
@@ -450,20 +450,20 @@ export async function createRatingContainer({
     ? Math.round((CommunityRating.reduce((a, b) => a + b, 0) / CommunityRating.length) * 10) / 10
     : Math.round(CommunityRating * 10) / 10;
 
-  let ratingClass = "rating-default";
-  if (ratingValue >= 9) ratingClass = "rating-excellent";
-  else if (ratingValue >= 7.5) ratingClass = "rating-good";
-  else if (ratingValue >= 6) ratingClass = "rating-average";
-  else if (ratingValue >= 4) ratingClass = "rating-poor";
-  else ratingClass = "rating-bad";
+  let ratingClass = "monwui-rating-default";
+  if (ratingValue >= 9) ratingClass = "monwui-rating-excellent";
+  else if (ratingValue >= 7.5) ratingClass = "monwui-rating-good";
+  else if (ratingValue >= 6) ratingClass = "monwui-rating-average";
+  else if (ratingValue >= 4) ratingClass = "monwui-rating-poor";
+  else ratingClass = "monwui-rating-bad";
 
   const ratingPercentage = ratingValue * 10;
   const ratingSpan = document.createElement("span");
-  ratingSpan.className = `rating ${ratingClass}`;
+  ratingSpan.className = `monwui-rating ${ratingClass}`;
   ratingSpan.innerHTML = `
-    <span class="star-rating">
+    <span class="monwui-star-rating">
       <i class="fa-regular fa-star fa-lg"></i>
-      <span class="star-filled" style="clip-path: inset(${100 - ratingPercentage}% 0 0 0);">
+      <span class="monwui-star-filled" style="clip-path: inset(${100 - ratingPercentage}% 0 0 0);">
         <i class="fa-solid fa-star fa-lg" style="display: block;"></i>
       </span>
     </span> ${ratingValue} `;
@@ -473,7 +473,7 @@ export async function createRatingContainer({
 
     if (config.showCriticRating && CriticRating) {
       const criticSpan = document.createElement("span");
-      criticSpan.className = "t-rating";
+      criticSpan.className = "monwui-t-rating";
       criticSpan.innerHTML = `${getTomatoIconHtml()} ${
         Array.isArray(CriticRating) ? CriticRating.join(", ") : CriticRating
       } `;
@@ -483,7 +483,7 @@ export async function createRatingContainer({
 
     if (config.showOfficialRating && OfficialRating) {
       const officialRatingSpan = document.createElement("span");
-      officialRatingSpan.className = "officialrating";
+      officialRatingSpan.className = "monwui-officialrating";
       officialRatingSpan.innerHTML = `<i class="fa-solid fa-user-group"></i> ${
         Array.isArray(OfficialRating) ? OfficialRating.join(", ") : OfficialRating
       }`;
@@ -497,7 +497,7 @@ export async function createRatingContainer({
 
 export function createLanguageContainer({ config, MediaStreams, itemType }) {
   const container = document.createElement("div");
-  container.className = "language-container";
+  container.className = "monwui-language-container";
 
   if (
     !config.showLanguageInfo ||
@@ -581,32 +581,32 @@ export function createLanguageContainer({ config, MediaStreams, itemType }) {
 
 export function createMetaContainer() {
   const container = document.createElement("div");
-  container.className = "meta-container";
+  container.className = "monwui-meta-container";
   applyContainerStyles(container, 'meta');
   return container;
 }
 
 export function createMainContentContainer() {
   const container = document.createElement("div");
-  container.className = "main-content-container";
+  container.className = "monwui-main-content-container";
   return container;
 }
 
 export function createPlotContainer(config, Overview, UserData, RunTimeTicks) {
   const container = document.createElement("div");
-  container.className = "plot-container";
+  container.className = "monwui-plot-container";
   applyContainerStyles(container, 'plot');
 
   if (config.showDescriptions && config.showPlotInfo && Overview) {
     if (config.showbPlotInfo && config.languageLabels.konu) {
       const plotBSpan = document.createElement("span");
-      plotBSpan.className = "plotb";
+      plotBSpan.className = "monwui-plotb";
       plotBSpan.textContent = config.languageLabels.konu;
       container.appendChild(plotBSpan);
     }
 
     const plotSpan = document.createElement("span");
-    plotSpan.className = "plot";
+    plotSpan.className = "monwui-plot";
     plotSpan.textContent = "\u00A0\u00A0" + Overview;
     container.appendChild(plotSpan);
   }
@@ -619,13 +619,13 @@ export function createPlotContainer(config, Overview, UserData, RunTimeTicks) {
     UserData.PlaybackPositionTicks < RunTimeTicks
   ) {
     const progressContainer = document.createElement("div");
-    progressContainer.className = "playing-progress-container";
+    progressContainer.className = "monwui-playing-progress-container";
 
     const barWrapper = document.createElement("div");
-    barWrapper.className = "duration-bar-wrapper";
+    barWrapper.className = "monwui-duration-bar-wrapper";
 
     const bar = document.createElement("div");
-    bar.className = "duration-bar";
+    bar.className = "monwui-duration-bar";
 
     const percentage = Math.min(
       (UserData.PlaybackPositionTicks / RunTimeTicks) * 100,
@@ -637,7 +637,7 @@ export function createPlotContainer(config, Overview, UserData, RunTimeTicks) {
       (RunTimeTicks - UserData.PlaybackPositionTicks) / 600000000
     );
     const text = document.createElement("span");
-    text.className = "duration-remaining";
+    text.className = "monwui-duration-remaining";
     text.innerHTML = `<i class="fa-solid fa-hourglass-half"></i> ${remainingMinutes} ${config.languageLabels.dakika} ${config.languageLabels.kaldi}`;
 
     barWrapper.appendChild(bar);
@@ -651,12 +651,12 @@ export function createPlotContainer(config, Overview, UserData, RunTimeTicks) {
 
 export function createTitleContainer({ config, Taglines, title, OriginalTitle, Type, ParentIndexNumber, IndexNumber }) {
   const container = document.createElement("div");
-  container.className = "title-container";
+  container.className = "monwui-title-container";
   applyContainerStyles(container, 'title');
 
   if (config.showDescriptions && config.showTitleInfo) {
     const titleSpan = document.createElement("span");
-    titleSpan.className = "baslik";
+    titleSpan.className = "monwui-baslik";
 
     if (Type === "Episode" && typeof ParentIndexNumber === "number" && typeof IndexNumber === "number") {
       titleSpan.textContent = `S${ParentIndexNumber} B${IndexNumber}: ${title}`;
@@ -669,7 +669,7 @@ export function createTitleContainer({ config, Taglines, title, OriginalTitle, T
 
   if (Taglines && Taglines.length && config.showDescriptions && config.showSloganInfo) {
     const sloganSpan = document.createElement("span");
-    sloganSpan.className = "slogan";
+    sloganSpan.className = "monwui-slogan";
     sloganSpan.innerHTML = `“ ${Taglines.join(
       ' <i class="fa-solid fa-star fa-2xs" style="color: #ffffff;"></i> '
     )} ”`;
@@ -679,7 +679,7 @@ export function createTitleContainer({ config, Taglines, title, OriginalTitle, T
   if (config.showDescriptions && config.showOriginalTitleInfo && OriginalTitle) {
     if (!config.hideOriginalTitleIfSame || title !== OriginalTitle) {
       const originalTitleSpan = document.createElement("span");
-      originalTitleSpan.className = "o-baslik";
+      originalTitleSpan.className = "monwui-o-baslik";
       originalTitleSpan.textContent = OriginalTitle;
       container.appendChild(originalTitleSpan);
     }

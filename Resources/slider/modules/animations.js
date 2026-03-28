@@ -125,20 +125,20 @@ function cleanupTree(root) {
 }
 
 const animationStyles = `
-  #slides-container {
+  #monwui-slides-container {
     perspective: 1000px;
   }
-  .slide {
+  .monwui-slide {
     transform-style: preserve-3d;
     backface-visibility: hidden;
     transform-origin: center center;
   }
-  .poster-dot {
+  .monwui-poster-dot {
     transition: all 0.3s ease;
     position: relative;
     overflow: hidden;
   }
-  .poster-dot img {
+  .monwui-poster-dot img {
     transition: filter 0.3s ease, transform 0.3s ease;
     display: block; width: 100%; height: 100%; object-fit: cover;
   }

@@ -1195,7 +1195,7 @@ function capturePreviewState() {
     const slide = document.querySelector(".swiper .swiper-slide.active, .splide__slide.is-active, .embla__slide.is-selected, .flickity-slider .is-selected, .active");
     if (!slide) return null;
 
-    const backdropImg = slide.querySelector("img, .backdrop img, .banner img") || null;
+    const backdropImg = slide.querySelector(".monwui-backdrop, .monwui-backdrop img, .backdrop img, .banner img, img") || null;
 
     const yt =
       slide.querySelector('iframe[data-jms-preview="1"], iframe[data-jmspreview="1"], iframe[data-jmsPreview="1"]') ||
@@ -1262,7 +1262,7 @@ async function restorePreviewState(snap) {
     if (hadVideo) slide.classList.add("video-active", "intro-active");
     if (hadTrailer) slide.classList.add("trailer-active");
 
-    const backdropImg = slide.querySelector("img, .backdrop img, .banner img") || null;
+    const backdropImg = slide.querySelector(".monwui-backdrop, .monwui-backdrop img, .backdrop img, .banner img, img") || null;
     if (backdropImg && snap.backdropOpacity != null) backdropImg.style.opacity = snap.backdropOpacity;
 
     const yt = slide.querySelector('iframe[data-jms-preview="1"], iframe[data-jms-preview], iframe[data-jmsPreview]');

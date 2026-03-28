@@ -21,14 +21,14 @@ function now() { return performance.now(); }
 
 function getSlidesContainer() {
   return document.querySelector(
-    "#indexPage:not(.hide) #slides-container, #homePage:not(.hide) #slides-container, #slides-container"
+    "#indexPage:not(.hide) #monwui-slides-container, #homePage:not(.hide) #monwui-slides-container, #monwui-slides-container"
   );
 }
 
 function getCurrentSlideHost() {
   const sc = getSlidesContainer();
   if (!sc) return null;
-  const active = sc.querySelector(".slide.active");
+  const active = sc.querySelector(".monwui-slide.active");
   if (active) return active;
   return null;
 }
@@ -144,11 +144,11 @@ export function ensureProgressBarExists() {
   }
 
   if (!modalState.progressBarEl) {
-    modalState.progressBarEl = document.querySelector(".slide-progress-bar");
+    modalState.progressBarEl = document.querySelector(".monwui-slide-progress-bar");
     if (!modalState.progressBarEl) {
       const sc = getSlidesContainer();
       modalState.progressBarEl = document.createElement("div");
-      modalState.progressBarEl.className = "slide-progress-bar";
+      modalState.progressBarEl.className = "monwui-slide-progress-bar";
 
       Object.assign(modalState.progressBarEl.style, {
         position: 'absolute',
@@ -204,7 +204,7 @@ export function updateProgressBarPosition() {
 
   const slidesContainer = getSlidesContainer();
   if (!slidesContainer) return;
-  const activeSlide = slidesContainer.querySelector('.slide.active');
+  const activeSlide = slidesContainer.querySelector('.monwui-slide.active');
   if (!activeSlide) return;
 
   const position = getUntransformedSlidePosition(activeSlide, slidesContainer);
@@ -233,10 +233,10 @@ function ensureSecondsExists() {
   }
   if (secondsEl && !document.body.contains(secondsEl)) secondsEl = null;
   if (!secondsEl) {
-    secondsEl = document.querySelector(".slide-progress-seconds");
+    secondsEl = document.querySelector(".monwui-slide-progress-seconds");
     if (!secondsEl) {
       secondsEl = document.createElement("div");
-      secondsEl.className = "slide-progress-seconds";
+      secondsEl.className = "monwui-slide-progress-seconds";
       applyContainerStyles(secondsEl, 'progressSeconds');
       mountSecondsToActiveSlide(secondsEl);
     }

@@ -361,13 +361,13 @@ export function createPositionEditor(config, labels, section) {
     });
    } else {
     const selector = containerType
-      ? (containerType === 'button' ? '.main-button-container'
-        : containerType === 'slider' ? '.slider-wrapper'
-        : containerType === 'existingDot' ? '.dot-navigation-container'
-        : containerType === 'progress' ? '.slide-progress-bar'
-        : containerType === 'progressSeconds' ? '.slide-progress-seconds'
-        : `.${containerType}-container`)
-      : "#slides-container";
+      ? (containerType === 'button' ? '.monwui-main-button-container'
+        : containerType === 'slider' ? '.monwui-slider-wrapper'
+        : containerType === 'existingDot' ? '.monwui-dot-navigation-container'
+        : containerType === 'progress' ? '.monwui-slide-progress-bar'
+        : containerType === 'progressSeconds' ? '.monwui-slide-progress-seconds'
+        : `.monwui-${containerType}-container`)
+      : "#monwui-slides-container";
 
     document.querySelectorAll(selector).forEach(el => {
       el.style[cssProperty] = newValue === '' ? '' : `${newValue}%`;
@@ -377,12 +377,12 @@ export function createPositionEditor(config, labels, section) {
 
   function updateFlexStyle(containerType, flexProperty, newValue) {
   const selector =
-    containerType === 'button' ? '.main-button-container' :
-    containerType === 'slider' ? '.slider-wrapper' :
-    containerType === 'existingDot' ? '.dot-navigation-container' :
-    containerType === 'progress' ? '.slide-progress-bar' :
-    containerType === 'progressSeconds' ? '.slide-progress-seconds' :
-    `.${containerType}-container`;
+    containerType === 'button' ? '.monwui-main-button-container' :
+    containerType === 'slider' ? '.monwui-slider-wrapper' :
+    containerType === 'existingDot' ? '.monwui-dot-navigation-container' :
+    containerType === 'progress' ? '.monwui-slide-progress-bar' :
+    containerType === 'progressSeconds' ? '.monwui-slide-progress-seconds' :
+    `.monwui-${containerType}-container`;
 
   document.querySelectorAll(selector).forEach(el => {
     if (flexProperty.includes('Display')) {

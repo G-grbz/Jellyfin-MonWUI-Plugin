@@ -18,7 +18,7 @@ function playable(session) {
 let timeUpdateInterval;
 
 export async function loadAvailableDevices(itemId, dropdown) {
-  dropdown.innerHTML = `<div class="loading-text">${config.languageLabels.castyukleniyor}</div>`;
+  dropdown.innerHTML = `<div class="monwui-loading-text">${config.languageLabels.castyukleniyor}</div>`;
 
   try {
     const { userId } = getSessionInfo();
@@ -30,7 +30,7 @@ export async function loadAvailableDevices(itemId, dropdown) {
     );
 
     if (videoDevices.length === 0) {
-      dropdown.innerHTML = `<div class="no-devices">${config.languageLabels.castbulunamadi}</div>`;
+      dropdown.innerHTML = `<div class="monwui-no-devices">${config.languageLabels.castbulunamadi}</div>`;
       return;
     }
 
@@ -61,15 +61,15 @@ export async function loadAvailableDevices(itemId, dropdown) {
       const backdropUrl = withServer(`/Items/${encodeURIComponent(nowPlayingItemId)}/Images/Backdrop/${encodeURIComponent(backdropTag)}?tag=${encodeURIComponent(backdropTag)}&maxWidth=800`);
 
       const topBanner = document.createElement('div');
-      topBanner.className = 'now-playing-banner';
+      topBanner.className = 'monwui-now-playing-banner';
       topBanner.style.backgroundImage = `url('${backdropUrl}')`;
 
       topBanner.innerHTML = `
         <div class="overlay"></div>
-        <img class="now-playing-poster" src="${posterUrl}" alt="Poster">
-        <div class="now-playing-details">
-          <div class="now-playing-title"> <i class="fa-solid ${getMediaIconClass(nowPlayingItem)}"></i> ${nowPlayingItem.Name} </div>
-          <div class="now-playing-device">${nowPlayingDevice.DeviceName || config.languageLabels.castcihaz}</div>
+        <img class="monwui-now-playing-poster" src="${posterUrl}" alt="Poster">
+        <div class="monwui-now-playing-details">
+          <div class="monwui-now-playing-title"> <i class="fa-solid ${getMediaIconClass(nowPlayingItem)}"></i> ${nowPlayingItem.Name} </div>
+          <div class="monwui-now-playing-device">${nowPlayingDevice.DeviceName || config.languageLabels.castcihaz}</div>
         </div>
       `;
 
@@ -77,21 +77,21 @@ export async function loadAvailableDevices(itemId, dropdown) {
       dropdown.appendChild(topBanner);
 
       const divider = document.createElement('hr');
-      divider.className = 'cast-divider';
+      divider.className = 'monwui-cast-divider';
       dropdown.appendChild(divider);
     }
 
     sortedDevices.forEach(device => {
       const deviceElement = document.createElement('div');
-      deviceElement.className = 'device-item';
+      deviceElement.className = 'monwui-device-item';
       deviceElement.innerHTML = `
-        <div class="device-icon-container">
+        <div class="monwui-device-icon-container">
           ${getDeviceIcon(device.Client)}
         </div>
-        <div class="device-info">
-          <div class="device-name">${device.DeviceName || config.languageLabels.castcihaz}</div>
-          <div class="device-client">${device.Client || config.languageLabels.castistemci}</div>
-          ${device.NowPlayingItem ? ` <div class="now-playing"> <i class="fa-solid ${getMediaIconClass(device.NowPlayingItem)}"></i> ${config.languageLabels.castoynatiliyor} </div>` : ''}
+        <div class="monwui-device-info">
+          <div class="monwui-device-name">${device.DeviceName || config.languageLabels.castcihaz}</div>
+          <div class="monwui-device-client">${device.Client || config.languageLabels.castistemci}</div>
+          ${device.NowPlayingItem ? ` <div class="monwui-now-playing"> <i class="fa-solid ${getMediaIconClass(device.NowPlayingItem)}"></i> ${config.languageLabels.castoynatiliyor} </div>` : ''}
         </div>
       `;
 
@@ -107,7 +107,7 @@ export async function loadAvailableDevices(itemId, dropdown) {
     });
   } catch (error) {
     console.error('Cihazlar yüklenirken hata:', error);
-    dropdown.innerHTML = `<div class="error-message">${config.languageLabels.casthata}: ${error.message}</div>`;
+    dropdown.innerHTML = `<div class="monwui-error-message">${config.languageLabels.casthata}: ${error.message}</div>`;
   }
 }
 
@@ -206,12 +206,12 @@ async function showNowPlayingModal(nowPlayingItem, device) {
     }
 
     const modal = document.createElement('div');
-    modal.className = 'castmodal';
+    modal.className = 'monwui-castmodal';
 
     let modalContent = `
-      <div class="castmodal-container">
+      <div class="monwui-castmodal-container">
         <div class="overlay"></div>
-        <div class="castmodal-content">
+        <div class="monwui-castmodal-content">
     `;
 
     for (const [index, device] of activeDevices.entries()) {
@@ -254,12 +254,12 @@ async function showNowPlayingModal(nowPlayingItem, device) {
         : '';
 
       modalContent += `
-        <div class="castmodal-slide" data-backdrop="${backdropUrl}">
-          <img class="castmodal-poster lazy-load"
+        <div class="monwui-castmodal-slide" data-backdrop="${backdropUrl}">
+          <img class="monwui-castmodal-poster lazy-load"
                src="${placeholderUrl}"
                data-src="${posterUrl}"
                alt="Poster">
-          <div class="castmodal-info">
+          <div class="monwui-castmodal-info">
             <h2><i class="fa-solid ${getMediaIconClass(item)}"></i> ${item.Name}</h2>
             ${user ? `<p><strong>${config.languageLabels.kullanici}:</strong> ${user}</p>` : ''}
             ${deviceName ? `<p><strong>${config.languageLabels.cihaz}:</strong> ${deviceName}</p>` : ''}
@@ -269,14 +269,14 @@ async function showNowPlayingModal(nowPlayingItem, device) {
             ${directors ? `<p><strong>${config.languageLabels.yonetmen || "Yönetmen"}:</strong> ${directors}</p>` : ''}
             ${overview ? `<p><strong>${config.languageLabels.konu || "Konu"}:</strong> ${overview}</p>` : ''}
 
-            <div class="castRating-container">
-              ${imdbRating ? `<span class="castimdb-rating"><i class="fas fa-star"></i> ${imdbRating}</span>` : ''}
-              ${tmdbRating ? `<span class="casttmdb-rating"><i class="fa-solid fa-user-group"></i> ${tmdbRating}</span>` : ''}
+            <div class="monwui-castRating-container">
+              ${imdbRating ? `<span class="monwui-castimdb-rating"><i class="fas fa-star"></i> ${imdbRating}</span>` : ''}
+              ${tmdbRating ? `<span class="monwui-casttmdb-rating"><i class="fa-solid fa-user-group"></i> ${tmdbRating}</span>` : ''}
             </div>
 
             ${tmdbId ? `<p><strong>TMDB:</strong> <a href="https://www.themoviedb.org/${item.Type === 'Episode' ? 'tv' : 'movie'}/${tmdbId}" target="_blank">Link</a></p>` : ''}
             ${imdbId ? `<p><strong>IMDB:</strong> <a href="https://www.imdb.com/title/${imdbId}" target="_blank">Link</a></p>` : ''}
-            ${itemPageUrl ? `<p><a href="${itemPageUrl}" class="open-in-new" target="_blank" rel="noopener noreferrer">${config.languageLabels.yenisekme || "Yeni sekmede aç"}</a></p>` : ''}
+            ${itemPageUrl ? `<p><a href="${itemPageUrl}" class="monwui-open-in-new" target="_blank" rel="noopener noreferrer">${config.languageLabels.yenisekme || "Yeni sekmede aç"}</a></p>` : ''}
             ${genres ? `<p><strong>${config.languageLabels.etiketler}:</strong> ${genres}</p>` : ''}
             ${audioLanguages ? `<p><strong>${config.languageLabels.ses}:</strong> ${audioLanguages}</p>` : ''}
             ${subtitleLanguages ? `<p><strong>${config.languageLabels.altyazi}:</strong> ${subtitleLanguages}</p>` : ''}
@@ -285,11 +285,11 @@ async function showNowPlayingModal(nowPlayingItem, device) {
             ${albumArtist ? `<p><strong>${config.languageLabels.sortAlbumArtist || "Albüm Sanatçısı"}:</strong> ${albumArtist}</p>` : ''}
             ${trackNumber ? `<p><strong>${config.languageLabels.tracknumber || "Parça Numarası"}:</strong> ${trackNumber}</p>` : ''}
 
-            <div class="castmodal-buttons">
-              <button class="castcontrol-button" data-session-id="${device.Id}" data-is-paused="${isPaused}">
+            <div class="monwui-castmodal-buttons">
+              <button class="monwui-castcontrol-button" data-session-id="${device.Id}" data-is-paused="${isPaused}">
               ${isPaused ? '▶️ ' + config.languageLabels.devamet : '⏸️ ' + config.languageLabels.duraklat}
               </button>
-              <button class="castcontrol-button" data-item-id="${itemId}" data-is-favorite="${isFavorite}">
+              <button class="monwui-castcontrol-button" data-item-id="${itemId}" data-is-favorite="${isFavorite}">
                 ${isFavorite
                   ? '💔 ' + getWatchlistButtonText(itemDetails, true)
                   : '❤️ ' + getWatchlistButtonText(itemDetails, false)
@@ -305,10 +305,10 @@ async function showNowPlayingModal(nowPlayingItem, device) {
 
     modalContent += `
         </div>
-        <button class="castmodal-close">×</button>
-        <div class="castmodal-dots">
+        <button class="monwui-castmodal-close">×</button>
+        <div class="monwui-castmodal-dots">
           ${activeDevices.map((_, index) =>
-            `<span class="castmodal-dot ${index === 0 ? 'active' : ''}" data-index="${index}"></span>`
+            `<span class="monwui-castmodal-dot ${index === 0 ? 'active' : ''}" data-index="${index}"></span>`
           ).join('')}
         </div>
       </div>
@@ -319,10 +319,10 @@ async function showNowPlayingModal(nowPlayingItem, device) {
 
     document.body.appendChild(modal);
 
-    modal.querySelectorAll('.server-info-header').forEach(header => {
+    modal.querySelectorAll('.monwui-server-info-header').forEach(header => {
       header.addEventListener('click', () => {
         const content = header.nextElementSibling;
-        const toggleButton = header.querySelector('.toggle-server-info');
+        const toggleButton = header.querySelector('.monwui-toggle-server-info');
         const isShowing = content.style.display === 'block';
 
         content.style.display = isShowing ? 'none' : 'block';
@@ -357,8 +357,8 @@ async function showNowPlayingModal(nowPlayingItem, device) {
         theMuteToggle:
         {
           const isMuted = button.dataset.isMuted === 'true';
-          const slider = modal.querySelector(`.volume-slider[data-session-id="${sessionId}"]`);
-          const valueLabel = modal.querySelector(`.volume-value[data-session-id="${sessionId}"]`);
+          const slider = modal.querySelector(`.monwui-volume-slider[data-session-id="${sessionId}"]`);
+          const valueLabel = modal.querySelector(`.monwui-volume-value[data-session-id="${sessionId}"]`);
 
           try {
             await makeApiRequest(`/Sessions/${encodeURIComponent(sessionId)}/Command`, {
@@ -412,12 +412,12 @@ async function showNowPlayingModal(nowPlayingItem, device) {
       });
     });
 
-    modal.querySelector('.castmodal-close').addEventListener('click', () => {
+    modal.querySelector('.monwui-castmodal-close').addEventListener('click', () => {
       clearInterval(timeUpdateInterval);
       modal.remove();
     });
 
-    modal.querySelectorAll('.castcontrol-button[data-session-id]:not(.mute-button)').forEach(button => {
+    modal.querySelectorAll('.monwui-castcontrol-button[data-session-id]:not(.mute-button)').forEach(button => {
       button.addEventListener('click', async e => {
         e.preventDefault();
         e.stopPropagation();
@@ -427,7 +427,7 @@ async function showNowPlayingModal(nowPlayingItem, device) {
       });
     });
 
-    modal.querySelectorAll('.castcontrol-button[data-item-id]').forEach(button => {
+    modal.querySelectorAll('.monwui-castcontrol-button[data-item-id]').forEach(button => {
       button.addEventListener('click', async e => {
         e.stopPropagation();
         const itemId = button.dataset.itemId;
@@ -437,14 +437,14 @@ async function showNowPlayingModal(nowPlayingItem, device) {
     });
 
     modal.addEventListener('input', async (e) => {
-      if (!e.target.classList.contains('volume-slider')) return;
+      if (!e.target.classList.contains('monwui-volume-slider')) return;
 
       const slider = e.target;
       const sessionId = slider.dataset?.sessionId;
       if (!sessionId) return;
 
       const volume = parseInt(slider.value, 10);
-      const volumeValue = modal.querySelector(`.volume-value[data-session-id="${sessionId}"]`);
+      const volumeValue = modal.querySelector(`.monwui-volume-value[data-session-id="${sessionId}"]`);
       const muteButton = modal.querySelector(`.mute-button[data-session-id="${sessionId}"]`);
 
       try {
@@ -484,11 +484,11 @@ async function showNowPlayingModal(nowPlayingItem, device) {
       }
     });
 
-    const content = modal.querySelector('.castmodal-content');
-    const dots = modal.querySelectorAll('.castmodal-dot');
-    const container = modal.querySelector('.castmodal-container');
+    const content = modal.querySelector('.monwui-castmodal-content');
+    const dots = modal.querySelectorAll('.monwui-castmodal-dot');
+    const container = modal.querySelector('.monwui-castmodal-container');
 
-    const firstBackdrop = modal.querySelector('.castmodal-slide')?.dataset.backdrop;
+    const firstBackdrop = modal.querySelector('.monwui-castmodal-slide')?.dataset.backdrop;
     if (firstBackdrop) {
       container.style.opacity = 0;
       setTimeout(() => {
@@ -501,7 +501,7 @@ async function showNowPlayingModal(nowPlayingItem, device) {
       const scrollPosition = content.scrollLeft;
       const slideWidth = content.clientWidth;
       const activeIndex = Math.round(scrollPosition / slideWidth);
-      const activeSlide = content.querySelector(`.castmodal-slide:nth-child(${activeIndex + 1})`);
+      const activeSlide = content.querySelector(`.monwui-castmodal-slide:nth-child(${activeIndex + 1})`);
       if (activeSlide) {
         container.style.backgroundImage = `url('${activeSlide.dataset.backdrop}')`;
       }
@@ -533,120 +533,120 @@ async function getServerInfoHtml() {
     const localTime = new Date().toLocaleString();
 
     return `
-      <div class="server-info-container">
-        <div class="server-info-header">
+      <div class="monwui-server-info-container">
+        <div class="monwui-server-info-header">
           <h3><i class="fas fa-server"></i> ${config.languageLabels.sunucubilgi || 'Sunucu Bilgisi'}</h3>
-          <button class="toggle-server-info" aria-label="${config.languageLabels.showServerInfo}">
+          <button class="monwui-toggle-server-info" aria-label="${config.languageLabels.showServerInfo}">
             <i class="fas fa-chevron-down"></i>
           </button>
         </div>
         <div class="server-info-content" style="display: none;">
-          <div class="server-info-grid">
-            <div class="server-info-item">
+          <div class="monwui-server-info-grid">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.servername || 'Sunucu Adı'}:</strong>
               <span>${info.ServerName || 'N/A'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.surumu || 'Sürüm'}:</strong>
               <span>${info.Version || 'N/A'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.productname || 'Uygulama Adı'}:</strong>
               <span>${info.ProductName || 'N/A'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.isletimsistemi || 'İşletim Sistemi'}:</strong>
               <span>${info.OperatingSystemDisplayName || info.OperatingSystem || 'N/A'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.systemarch || 'Sistem Mimarisi'}:</strong>
               <span>${info.SystemArchitecture || 'N/A'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.packagename || 'Paket Adı'}:</strong>
               <span>${info.PackageName || 'N/A'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.localaddress || 'Yerel Adres'}:</strong>
               <span>${info.LocalAddress || 'N/A'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.websocketport || 'WebSocket Port'}:</strong>
               <span>${info.WebSocketPortNumber || 'N/A'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.localTime || 'Yerel Zaman'}:</strong>
               <span class="local-time-display">${localTime}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.startupwizard || 'Kurulum Sihirbazı'}:</strong>
               <span>${info.StartupWizardCompleted ? config.languageLabels.tamamlandi || 'Tamamlandı' : config.languageLabels.tamamlanmadi || 'Tamamlanmadı'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.pendingrestart || 'Bekleyen Yeniden Başlatma'}:</strong>
               <span>${info.HasPendingRestart ? config.languageLabels.evet || 'Evet' : config.languageLabels.hayir || 'Hayır'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.shuttingdown || 'Kapatılıyor'}:</strong>
               <span>${info.IsShuttingDown ? config.languageLabels.evet || 'Evet' : config.languageLabels.hayir || 'Hayır'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.updateavailable || 'Güncelleme Var'}:</strong>
               <span>${info.HasUpdateAvailable ? config.languageLabels.evet || 'Evet' : config.languageLabels.hayir || 'Hayır'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.selfrestart || 'Kendini Yeniden Başlatabilir'}:</strong>
               <span>${info.CanSelfRestart ? config.languageLabels.evet || 'Evet' : config.languageLabels.hayir || 'Hayır'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.launchbrowser || 'Tarayıcı Açabilir'}:</strong>
               <span>${info.CanLaunchWebBrowser ? config.languageLabels.evet || 'Evet' : config.languageLabels.hayir || 'Hayır'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.librarymonitor || 'Kütüphane İzleme'}:</strong>
               <span>${info.SupportsLibraryMonitor ? config.languageLabels.destekleniyor || 'Destekleniyor' : config.languageLabels.desteklenmiyor || 'Desteklenmiyor'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.encoderlocation || 'Encoder Konumu'}:</strong>
               <span>${info.EncoderLocation || 'N/A'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.programdatapath || 'Program Veri Yolu'}:</strong>
               <span class="path">${info.ProgramDataPath || 'N/A'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.webpath || 'Web Yolu'}:</strong>
               <span class="path">${info.WebPath || 'N/A'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.logpath || 'Log Yolu'}:</strong>
               <span class="path">${info.LogPath || 'N/A'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.osdisplayname}:</strong>
               <span>${info.OperatingSystemDisplayName || info.OperatingSystem || 'N/A'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.itemsbynamepath}:</strong>
               <span class="path">${info.ItemsByNamePath || 'N/A'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.cachepath}:</strong>
               <span class="path">${info.CachePath || 'N/A'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.internalmetadatapath}:</strong>
               <span class="path">${info.InternalMetadataPath || 'N/A'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.transcodetemppath}:</strong>
               <span class="path">${info.TranscodingTempPath || 'N/A'}</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.castreceiverapps}:</strong>
               <span>${(info.CastReceiverApplications?.length ?? 0)} adet</span>
             </div>
-            <div class="server-info-item">
+            <div class="monwui-server-info-item">
               <strong>${config.languageLabels.completedinstalls}:</strong>
               <span>${(info.CompletedInstallations?.length ?? 0)} adet</span>
             </div>
@@ -657,8 +657,8 @@ async function getServerInfoHtml() {
   } catch (error) {
     console.error('Sunucu bilgisi alınırken hata:', error);
     return `
-      <div class="server-info-container">
-        <div class="error-message">${config.languageLabels.sunucubilgihata || 'Sunucu bilgisi alınamadı'}</div>
+      <div class="monwui-server-info-container">
+        <div class="monwui-error-message">${config.languageLabels.sunucubilgihata || 'Sunucu bilgisi alınamadı'}</div>
       </div>
     `;
   }
@@ -685,7 +685,7 @@ async function togglePlayback(sessionId, currentlyPaused) {
       method: 'POST'
     });
 
-    const buttons = document.querySelectorAll(`.castcontrol-button[data-session-id="${sessionId}"]:not(.mute-button)`);
+    const buttons = document.querySelectorAll(`.monwui-castcontrol-button[data-session-id="${sessionId}"]:not(.mute-button)`);
     buttons.forEach(button => {
       button.dataset.isPaused = !currentlyPaused;
       button.innerHTML = !currentlyPaused
@@ -758,12 +758,12 @@ async function updatePlaybackTimes(modal, activeDevices) {
       const duration = formatTime(durationTicks);
       const isPaused = currentSession.PlayState?.IsPaused;
 
-      const timeElement = modal.querySelector(`.castmodal-slide:nth-child(${index + 1}) .castmodal-info p:nth-child(5)`);
+      const timeElement = modal.querySelector(`.monwui-castmodal-slide:nth-child(${index + 1}) .monwui-castmodal-info p:nth-child(5)`);
       if (timeElement) {
         timeElement.innerHTML = `<strong>${config.languageLabels.sure || "Süre"}:</strong> ${played} / ${duration}`;
       }
 
-      const playButton = modal.querySelector(`.castmodal-slide:nth-child(${index + 1}) .castcontrol-button[data-session-id="${device.Id}"]:not(.mute-button)`);
+      const playButton = modal.querySelector(`.monwui-castmodal-slide:nth-child(${index + 1}) .monwui-castcontrol-button[data-session-id="${device.Id}"]:not(.mute-button)`);
       if (playButton) {
         playButton.dataset.isPaused = isPaused;
         playButton.innerHTML = isPaused
@@ -812,17 +812,17 @@ export function getMediaIconClass(media) {
 function createVolumeControls(modal, device, isMuted = false, volume = 50) {
   const displayVolume = isMuted ? 0 : volume;
   return `
-    <div class="volume-control-container">
-      <button class="castcontrol-button mute-button"
+    <div class="monwui-volume-control-container">
+      <button class="monwui-castcontrol-button mute-button"
               data-session-id="${device.Id}"
               data-is-muted="${isMuted}">
         ${isMuted ? '🔊 ' + config.languageLabels.sesac : '🔇 ' + config.languageLabels.seskapat}
       </button>
-      <div class="volume-control">
+      <div class="monwui-volume-control">
         <input type="range" min="0" max="100" value="${displayVolume}"
-               data-session-id="${device.Id}" class="volume-slider"
+               data-session-id="${device.Id}" class="monwui-volume-slider"
                data-last-volume="${volume}">
-        <span class="volume-value" data-session-id="${device.Id}">${displayVolume}%</span>
+        <span class="monwui-volume-value" data-session-id="${device.Id}">${displayVolume}%</span>
       </div>
     </div>
   `;

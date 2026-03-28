@@ -29,7 +29,7 @@ export function attachMouseEvents() {
   const indexPage = document.querySelector("#indexPage:not(.hide)");
   if (!indexPage) return;
 
-  const slidesContainer = indexPage.querySelector("#slides-container");
+  const slidesContainer = indexPage.querySelector("#monwui-slides-container");
   if (slidesContainer) {
     slidesContainer.addEventListener("mouseenter", () => {
       pauseSlideTimer(); pauseProgressBar();

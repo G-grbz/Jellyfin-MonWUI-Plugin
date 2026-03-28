@@ -44,7 +44,7 @@ export function applyContainerStyles(container, type = '') {
 export function updateSlidePosition() {
   const config = getConfig();
 
-  const slidesContainer = document.querySelector("#slides-container");
+  const slidesContainer = document.querySelector("#monwui-slides-container");
   if (slidesContainer) applyContainerStyles(slidesContainer);
 
   const containerTypes = [
@@ -54,18 +54,18 @@ export function updateSlidePosition() {
   ];
 
   containerTypes.forEach(type => {
-    document.querySelectorAll(`.${type}-container`).forEach(container => {
+    document.querySelectorAll(`.monwui-${type}-container`).forEach(container => {
       applyContainerStyles(container, type);
     });
   });
 
-  const sliderWrapper = document.querySelector(".slider-wrapper");
+  const sliderWrapper = document.querySelector(".monwui-slider-wrapper");
   if (sliderWrapper) applyContainerStyles(sliderWrapper, 'slider');
 
-  const progressBar = document.querySelector(".slide-progress-bar");
+  const progressBar = document.querySelector(".monwui-slide-progress-bar");
   if (progressBar) applyContainerStyles(progressBar, 'progress');
 
-  const progressSeconds = document.querySelector(".slide-progress-seconds");
+  const progressSeconds = document.querySelector(".monwui-slide-progress-seconds");
   if (progressSeconds) applyContainerStyles(progressSeconds, 'progressSeconds');
 
   const homeSectionsContainer = document.querySelector(".homeSectionsContainer");

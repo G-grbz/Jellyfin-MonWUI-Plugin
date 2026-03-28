@@ -121,7 +121,7 @@ function ensureHoverInfra() {
 }
 
 function isInsideDotArea(node) {
-  return !!(node?.closest?.('.dot-navigation-container') || node?.closest?.('.poster-dot'));
+  return !!(node?.closest?.('.monwui-dot-navigation-container') || node?.closest?.('.monwui-poster-dot'));
 }
 
 try {
@@ -193,7 +193,7 @@ export async function updateModalContent(item, videoUrl) {
     delete modalState.modalVideo._hls;
   }
 
-  const contextIsDot = modalState._modalContext === 'dot';
+  const contextIsDot = modalState._modalContext === 'monwui-dot';
   const dotMode = cfg.dotPreviewPlaybackMode || null;
   const onlyTrailerGlobal   = !!cfg.onlyTrailerInPreviewModal;
   const preferTrailerGlobal = !!cfg.preferTrailersInPreviewModal;
@@ -474,9 +474,9 @@ function animateModalContent(modal, isOpening) {
   });
 }
 
-export function createVideoModal({ showButtons = true, context = 'dot' } = {}) {
+export function createVideoModal({ showButtons = true, context = 'monwui-dot' } = {}) {
   if (!config) return null;
-  const allow = (context === 'dot')
+  const allow = (context === 'monwui-dot')
    ? (config.previewModal !== false)
    : (config.allPreviewModal !== false);
   if (!allow) return null;
@@ -587,7 +587,7 @@ export function createVideoModal({ showButtons = true, context = 'dot' } = {}) {
       favoriteButton.classList.toggle('favorited', !isFavorite);
       favoriteButton.innerHTML = isFavorite ? '<i class="fa-solid fa-plus"></i>' : '<i class="fa-solid fa-check"></i>';
       favoriteButton.title = getWatchlistButtonTitle({ Type: favoriteButton.dataset.itemType || "" }, !isFavorite);
-      const slide = document.querySelector(`.slide[data-item-id="${itemId}"]`);
+      const slide = document.querySelector(`.monwui-slide[data-item-id="${itemId}"]`);
       if (slide) {
         const item = await fetchItemDetails(itemId);
         const isFav = item.UserData?.IsFavorite || false;
@@ -3064,7 +3064,7 @@ export async function goToDetailsPageSafe(itemId) {
 export function animatedOpen(modal, anchorEl, pos = 'item') {
   if (!modal) return;
   if (pos === 'item') positionModalRelativeToItem(modal, anchorEl);
-  else if (pos === 'dot') positionModalRelativeToDot(modal, anchorEl);
+  else if (pos === 'monwui-dot') positionModalRelativeToDot(modal, anchorEl);
   animatedShow(modal);
 }
 
@@ -3207,7 +3207,7 @@ window.addEventListener("beforeunload", () => {
 
 export function updateActiveDot() {
   const currentIndex = getCurrentIndex();
-  const dots = document.querySelectorAll(".dot");
+  const dots = document.querySelectorAll(".monwui-dot");
   const config = getConfig();
   dots.forEach(dot => {
     const wasActive = dot.classList.contains("active");

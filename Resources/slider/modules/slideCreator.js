@@ -65,17 +65,17 @@ function bgFlushHydrationFrame() {
   const st = document.createElement('style');
   st.id = 'backdrop-perf-css';
   st.textContent = `
-    .backdrop {
+    .monwui-backdrop {
       opacity: 1;
       transition: opacity .28s ease, filter .34s ease, transform .34s cubic-bezier(.2,.6,.2,1);
       will-change: opacity, filter, transform;
       transform: translateZ(0);
     }
-    .backdrop.is-lqip { filter: blur(14px); transform: scale(1.02); }
-    .backdrop.is-hi-pending { opacity: .94; }
-    #slides-container.is-scrolling *,
-    #slides-container.is-scrolling .backdrop,
-    #slides-container.is-scrolling .horizontal-gradient-overlay {
+    .monwui-backdrop.is-lqip { filter: blur(14px); transform: scale(1.02); }
+    .monwui-backdrop.is-hi-pending { opacity: .94; }
+    #monwui-slides-container.is-scrolling *,
+    #monwui-slides-container.is-scrolling .monwui-backdrop,
+    #monwui-slides-container.is-scrolling .monwui-horizontal-gradient-overlay {
       transition: none !important;
       animation: none !important;
     }
@@ -133,7 +133,7 @@ function promoteTaglessBackdropData(data) {
 
 function isPeakBackdropEligible(img) {
   if (!img?.__peakManaged) return true;
-  const slide = img.closest?.('.slide');
+  const slide = img.closest?.('.monwui-slide');
   if (!slide) return false;
   return slide.classList.contains('active') || slide.classList.contains('peak-neighbor');
 }
@@ -381,11 +381,11 @@ async function createSlide(item, options = {}) {
   const perSlideObservers = [];
   const perSlideCleanups = [];
   const slidesContainer = createSlidesContainer(indexPage);
-  const existing = slidesContainer.querySelector(`.slide[data-item-id="${itemIdRaw}"]`);
+  const existing = slidesContainer.querySelector(`.monwui-slide[data-item-id="${itemIdRaw}"]`);
   (function bindSlidesScrollPerf(){
     if (window.__jmsSlidesScrollBound) return;
     window.__jmsSlidesScrollBound = true;
-    const scroller = document.querySelector('#slides-container');
+    const scroller = document.querySelector('#monwui-slides-container');
     if (!scroller) return;
     const onScrollPerf = () => {
       __bgScrollActive = true;
@@ -410,7 +410,7 @@ async function createSlide(item, options = {}) {
           if (node && node.__cleanupSlide) {
             try { node.__cleanupSlide(); } catch {}
           }
-          node?.querySelectorAll?.('.slide')?.forEach(el => {
+          node?.querySelectorAll?.('.monwui-slide')?.forEach(el => {
             if (el.__cleanupSlide) { try { el.__cleanupSlide(); } catch {} }
           });
         });
@@ -419,7 +419,7 @@ async function createSlide(item, options = {}) {
     mo.observe(slidesContainer, { childList:true, subtree:true });
     slidesContainer.__cleanupMO = mo;
   }
-  const existingSlides = Array.from(slidesContainer.children).filter((child) => child.classList?.contains("slide"));
+  const existingSlides = Array.from(slidesContainer.children).filter((child) => child.classList?.contains("monwui-slide"));
   const isFirstSlide = existingSlides.length === 0;
   const itemId = item.Id;
 
@@ -488,7 +488,7 @@ async function createSlide(item, options = {}) {
   addSlideToSettingsBackground(parentId, autoBackdropUrl);
 
   const slide = document.createElement("div");
-  slide.className = "slide";
+  slide.className = "monwui-slide";
   if (deferPeakReveal && config.peakSlider) {
     slide.classList.add("peak-batch-pending");
   }
@@ -571,7 +571,7 @@ async function createSlide(item, options = {}) {
   slide.dataset.background = absBackdrop || S(autoBackdropUrl);
 
   const backdropImg = document.createElement('img');
-  backdropImg.className = 'backdrop';
+  backdropImg.className = 'monwui-backdrop';
   backdropImg.alt = 'Backdrop';
   backdropImg.sizes = '100vw';
   backdropImg.__peakManaged = !!config.peakSlider;
@@ -601,7 +601,7 @@ async function createSlide(item, options = {}) {
   }
 
   const pinActiveIfNeeded = () => {
-    const slideEl = backdropImg.closest('.slide');
+    const slideEl = backdropImg.closest('.monwui-slide');
     const active = slideEl?.classList.contains('active');
     if (!active) return;
     try { backdropImg.setAttribute('fetchpriority','high'); } catch {}
@@ -646,8 +646,8 @@ async function createSlide(item, options = {}) {
   }
 
   backdropImg.addEventListener('click', async (ev) => {
-    const slideEl = ev.currentTarget.closest('.slide');
-    const sc = document.querySelector('#slides-container');
+    const slideEl = ev.currentTarget.closest('.monwui-slide');
+    const sc = document.querySelector('#monwui-slides-container');
     const isPeak = sc?.classList.contains('peak-mode');
     const isActive = slideEl?.classList.contains('active');
     if (isPeak && !isActive) {
@@ -687,7 +687,7 @@ async function createSlide(item, options = {}) {
 
   const horizontalGradientOverlay = createHorizontalGradientOverlay();
   const backdropContainer = document.createElement('div');
-  backdropContainer.className = 'bckdrp-cntnr';
+  backdropContainer.className = 'monwui-bckdrp-cntnr';
   backdropContainer.append(backdropImg, horizontalGradientOverlay);
   slide.__backdropContainer = backdropContainer;
   slide.append(backdropContainer);
@@ -708,7 +708,7 @@ async function createSlide(item, options = {}) {
 
   function createLogoElement(fallback) {
     const logoImg = document.createElement("img");
-    logoImg.className = "logo";
+    logoImg.className = "monwui-logo";
     logoImg.src = logoUrl;
     logoImg.alt = "";
     logoImg.loading = "lazy";
@@ -725,7 +725,7 @@ async function createSlide(item, options = {}) {
 
   function createDiskElement(fallback) {
     const discImg = document.createElement("img");
-    discImg.className = "disk";
+    discImg.className = "monwui-disk";
     discImg.src = discUrl;
     discImg.alt = "";
     discImg.loading = "lazy";
@@ -738,7 +738,7 @@ async function createSlide(item, options = {}) {
 
   function createTitleElement() {
     const titleDiv = document.createElement("div");
-    titleDiv.className = "no-logo-container";
+    titleDiv.className = "monwui-no-logo-container";
     titleDiv.textContent = OriginalTitle;
     Object.assign(titleDiv.style, {
       display: "flex", alignItems: "center", justifyContent: "center"
@@ -807,8 +807,8 @@ async function createSlide(item, options = {}) {
   slide.append(metaContainer, mainContentContainer, buttonContainer, actorSlider, infoContainer, directorContainer);
   const frag = document.createDocumentFragment();
   frag.appendChild(slide);
-  const slideChildren = Array.from(slidesContainer.children).filter((child) => child.classList?.contains("slide"));
-  const dotNav = Array.from(slidesContainer.children).find((child) => child.classList?.contains("dot-navigation-container")) || null;
+  const slideChildren = Array.from(slidesContainer.children).filter((child) => child.classList?.contains("monwui-slide"));
+  const dotNav = Array.from(slidesContainer.children).find((child) => child.classList?.contains("monwui-dot-navigation-container")) || null;
   const hasExplicitInsertAt = Number.isInteger(insertAt) && insertAt >= 0;
   const refNode = hasExplicitInsertAt && insertAt < slideChildren.length
     ? slideChildren[insertAt]
@@ -830,7 +830,7 @@ function addSlideToSettingsBackground(itemId, backdropUrl) {
   const existingSlide = settingsSlider.querySelector(`[data-item-id="${itemId}"]`);
   if (existingSlide) return;
   const slide = document.createElement("div");
-  slide.className = "slide";
+  slide.className = "monwui-slide";
   slide.dataset.itemId = itemId;
   slide.style.backgroundImage = `url('${backdropUrl}')`;
   const img = new Image();
@@ -849,7 +849,7 @@ function addSlideToSettingsBackground(itemId, backdropUrl) {
 
 function buildStarLayer(useSolid) {
   const layer = document.createElement("span");
-  layer.className = useSolid ? "trailer-star-fill" : "trailer-star-track";
+  layer.className = useSolid ? "monwui-trailer-star-fill" : "monwui-trailer-star-track";
 
   for (let i = 0; i < 5; i++) {
     const star = document.createElement("i");
@@ -864,21 +864,21 @@ function openTrailerModal(trailerUrl, trailerName, itemName = '', itemType = '',
   const sep = embedUrl.includes('?') ? '&' : '?';
   const logoUrl = withServer(`/Items/${itemId}/Images/Logo`);
   const overlay = document.createElement("div");
-  overlay.className = "trailer-modal-overlay";
+  overlay.className = "monwui-trailer-modal-overlay";
   overlay.style.opacity = "0";
   overlay.style.transition = "opacity 0.3s ease-in-out";
 
   const modal = document.createElement("div");
-  modal.className = "trailer-modal";
+  modal.className = "monwui-trailer-modal";
   modal.style.maxWidth = "90vw";
   modal.style.maxHeight = "90vh";
   modal.style.width = "800px";
 
   const modalHeader = document.createElement("div");
-  modalHeader.className = "trailer-modal-header";
+  modalHeader.className = "monwui-trailer-modal-header";
 
   const logoContainer = document.createElement("div");
-  logoContainer.className = "trailer-modal-logo";
+  logoContainer.className = "monwui-trailer-modal-logo";
   logoContainer.style.display = "flex";
   logoContainer.style.alignItems = "center";
   logoContainer.style.height = "40px";
@@ -908,7 +908,7 @@ function openTrailerModal(trailerUrl, trailerName, itemName = '', itemType = '',
   titleElement.style.textAlign = "center";
 
   const closeBtn = document.createElement("button");
-  closeBtn.className = "trailer-modal-close";
+  closeBtn.className = "monwui-trailer-modal-close";
   closeBtn.innerHTML = "&times;";
   closeBtn.style.cursor = "pointer";
   closeBtn.style.marginLeft = "auto";
@@ -916,11 +916,11 @@ function openTrailerModal(trailerUrl, trailerName, itemName = '', itemType = '',
   modalHeader.append(logoContainer, titleElement, closeBtn);
 
   const videoContainer = document.createElement("div");
-  videoContainer.className = "trailer-video-container";
+  videoContainer.className = "monwui-trailer-video-container";
   videoContainer.style.paddingBottom = "56.25%";
 
   const loadingSpinner = document.createElement("div");
-  loadingSpinner.className = "trailer-loading";
+  loadingSpinner.className = "monwui-trailer-loading";
   videoContainer.appendChild(loadingSpinner);
 
   const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
@@ -1003,7 +1003,7 @@ function openTrailerModal(trailerUrl, trailerName, itemName = '', itemType = '',
 
   videoContainer.appendChild(iframe);
   const modalFooter = document.createElement("div");
-  modalFooter.className = "trailer-modal-footer";
+  modalFooter.className = "monwui-trailer-modal-footer";
   modalFooter.style.display = "flex";
   modalFooter.style.justifyContent = "space-between";
   modalFooter.style.alignItems = "center";
@@ -1043,7 +1043,7 @@ function openTrailerModal(trailerUrl, trailerName, itemName = '', itemType = '',
     communityRatingElement.style.gap = "8px";
 
     const starWrap = document.createElement("span");
-    starWrap.className = "trailer-star-rating";
+    starWrap.className = "monwui-trailer-star-rating";
     starWrap.setAttribute("aria-label", `${rating5.toFixed(1)} / 5`);
 
     const track = buildStarLayer(false);
@@ -1146,7 +1146,7 @@ function openTrailerModal(trailerUrl, trailerName, itemName = '', itemType = '',
     const style = document.createElement('style');
     style.id = 'trailer-modal-styles';
     style.textContent = `
-      .trailer-modal-header {
+      .monwui-trailer-modal-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -1156,11 +1156,11 @@ function openTrailerModal(trailerUrl, trailerName, itemName = '', itemType = '',
         position: relative;
       }
 
-      .trailer-modal-logo {
+      .monwui-trailer-modal-logo {
         flex-shrink: 0;
       }
 
-      .trailer-loading {
+      .monwui-trailer-loading {
         position: absolute;
         top: 50%;
         left: 50%;
@@ -1179,17 +1179,17 @@ function openTrailerModal(trailerUrl, trailerName, itemName = '', itemType = '',
       }
 
       @media (max-width: 768px) {
-        .trailer-modal {
+        .monwui-trailer-modal {
           width: 95vw !important;
           height: auto !important;
         }
 
-        .trailer-modal-header h3 {
+        .monwui-trailer-modal-header h3 {
           font-size: 14px;
           margin-left: 10px !important;
         }
 
-        .trailer-modal-logo {
+        .monwui-trailer-modal-logo {
           max-width: 120px !important;
           height: 30px !important;
         }
