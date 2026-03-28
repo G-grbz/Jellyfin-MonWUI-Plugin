@@ -61,6 +61,7 @@ export function createSliderPanel(config, labels) {
     { value: 'auto', label: labels.optionAuto || '🌐 Otomatik (Tarayıcı dili)' },
     { value: 'tur',  label: labels.optionTurkish || '🇹🇷 Türkçe' },
     { value: 'eng',  label: labels.optionEnglish || '🇬🇧 English' },
+     { value: 'spa',  label: labels.optionEspanol || '🇪🇸 Español' },
     { value: 'deu',  label: labels.optionGerman  || '🇩🇪 Deutsch' },
     { value: 'fre',  label: labels.optionFrench  || '🇫🇷 Français' },
     { value: 'rus',  label: labels.optionRussian || '🇷🇺 Русский' },
@@ -130,6 +131,7 @@ export function createSliderPanel(config, labels) {
     [
       { value: 'tr-TR', label: '🇹🇷 Türkçe (tr-TR)' },
       { value: 'en-US', label: '🇺🇸 English (en-US)' },
+      { value: 'es-ES', label: '🇪🇸 Español (es-ES)' },
       { value: 'de-DE', label: '🇩🇪 Deutsch (de-DE)' },
       { value: 'fr-FR', label: '🇫🇷 Français (fr-FR)' },
       { value: 'ru-RU', label: '🇷🇺 Русский (ru-RU)' },
