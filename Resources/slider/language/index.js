@@ -3,6 +3,7 @@ import { languageLabels as engLabels } from './eng.js';
 import { languageLabels as deuLabels } from './deu.js';
 import { languageLabels as fraLabels } from './fre.js';
 import { languageLabels as rusLabels } from './rus.js';
+import { languageLabels as spaLabels } from './spa.js';
 
 export function getLanguageLabels(lang) {
   const effective =
@@ -13,6 +14,7 @@ export function getLanguageLabels(lang) {
     case 'deu': return deuLabels;
     case 'fre': return fraLabels;
     case 'rus': return rusLabels;
+    case 'spa': return spaLabels;
     case 'tur':
     default:    return turLabels;
   }
@@ -30,6 +32,7 @@ export function detectBrowserLanguage() {
     if (code.startsWith('de') || base === 'de') return 'deu';
     if (code.startsWith('fr') || base === 'fr') return 'fre';
     if (code.startsWith('ru') || base === 'ru') return 'rus';
+    if (code.startsWith('es') || base === 'es') return 'spa';
   }
   return 'tur';
 }

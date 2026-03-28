@@ -1,4 +1,4 @@
-import { saveCredentials, saveApiKey, getAuthToken } from "./auth.js";
+import { saveCredentials, saveApiKey, getAuthToken } from "/Plugins/JMSFusion/runtime/auth.js";
 import { getConfig } from "./modules/config.js";
 import { getLanguageLabels, getDefaultLanguage } from "./language/index.js";
 import { getCurrentIndex, setCurrentIndex } from "./modules/sliderState.js";
@@ -7,7 +7,7 @@ import { ensureProgressBarExists, resetProgressBar, pauseProgressBar, resumeProg
 import { createSlide } from "./modules/slideCreator.js";
 import { changeSlide, createDotNavigation, enablePeakNeighborActivation, getPeakDisplayOptions, initSwipeEvents, primePeakFirstPaint, syncPeakStructureNow, updatePeakClasses } from "./modules/navigation.js";
 import { attachMouseEvents } from "./modules/events.js";
-import { fetchItemDetails as fetchItemDetailsNet, getSessionInfo, getAuthHeader, waitForAuthReadyStrict, isAuthReadyStrict } from "./modules/api.js";
+import { fetchItemDetails as fetchItemDetailsNet, getSessionInfo, getAuthHeader, waitForAuthReadyStrict, isAuthReadyStrict } from "/Plugins/JMSFusion/runtime/api.js";
 import { cachedFetchJson, cachedFetchText, createCachedItemDetailsFetcher, startLibraryDeltaWatcher } from "./modules/sliderCache.js";
 import { forceHomeSectionsTop, forceSkinHeaderPointerEvents } from "./modules/positionOverrides.js";
 import { setupPauseScreen } from "./modules/pauseModul.js";
@@ -357,6 +357,9 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
 (function earlyCssBoot(){
   const D = document;
   const HEAD = D.head || D.documentElement;
+  const raf =
+    window.requestAnimationFrame ||
+    ((cb) => setTimeout(cb, 16));
   const criticalCSS = `
     html[data-jms-notif="0"] .skinHeader .headerRight #jfNotifBtn { display:none !important; }
     .skinHeader .headerRight #jfNotifBtn { order: -9999; }
@@ -380,46 +383,171 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
     HEAD.prepend(s);
   }
 
-  function addCSS(href, id){
-    if (!href || D.getElementById(id)) return;
+  function normalizeCssHref(href) {
+    if (!href) return href;
+    return (typeof href === 'string' && href.startsWith('/slider/'))
+      ? (`/web${href}`)
+      : href;
+  }
+
+  function syncCSS(href, id, enabled = true) {
+    const existing = D.getElementById(id);
+    if (!enabled) {
+      existing?.remove();
+      return;
+    }
+    if (!href) return;
+
+    const normalized = normalizeCssHref(href);
+    const resolved =
+      (typeof withServer === 'function') ? withServer(normalized) : normalized;
+
+    if (existing) {
+      if (existing.href !== resolved) existing.href = resolved;
+      try { existing.fetchPriority = 'high'; } catch {}
+      existing.setAttribute('fetchpriority', 'high');
+      return;
+    }
+
     const l = D.createElement('link');
     l.id = id;
     l.rel = 'stylesheet';
-    const normalized =
-      (typeof href === 'string' && href.startsWith('/slider/'))
-        ? ('/web' + href)
-        : href;
-    l.href = (typeof withServer === 'function') ? withServer(normalized) : normalized;
+    l.href = resolved;
     try { l.fetchPriority = 'high'; } catch {}
     l.setAttribute('fetchpriority','high');
     HEAD.prepend(l);
   }
 
-  function getCssVariant() {
-    try {
-      if (typeof getConfig === 'function') {
-        const cfg = getConfig() || {};
-        return cfg.cssVariant || 'normalslider';
+  function removeCssByHref(patterns = []) {
+    if (!patterns.length) return;
+    D.querySelectorAll('link[rel="stylesheet"][href]').forEach((link) => {
+      const href = String(link.getAttribute('href') || link.href || '');
+      if (!href) return;
+      if (patterns.some((pattern) => href.includes(pattern))) {
+        link.remove();
       }
-    } catch {}
-    try {
-      const cfg = JSON.parse(localStorage.getItem('jms-config')||'{}');
-      return cfg.cssVariant || 'normalslider';
-    } catch {}
-    return 'normalslider';
+    });
   }
 
-  const variant = getCssVariant();
-  addCSS('/slider/src/fontawesome/all.min.css', 'jms-css-fontawesome');
-  addCSS('/slider/src/notifications.css', 'jms-css-notifications');
-  addCSS('/slider/src/pauseModul.css', 'jms-css-pause');
-  addCSS('/slider/src/personalRecommendations.css', 'jms-css-recs');
-  addCSS('/slider/src/studioHubs.css', 'jms-css-studiohubs');
-  addCSS('/slider/src/detailsModal.css', 'jms-css-detailsModal');
-  addCSS('/slider/src/studioHubsMini.css', 'jms-css-studioHubsMini');
-  addCSS('/slider/src/avatarPicker.css', 'jms-css-avatarPicker');
-  addCSS('/slider/src/profileChooser.css', 'jms-css-profileChooser');
-  addCSS('/slider/src/subtitleCustomizer.css', 'jms-css-subtitleCustomizer');
+  function getLiveConfig() {
+    try {
+      if (typeof getConfig === 'function') {
+        return getConfig() || {};
+      }
+    } catch {}
+    return {};
+  }
+
+  function getCssVariant(cfg = getLiveConfig()) {
+    return cfg.cssVariant || 'normalslider';
+  }
+
+  function matchesAny(selectors = []) {
+    return selectors.some((selector) => {
+      try {
+        return !!D.querySelector(selector);
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  function isSliderCssActive(cfg) {
+    return cfg.enableSlider !== false || matchesAny([
+      '#slides-container',
+      '.slide-progress-bar',
+      '.dot-navigation-container'
+    ]);
+  }
+
+  function isNotificationsCssActive(cfg) {
+    return cfg.enableNotifications !== false || matchesAny([
+      '#jfNotifBtn',
+      '#jfNotifModal',
+      '.jf-notif-panel'
+    ]);
+  }
+
+  function isRecommendationCssActive(cfg) {
+    return !!(
+      cfg.enablePersonalRecommendations ||
+      cfg.enableGenreHubs ||
+      cfg.enableDirectorRows ||
+      cfg.enableRecentRows
+    ) || matchesAny([
+      '#personal-recommendations',
+      '#genre-hubs',
+      '#director-rows',
+      '#recent-rows',
+      '#because-you-watched',
+      '[id^="because-you-watched--"]'
+    ]);
+  }
+
+  function isStudioHubsCssActive(cfg) {
+    return cfg.enableStudioHubs !== false || matchesAny([
+      '#studio-hubs',
+      '.hub-preview-popover'
+    ]);
+  }
+
+  function isDetailsModalCssActive(cfg) {
+    return (
+      isSliderCssActive(cfg) ||
+      isNotificationsCssActive(cfg) ||
+      isRecommendationCssActive(cfg) ||
+      isStudioHubsCssActive(cfg) ||
+      matchesAny([
+        '#jms-details-modal-root',
+        '.jmsdm-backdrop',
+        '.jmsdm-card'
+      ])
+    );
+  }
+
+  function isMiniPopoverCssActive(cfg) {
+    return !!(
+      isSliderCssActive(cfg) ||
+      isRecommendationCssActive(cfg) ||
+      isStudioHubsCssActive(cfg) ||
+      cfg.studioHubsHoverVideo ||
+      (cfg.globalPreviewMode === 'studioMini' && cfg.studioMiniTrailerPopover)
+    ) || matchesAny([
+      '.mini-poster-popover',
+      '.mini-trailer-popover',
+      '.hub-preview-popover'
+    ]);
+  }
+
+  function isAvatarPickerCssActive(cfg) {
+    return !!(
+      cfg.createAvatar ||
+      (window.location.hash || '').startsWith('#/userprofile')
+    ) || matchesAny([
+      '.jms-avatarBackdrop',
+      '.jms-avatarModal',
+      '.jms-avatarPickBtn'
+    ]);
+  }
+
+  function isProfileChooserCssActive(cfg) {
+    return cfg.enableProfileChooser !== false || matchesAny([
+      '#jfProfileChooserOverlay',
+      '#jfProfileChooserBtn',
+      '.jf-profile-overlay',
+      '.jf-profile-header-btn'
+    ]);
+  }
+
+  function isSubtitleCustomizerCssActive() {
+    return matchesAny([
+      '.videoOsdBottom.videoOsdBottom-maincontrols .buttons',
+      '.btnJmsSubtitleCustomizer',
+      '[data-jms-subtitle-dialog]',
+      '#jms-subtitle-dialog',
+      '.jms-subtitle-dialog'
+    ]);
+  }
 
   const vmap = {
     peakslider: '/slider/src/peakslider.css',
@@ -428,15 +556,102 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
     slider: '/slider/src/slider.css',
     auroraslider: '/slider/src/auroraSlider.css'
   };
-  addCSS(vmap[variant] || vmap.normalslider, 'jms-css-variant');
 
-  document.documentElement.dataset.cssVariant =
-    variant === 'slider' ? 'slider' : variant;
-  window.__cssVariant = document.documentElement.dataset.cssVariant;
-  try {
-    const cfg = (typeof getConfig === 'function' ? getConfig() : {}) || {};
+  function applyFeatureCss() {
+    const cfg = getLiveConfig();
+    const variant = getCssVariant(cfg);
+    const notificationsCssEnabled = isNotificationsCssActive(cfg);
+    const recommendationCssEnabled = isRecommendationCssActive(cfg);
+    const studioHubsCssEnabled = isStudioHubsCssActive(cfg);
+    const detailsModalCssEnabled = isDetailsModalCssActive(cfg);
+    const miniPopoverCssEnabled = isMiniPopoverCssActive(cfg);
+    const avatarPickerCssEnabled = isAvatarPickerCssActive(cfg);
+    const profileChooserCssEnabled = isProfileChooserCssActive(cfg);
+    const subtitleCustomizerCssEnabled = isSubtitleCustomizerCssActive();
+    const sliderCssEnabled = isSliderCssActive(cfg);
+
+    syncCSS('/slider/src/fontawesome/all.min.css', 'jms-css-fontawesome', true);
+    syncCSS('/slider/src/notifications.css', 'jms-css-notifications', notificationsCssEnabled);
+    syncCSS('/slider/src/pauseModul.css', 'jms-css-pause', true);
+    syncCSS('/slider/src/personalRecommendations.css', 'jms-css-recs', recommendationCssEnabled);
+    syncCSS('/slider/src/studioHubs.css', 'jms-css-studiohubs', studioHubsCssEnabled);
+    syncCSS('/slider/src/detailsModal.css', 'jms-css-detailsModal', detailsModalCssEnabled);
+    syncCSS('/slider/src/studioHubsMini.css', 'jms-css-studioHubsMini', miniPopoverCssEnabled);
+    syncCSS('/slider/src/avatarPicker.css', 'jms-css-avatarPicker', avatarPickerCssEnabled);
+    syncCSS('/slider/src/profileChooser.css', 'jms-css-profileChooser', profileChooserCssEnabled);
+    syncCSS('/slider/src/subtitleCustomizer.css', 'jms-css-subtitleCustomizer', subtitleCustomizerCssEnabled);
+    syncCSS(vmap[variant] || vmap.normalslider, 'jms-css-variant', sliderCssEnabled);
+
+    if (!notificationsCssEnabled) {
+      removeCssByHref([
+        'slider/src/notifications.css',
+        'slider/src/notifications2.css',
+        'slider/src/notifications3.css',
+        'slider/src/notifications4.css'
+      ]);
+    }
+    if (!recommendationCssEnabled) {
+      removeCssByHref(['slider/src/personalRecommendations.css']);
+    }
+    if (!studioHubsCssEnabled) {
+      removeCssByHref(['slider/src/studioHubs.css']);
+    }
+    if (!detailsModalCssEnabled) {
+      removeCssByHref(['slider/src/detailsModal.css']);
+    }
+    if (!miniPopoverCssEnabled) {
+      removeCssByHref(['slider/src/studioHubsMini.css']);
+    }
+    if (!avatarPickerCssEnabled) {
+      removeCssByHref(['slider/src/avatarPicker.css']);
+    }
+    if (!profileChooserCssEnabled) {
+      removeCssByHref(['slider/src/profileChooser.css']);
+    }
+    if (!subtitleCustomizerCssEnabled) {
+      removeCssByHref(['slider/src/subtitleCustomizer.css']);
+    }
+    if (!sliderCssEnabled) {
+      removeCssByHref([
+        'slider/src/peakslider.css',
+        'slider/src/fullslider.css',
+        'slider/src/normalslider.css',
+        'slider/src/slider.css',
+        'slider/src/auroraSlider.css'
+      ]);
+    }
+
+    document.documentElement.dataset.cssVariant =
+      variant === 'slider' ? 'slider' : variant;
+    window.__cssVariant = document.documentElement.dataset.cssVariant;
     document.documentElement.setAttribute('data-jms-notif', cfg.enableNotifications ? '1' : '0');
-  } catch {}
+  }
+
+  let cssSyncQueued = false;
+  function queueFeatureCssSync() {
+    if (cssSyncQueued) return;
+    cssSyncQueued = true;
+    raf(() => {
+      cssSyncQueued = false;
+      applyFeatureCss();
+    });
+  }
+
+  applyFeatureCss();
+
+  D.addEventListener('DOMContentLoaded', queueFeatureCssSync, { once: true });
+  window.addEventListener('hashchange', queueFeatureCssSync, { passive: true });
+  window.addEventListener('popstate', queueFeatureCssSync, { passive: true });
+  window.addEventListener('pageshow', queueFeatureCssSync, { passive: true });
+  window.addEventListener('jms:globalPreviewModeChanged', queueFeatureCssSync, { passive: true });
+
+  if (typeof MutationObserver === 'function') {
+    const mo = new MutationObserver(() => queueFeatureCssSync());
+    mo.observe(D.documentElement, {
+      childList: true,
+      subtree: true
+    });
+  }
 })();
 
 (async function requestPersistentStorageOnce(){
