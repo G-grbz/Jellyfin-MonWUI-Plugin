@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/G-grbz/Jellyfin-MonWUI-Plugin/main/img/icon.png",
     "versions": [
       {
+        "version": "2.1.2.0",
+        "changelog": "Refactored slider system with `monwui-` namespace",
+        "targetAbi": "10.10.0.0",
+        "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v2.1.1/JMSFusion-2.1.2.0-server.zip",
+        "checksum": "c22454d205597af959680d34def3945c",
+        "timestamp": "2026-03-28T19:45:01.8025820Z"
+      },
+      {
         "version": "2.1.1.0",
         "changelog": "Improve UI, config & add Spanish",
         "targetAbi": "10.10.0.0",
