@@ -160,6 +160,7 @@ namespace Jellyfin.Plugin.JMSFusion
 
             var sb = new StringBuilder();
             sb.AppendLine("<!-- SL-INJECT BEGIN -->");
+            sb.AppendLine($@"<script type=""module"" src=""../Plugins/JMSFusion/runtime/storage-preload.js?v={ver}""></script>");
             sb.AppendLine($@"<script type=""module"" src=""../slider/main.js?v={ver}""></script>");
             sb.AppendLine($@"<script type=""module"" src=""../slider/modules/player/main.js?v={ver}""></script>");
             sb.AppendLine("<!-- SL-INJECT END -->");

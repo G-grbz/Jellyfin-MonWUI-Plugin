@@ -13,9 +13,11 @@ namespace Jellyfin.Plugin.JMSFusion
         private static string BuildBlock(string? pathBase = null)
         {
             var sb = new StringBuilder();
+            var ver = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             sb.AppendLine(BeginMark);
-            sb.AppendLine(@"<script type=""module"" src=""../slider/main.js""></script>");
-            sb.AppendLine(@"<script type=""module"" src=""../slider/modules/player/main.js""></script>");
+            sb.AppendLine($@"<script type=""module"" src=""../Plugins/JMSFusion/runtime/storage-preload.js?v={ver}""></script>");
+            sb.AppendLine($@"<script type=""module"" src=""../slider/main.js?v={ver}""></script>");
+            sb.AppendLine($@"<script type=""module"" src=""../slider/modules/player/main.js?v={ver}""></script>");
             sb.AppendLine(EndMark);
             return sb.ToString();
         }

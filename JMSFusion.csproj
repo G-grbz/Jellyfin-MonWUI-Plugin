@@ -7,7 +7,7 @@
     <AssemblyName>Jellyfin.Plugin.JMSFusion</AssemblyName>
     <RootNamespace>Jellyfin.Plugin.JMSFusion</RootNamespace>
 
-    <Version>2.1.0.0</Version>
+    <Version>2.1.1.0</Version>
     <AssemblyVersion>$(Version)</AssemblyVersion>
     <FileVersion>$(Version)</FileVersion>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
@@ -48,6 +48,7 @@
   <ItemGroup>
     <EmbeddedResource Include="Web/**/*" />
     <EmbeddedResource Include="Resources/**/*" />
+    <EmbeddedResource Include="RuntimeModules/**/*" />
   </ItemGroup>
 
   <ItemGroup>
