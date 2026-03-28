@@ -1,4 +1,4 @@
-import { getSessionInfo, getAuthHeader } from "./api.js";
+import { getSessionInfo, getAuthHeader } from "/Plugins/JMSFusion/runtime/api.js";
 import { getConfig } from "./config.js";
 import { getTomatoIconHtml } from "./customIcons.js";
 

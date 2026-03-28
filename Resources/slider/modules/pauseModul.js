@@ -1,4 +1,4 @@
-import { getSessionInfo, fetchItemDetails, makeApiRequest, isAuthReadyStrict } from "./api.js";
+import { getSessionInfo, fetchItemDetails, makeApiRequest, isAuthReadyStrict } from "/Plugins/JMSFusion/runtime/api.js";
 import { getConfig } from "./config.js";
 import { getLanguageLabels, getDefaultLanguage } from "../language/index.js";
 import { withServer } from "./jfUrl.js";

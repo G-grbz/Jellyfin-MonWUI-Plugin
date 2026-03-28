@@ -1,4 +1,4 @@
-import { getSessionInfo, makeApiRequest, playNow } from "./api.js";
+import { getSessionInfo, makeApiRequest, playNow } from "/Plugins/JMSFusion/runtime/api.js";
 import { getConfig } from "./config.js";
 import { getLanguageLabels } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";
@@ -262,6 +262,58 @@ function getRecentRowsCardTypeBadge(itemType) {
 
 function shouldPreferTaglessImages(item) {
   return item?.__preferTaglessImages === true;
+}
+
+function sanitizeResolvedId(value) {
+  if (value == null) return null;
+  const out = String(value).trim();
+  if (!out || out === "undefined" || out === "null") return null;
+  return out;
+}
+
+function resolveItemId(item) {
+  return (
+    sanitizeResolvedId(item?.Id) ||
+    sanitizeResolvedId(item?.itemId) ||
+    sanitizeResolvedId(item?.id) ||
+    sanitizeResolvedId(item?.__posterSource?.Id) ||
+    sanitizeResolvedId(item?.__posterSource?.itemId) ||
+    sanitizeResolvedId(item?.__posterSource?.id) ||
+    sanitizeResolvedId(item?.AlbumId) ||
+    sanitizeResolvedId(item?.ParentBackdropItemId) ||
+    sanitizeResolvedId(item?.ParentId) ||
+    sanitizeResolvedId(item?.SeriesId) ||
+    null
+  );
+}
+
+function resolveItemName(item) {
+  return String(
+    item?.Name ||
+    item?.SeriesName ||
+    item?.__posterSource?.Name ||
+    item?.__posterSource?.SeriesName ||
+    ""
+  ).trim();
+}
+
+function primeItemIdentity(item) {
+  if (!item || typeof item !== "object") return { item, itemId: null, itemName: "" };
+  const itemId = resolveItemId(item);
+  const itemName = resolveItemName(item);
+  if (itemId && !sanitizeResolvedId(item?.Id)) {
+    try { item.Id = itemId; } catch {}
+  }
+  if (itemName && !item?.Name) {
+    try { item.Name = itemName; } catch {}
+  }
+  if (item?.__posterSource && typeof item.__posterSource === "object") {
+    const posterId = resolveItemId(item.__posterSource);
+    if (posterId && !sanitizeResolvedId(item.__posterSource?.Id)) {
+      try { item.__posterSource.Id = posterId; } catch {}
+    }
+  }
+  return { item, itemId, itemName };
 }
 
 function getPrimaryImageCandidate(item) {
@@ -916,7 +968,8 @@ function safeCloseHoverModal() {
 }
 
 function attachHoverTrailer(cardEl, itemLike) {
-  if (!cardEl || !itemLike?.Id) return;
+  const itemId = resolveItemId(itemLike) || sanitizeResolvedId(cardEl?.dataset?.itemId);
+  if (!cardEl || !itemId) return;
   if (!__enterSeq.has(cardEl)) __enterSeq.set(cardEl, 0);
 
   const onEnter = (e) => {
@@ -942,7 +995,7 @@ function attachHoverTrailer(cardEl, itemLike) {
       __openTokenMap.set(cardEl, token);
 
       try { hardWipeHoverModalDom(); } catch {}
-      safeOpenHoverModal(itemLike.Id, cardEl);
+      safeOpenHoverModal(itemId, cardEl);
 
       if (isTouch) {
         __touchStickyOpen = true;
@@ -994,11 +1047,14 @@ function detachPreviewHandlers(cardEl) {
 
 function attachPreviewByMode(cardEl, itemLike, mode) {
   detachPreviewHandlers(cardEl);
+  const itemId = resolveItemId(itemLike) || sanitizeResolvedId(cardEl?.dataset?.itemId);
+  if (!itemId) return;
+  const normalizedItem = { ...(itemLike || {}), Id: itemId, Name: resolveItemName(itemLike) };
   if (mode === "studioMini") {
-    attachMiniPosterHover(cardEl, itemLike);
+    attachMiniPosterHover(cardEl, normalizedItem);
     __boundPreview.set(cardEl, { mode: "studioMini", onEnter: ()=>{}, onLeave: ()=>{} });
   } else {
-    attachHoverTrailer(cardEl, itemLike);
+    attachHoverTrailer(cardEl, normalizedItem);
   }
 }
 
@@ -1168,9 +1224,10 @@ function openResumePage(type) {
 }
 
 function createRecommendationCard(item, serverId, { aboveFold=false, showProgress=false } = {}) {
+  const { itemId, itemName } = primeItemIdentity(item);
   const card = document.createElement("div");
   card.className = "card personal-recs-card";
-  card.dataset.itemId = item.Id;
+  if (itemId) card.dataset.itemId = itemId;
 
   const posterSource = item?.__posterSource || item;
 
@@ -1216,7 +1273,7 @@ function createRecommendationCard(item, serverId, { aboveFold=false, showProgres
 
   card.innerHTML = `
     <div class="cardBox">
-      <a class="cardLink" href="${getDetailsUrl(item.Id, serverId)}">
+      <a class="cardLink" href="${itemId ? getDetailsUrl(itemId, serverId) : '#'}">
         <div class="cardImageContainer" style="position:relative;">
           <img class="cardImage"
             alt="${escapeHtml(mainTitle)}"
@@ -1265,11 +1322,12 @@ function createRecommendationCard(item, serverId, { aboveFold=false, showProgres
     cardLink.addEventListener("click", async (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if (!itemId) return;
       const hostEl = card.querySelector(".cardImageContainer");
       const backdropIndex = localStorage.getItem("jms_backdrop_index") || "0";
       try {
         await openDetailsModal({
-          itemId: item.Id,
+          itemId,
           serverId,
           preferBackdropIndex: backdropIndex,
           originEl: hostEl?.querySelector?.("img.cardImage") || hostEl || card,
@@ -1303,14 +1361,14 @@ function createRecommendationCard(item, serverId, { aboveFold=false, showProgres
     : HOVER_MODE;
 
   setTimeout(() => {
-    if (card.isConnected) attachPreviewByMode(card, { Id: item.Id, Name: item.Name }, mode);
+    if (card.isConnected) attachPreviewByMode(card, { ...item, Id: itemId, Name: itemName }, mode);
   }, 500);
 
   card.addEventListener("dblclick", (e) => {
     try {
       e.preventDefault();
       e.stopPropagation();
-      if (typeof playNow === "function") playNow(item.Id);
+      if (itemId && typeof playNow === "function") playNow(itemId);
     } catch {}
   });
 
@@ -1460,18 +1518,20 @@ async function fetchAlbumPreviewTrackId(albumId) {
 }
 
 async function resolveHeroPreviewItemId(item) {
-  if (!item?.Id) return null;
-  if (isAudioPreviewItem(item)) return item.Id;
+  const itemId = resolveItemId(item);
+  if (!itemId) return null;
+  if (isAudioPreviewItem(item)) return itemId;
   if (item.Type === "MusicAlbum") {
-    return await fetchAlbumPreviewTrackId(item.Id);
+    return await fetchAlbumPreviewTrackId(itemId);
   }
-  return item.Id;
+  return itemId;
 }
 
 async function createRowHeroCard(item, serverId, labelText, { showProgress = false } = {}) {
+  const { itemId } = primeItemIdentity(item);
   const hero = document.createElement("div");
   hero.className = "dir-row-hero";
-  hero.dataset.itemId = item.Id;
+  if (itemId) hero.dataset.itemId = itemId;
 
   try {
     await attachMusicPosterSources([item]);
@@ -1581,8 +1641,9 @@ async function createRowHeroCard(item, serverId, labelText, { showProgress = fal
     const backdropIndex = localStorage.getItem("jms_backdrop_index") || "0";
     const originEl = hero.querySelector(".dir-row-hero-bg") || hero;
     try {
+      if (!itemId) return;
       await openDetailsModal({
-        itemId: item.Id,
+        itemId,
         serverId,
         preferBackdropIndex: backdropIndex,
         originEl,
@@ -1632,10 +1693,10 @@ async function createRowHeroCard(item, serverId, labelText, { showProgress = fal
       RemoteTrailers,
       slide: hero,
       backdropImg,
-      itemId: item.Id,
-      previewItemId: previewItemId || item.Id,
+      itemId,
+      previewItemId: previewItemId || itemId,
       serverId,
-      detailsUrl: getDetailsUrl(item.Id, serverId),
+      detailsUrl: itemId ? getDetailsUrl(itemId, serverId) : "#",
       detailsText: config.languageLabels.details || "Ayrıntılar",
       showDetailsOverlay: false,
     });

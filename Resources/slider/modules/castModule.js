@@ -1,4 +1,4 @@
-import { getSessionInfo, makeApiRequest, getAuthHeader, getEmbyHeaders, fetchItemDetails,  jms, updateFavoriteStatus, goToDetailsPage, getDetailsUrl } from "./api.js";
+import { getSessionInfo, makeApiRequest, getAuthHeader, getEmbyHeaders, fetchItemDetails,  jms, updateFavoriteStatus, goToDetailsPage, getDetailsUrl } from "/Plugins/JMSFusion/runtime/api.js";
 import { getConfig } from "./config.js";
 import { withServer } from "./jfUrl.js";
 import { getWatchlistButtonText, getWatchlistToast } from "./watchlist.js";

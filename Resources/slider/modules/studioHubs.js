@@ -1,4 +1,4 @@
-import { getSessionInfo, getEmbyHeaders, makeApiRequest, updateFavoriteStatus } from "./api.js";
+import { getSessionInfo, getEmbyHeaders, makeApiRequest, updateFavoriteStatus } from "/Plugins/JMSFusion/runtime/api.js";
 import { getConfig } from './config.js';
 import { getLanguageLabels } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";

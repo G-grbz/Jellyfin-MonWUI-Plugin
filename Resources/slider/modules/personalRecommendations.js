@@ -1,4 +1,4 @@
-import { getSessionInfo, makeApiRequest, getCachedUserTopGenres } from "./api.js";
+import { getSessionInfo, makeApiRequest, getCachedUserTopGenres } from "/Plugins/JMSFusion/runtime/api.js";
 import { getConfig } from "./config.js";
 import { getLanguageLabels, getDefaultLanguage } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";
@@ -680,10 +680,11 @@ function clearHeroHost(heroHost) {
 }
 
 function mountHero(heroHost, heroItem, serverId, heroLabel, { aboveFold=false } = {}) {
-  if (!heroHost || !heroItem?.Id) return { hero: null, changed: false };
+  const heroItemId = resolveItemId(heroItem);
+  if (!heroHost || !heroItemId) return { hero: null, changed: false };
 
   const existing = heroHost.querySelector('.dir-row-hero');
-  const same = existing && (existing.dataset.itemId === String(heroItem.Id));
+  const same = existing && (existing.dataset.itemId === String(heroItemId));
 
   if (same) {
     const lbl = existing.querySelector('.dir-row-hero-label');
@@ -861,6 +862,58 @@ function buildPosterUrlHQ(item) {
 
 function shouldPreferTaglessImages(item) {
   return item?.__preferTaglessImages === true;
+}
+
+function sanitizeResolvedId(value) {
+  if (value == null) return null;
+  const out = String(value).trim();
+  if (!out || out === "undefined" || out === "null") return null;
+  return out;
+}
+
+function resolveItemId(item) {
+  return (
+    sanitizeResolvedId(item?.Id) ||
+    sanitizeResolvedId(item?.itemId) ||
+    sanitizeResolvedId(item?.id) ||
+    sanitizeResolvedId(item?.__posterSource?.Id) ||
+    sanitizeResolvedId(item?.__posterSource?.itemId) ||
+    sanitizeResolvedId(item?.__posterSource?.id) ||
+    sanitizeResolvedId(item?.AlbumId) ||
+    sanitizeResolvedId(item?.ParentBackdropItemId) ||
+    sanitizeResolvedId(item?.ParentId) ||
+    sanitizeResolvedId(item?.SeriesId) ||
+    null
+  );
+}
+
+function resolveItemName(item) {
+  return String(
+    item?.Name ||
+    item?.SeriesName ||
+    item?.__posterSource?.Name ||
+    item?.__posterSource?.SeriesName ||
+    ""
+  ).trim();
+}
+
+function primeItemIdentity(item) {
+  if (!item || typeof item !== "object") return { item, itemId: null, itemName: "" };
+  const itemId = resolveItemId(item);
+  const itemName = resolveItemName(item);
+  if (itemId && !sanitizeResolvedId(item?.Id)) {
+    try { item.Id = itemId; } catch {}
+  }
+  if (itemName && !item?.Name) {
+    try { item.Name = itemName; } catch {}
+  }
+  if (item?.__posterSource && typeof item.__posterSource === "object") {
+    const posterId = resolveItemId(item.__posterSource);
+    if (posterId && !sanitizeResolvedId(item.__posterSource?.Id)) {
+      try { item.__posterSource.Id = posterId; } catch {}
+    }
+  }
+  return { item, itemId, itemName };
 }
 
 function getPrimaryImageCandidate(item) {
@@ -1853,7 +1906,7 @@ async function renderBecauseYouWatchedAuto(indexPage) {
           clearHeroHost(heroHost);
         } else {
           const heroItem = seed || items[0];
-          if (heroItem?.Id) {
+          if (resolveItemId(heroItem)) {
             const heroLabel = formatBecauseYouWatchedTitle(seedName);
             const { hero: heroEl, changed } = mountHero(heroHost, heroItem, serverId, heroLabel, { aboveFold: i === 0 });
             try {
@@ -2432,9 +2485,10 @@ function promoteTaglessImageData(data) {
 }
 
 function createGenreHeroCard(item, serverId, genreName, { aboveFold = false } = {}) {
+  const { itemId, itemName } = primeItemIdentity(item);
   const hero = document.createElement('div');
   hero.className = 'dir-row-hero';
-  hero.dataset.itemId = item.Id;
+  if (itemId) hero.dataset.itemId = itemId;
 
   const bgLQ = buildBackdropUrlLQ(item) || buildPosterUrlLQ(item) || null;
   const bgHQ = buildBackdropUrlHQ(item) || buildPosterUrlHQ(item) || null;
@@ -2460,7 +2514,7 @@ function createGenreHeroCard(item, serverId, genreName, { aboveFold = false } = 
   hero.innerHTML = `
     <div class="dir-row-hero-bg-wrap">
       <img class="dir-row-hero-bg"
-           alt="${escapeHtml(item.Name)}"
+           alt="${escapeHtml(itemName)}"
            decoding="async"
            loading="${aboveFold ? 'eager' : 'lazy'}"
            ${aboveFold ? 'fetchpriority="high"' : ''}>
@@ -2476,13 +2530,13 @@ function createGenreHeroCard(item, serverId, genreName, { aboveFold = false } = 
         ${logo ? `
           <div class="dir-row-hero-logo">
             <img src="${logo}"
-                 alt="${escapeHtml(item.Name)} logo"
+                 alt="${escapeHtml(itemName)} logo"
                  decoding="async"
                  loading="lazy">
           </div>
         ` : ``}
 
-        <div class="dir-row-hero-title">${escapeHtml(item.Name)}</div>
+        <div class="dir-row-hero-title">${escapeHtml(itemName)}</div>
 
         ${metaHtml ? `<div class="dir-row-hero-submeta">${metaHtml}</div>` : ""}
 
@@ -2513,8 +2567,9 @@ function createGenreHeroCard(item, serverId, genreName, { aboveFold = false } = 
     const backdropIndex = localStorage.getItem("jms_backdrop_index") || "0";
     const originEl = hero.querySelector('.dir-row-hero-bg') || hero;
     try {
+      if (!itemId) return;
       await openDetailsModal({
-        itemId: item.Id,
+        itemId,
         serverId,
         preferBackdropIndex: backdropIndex,
         originEl,
@@ -2544,9 +2599,10 @@ function createGenreHeroCard(item, serverId, genreName, { aboveFold = false } = 
 }
 
 function createRecommendationCard(item, serverId, aboveFold = false) {
+  const { itemId, itemName } = primeItemIdentity(item);
   const card = document.createElement("div");
   card.className = "card personal-recs-card";
-  card.dataset.itemId = item.Id;
+  if (itemId) card.dataset.itemId = itemId;
   card.setAttribute('data-key', makePRCKey(item));
 
   const posterUrlHQ = buildPosterUrlHQ(item);
@@ -2564,10 +2620,10 @@ function createRecommendationCard(item, serverId, aboveFold = false) {
 
   card.innerHTML = `
     <div class="cardBox">
-      <a class="cardLink" href="${getDetailsUrl(item.Id, serverId)}">
+      <a class="cardLink" href="${itemId ? getDetailsUrl(itemId, serverId) : '#'}">
         <div class="cardImageContainer">
           <img class="cardImage"
-            alt="${escapeHtml(item.Name)}"
+            alt="${escapeHtml(itemName)}"
             loading="${aboveFold ? 'eager' : 'lazy'}"
             decoding="async"
             ${aboveFold ? 'fetchpriority="high"' : ''}>
@@ -2581,7 +2637,7 @@ function createRecommendationCard(item, serverId, aboveFold = false) {
           <div class="prc-gradient"></div>
           <div class="prc-overlay">
             <div class="prc-titleline">
-              ${escapeHtml(clampText(item.Name, 42))}
+              ${escapeHtml(clampText(itemName, 42))}
               </div>
             <div class="prc-meta">
               ${ageChip ? `<span class="prc-age">${ageChip}</span><span class="prc-dot">•</span>` : ""}
@@ -2630,11 +2686,12 @@ if (posterUrlHQ) {
     cardLink.addEventListener("click", async (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if (!itemId) return;
       const hostEl = card.querySelector(".cardImageContainer");
       const backdropIndex = localStorage.getItem("jms_backdrop_index") || "0";
       try {
         await openDetailsModal({
-          itemId: item.Id,
+          itemId,
           serverId,
           preferBackdropIndex: backdropIndex,
           originEl: hostEl?.querySelector?.("img.cardImage") || hostEl || card,
@@ -2648,7 +2705,7 @@ if (posterUrlHQ) {
 
   const mode = (getConfig()?.globalPreviewMode === 'studioMini') ? 'studioMini' : 'modal';
   const defer = window.requestIdleCallback || ((fn)=>setTimeout(fn, 0));
-  defer(() => attachPreviewByMode(card, item, mode));
+  defer(() => attachPreviewByMode(card, { ...item, Id: itemId, Name: itemName }, mode));
   card.addEventListener('jms:cleanup', () => {
     unobserveImage(img);
     detachPreviewHandlers(card);
@@ -2697,6 +2754,71 @@ export function setupScroller(row) {
   const canScroll = () => row.scrollWidth > row.clientWidth + 2;
   const STEP_PCT = 0.88;
   const stepPx   = () => Math.max(320, Math.floor(row.clientWidth * STEP_PCT));
+  const SNAP_EPSILON = 2;
+
+  const getScrollItems = () => {
+    const rowRect = row.getBoundingClientRect();
+    return Array.from(row.children || [])
+      .map((child) => {
+        if (!(child instanceof HTMLElement)) return null;
+        const anchor =
+          child.matches?.(".cardImageContainer, .dir-row-hero, .dir-row-loading, .no-recommendations")
+            ? child
+            : child.querySelector?.(".cardImageContainer, .dir-row-hero, .dir-row-loading, .no-recommendations") || child;
+        if (!(anchor instanceof HTMLElement)) return null;
+
+        const rect = anchor.getBoundingClientRect();
+        if (!(rect.width > 0)) return null;
+
+        const left = row.scrollLeft + (rect.left - rowRect.left);
+        const right = left + rect.width;
+        return { left, right };
+      })
+      .filter(Boolean);
+  };
+
+  const uniqueStops = (stops) => {
+    const sorted = (stops || [])
+      .filter((value) => Number.isFinite(value))
+      .map((value) => Math.max(0, value))
+      .sort((a, b) => a - b);
+
+    const out = [];
+    for (const stop of sorted) {
+      if (!out.length || Math.abs(out[out.length - 1] - stop) > SNAP_EPSILON) {
+        out.push(stop);
+      }
+    }
+    return out;
+  };
+
+  const pickNearestStop = (stops, desired, fallback) => {
+    let best = Number.isFinite(fallback) ? fallback : null;
+    let bestDist = Number.isFinite(best) ? Math.abs(best - desired) : Infinity;
+    for (const stop of stops || []) {
+      const dist = Math.abs(stop - desired);
+      if (dist < bestDist) {
+        best = stop;
+        bestDist = dist;
+      }
+    }
+    return best;
+  };
+
+  // Keep the last card flush with the right edge instead of exposing trailing blank space.
+  const getScrollStops = () => {
+    const max = Math.max(0, row.scrollWidth - row.clientWidth);
+    const items = getScrollItems();
+    if (!items.length) return uniqueStops([0, max]);
+
+    const last = items[items.length - 1];
+    const endStop = Math.max(0, Math.min(max, last.right - row.clientWidth));
+    const stops = [0, endStop];
+    for (const item of items) {
+      stops.push(Math.min(endStop, item.left));
+    }
+    return uniqueStops(stops);
+  };
 
   let _rafToken = null;
 
@@ -2748,14 +2870,28 @@ export function setupScroller(row) {
 
   function doScroll(dir, evt) {
     if (!canScroll()) return;
-    const fast = evt?.shiftKey ? 1.35 : 1;
-    const delta = (dir < 0 ? -1 : 1) * stepPx() * fast;
-    const max = Math.max(0, row.scrollWidth - row.clientWidth);
+    const stops = getScrollStops();
+    const max = stops.length ? stops[stops.length - 1] : Math.max(0, row.scrollWidth - row.clientWidth);
     const left = row.scrollLeft;
+    const fast = evt?.shiftKey ? 1.35 : 1;
+    const delta = stepPx() * fast;
     let target;
-    if (dir > 0 && left >= max - 1) target = 0;
-    else if (dir < 0 && left <= 1) target = max;
-    else target = Math.max(0, Math.min(max, left + delta));
+
+    if (dir > 0) {
+      if (left >= max - SNAP_EPSILON) {
+        target = 0;
+      } else {
+        const candidates = stops.filter((stop) => stop > left + SNAP_EPSILON);
+        const desired = Math.min(max, left + delta);
+        target = pickNearestStop(candidates, desired, max) ?? max;
+      }
+    } else if (left <= SNAP_EPSILON) {
+      target = max;
+    } else {
+      const candidates = stops.filter((stop) => stop < left - SNAP_EPSILON);
+      const desired = Math.max(0, left - delta);
+      target = pickNearestStop(candidates, desired, 0) ?? 0;
+    }
 
     const dist = Math.abs(target - left);
     const duration = Math.max(180, Math.min(650, Math.round(dist / 3.2)));
@@ -3377,7 +3513,8 @@ function toSlimItem(it){
 function toSlimList(list){ return (list||[]).map(toSlimItem).filter(Boolean); }
 
 function attachHoverTrailer(cardEl, itemLike) {
-  if (!cardEl || !itemLike?.Id) return;
+  const itemId = resolveItemId(itemLike) || sanitizeResolvedId(cardEl?.dataset?.itemId);
+  if (!cardEl || !itemId) return;
   if (!__enterSeq.has(cardEl)) __enterSeq.set(cardEl, 0);
 
   const onEnter = (e) => {
@@ -3403,7 +3540,7 @@ function attachHoverTrailer(cardEl, itemLike) {
       __openTokenMap.set(cardEl, token);
 
       try { hardWipeHoverModalDom(); } catch {}
-      safeOpenHoverModal(itemLike.Id, cardEl);
+      safeOpenHoverModal(itemId, cardEl);
 
       if (isTouch) {
         __touchStickyOpen = true;
@@ -3460,11 +3597,14 @@ function detachPreviewHandlers(cardEl) {
 
 function attachPreviewByMode(cardEl, itemLike, mode) {
   detachPreviewHandlers(cardEl);
+  const itemId = resolveItemId(itemLike) || sanitizeResolvedId(cardEl?.dataset?.itemId);
+  if (!itemId) return;
+  const normalizedItem = { ...(itemLike || {}), Id: itemId, Name: resolveItemName(itemLike) };
   if (mode === 'studioMini') {
-    attachMiniPosterHover(cardEl, itemLike);
+    attachMiniPosterHover(cardEl, normalizedItem);
     __boundPreview.set(cardEl, { mode: 'studioMini', onEnter: ()=>{}, onLeave: ()=>{} });
   } else {
-    attachHoverTrailer(cardEl, itemLike);
+    attachHoverTrailer(cardEl, normalizedItem);
   }
 }
 

@@ -1,4 +1,4 @@
-import { fetchItemDetailsFull, fetchItemsBulk, getEmbyHeaders, getSessionInfo, makeApiRequest, playNow, updateFavoriteStatus } from "./api.js";
+import { fetchItemDetailsFull, fetchItemsBulk, getEmbyHeaders, getSessionInfo, makeApiRequest, playNow, updateFavoriteStatus } from "/Plugins/JMSFusion/runtime/api.js";
 import { CollectionCacheDB } from "./collectionCacheDb.js";
 import { getConfig } from "./config.js";
 import { withServer } from "./jfUrl.js";

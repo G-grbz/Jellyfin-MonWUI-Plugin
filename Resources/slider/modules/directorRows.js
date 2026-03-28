@@ -1,4 +1,4 @@
-import { getSessionInfo, makeApiRequest, getCachedUserTopGenres } from "./api.js";
+import { getSessionInfo, makeApiRequest, getCachedUserTopGenres } from "/Plugins/JMSFusion/runtime/api.js";
 import { getConfig } from "./config.js";
 import { getLanguageLabels } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";
@@ -425,6 +425,52 @@ function pickBestItemByRating(items) {
 
 function shouldPreferTaglessImages(item) {
   return item?.__preferTaglessImages === true;
+}
+
+function sanitizeResolvedId(value) {
+  if (value == null) return null;
+  const out = String(value).trim();
+  if (!out || out === "undefined" || out === "null") return null;
+  return out;
+}
+
+function resolveItemId(item) {
+  return (
+    sanitizeResolvedId(item?.Id) ||
+    sanitizeResolvedId(item?.itemId) ||
+    sanitizeResolvedId(item?.id) ||
+    sanitizeResolvedId(item?.__posterSource?.Id) ||
+    sanitizeResolvedId(item?.__posterSource?.itemId) ||
+    sanitizeResolvedId(item?.__posterSource?.id) ||
+    sanitizeResolvedId(item?.AlbumId) ||
+    sanitizeResolvedId(item?.ParentBackdropItemId) ||
+    sanitizeResolvedId(item?.ParentId) ||
+    sanitizeResolvedId(item?.SeriesId) ||
+    null
+  );
+}
+
+function resolveItemName(item) {
+  return String(
+    item?.Name ||
+    item?.SeriesName ||
+    item?.__posterSource?.Name ||
+    item?.__posterSource?.SeriesName ||
+    ""
+  ).trim();
+}
+
+function primeItemIdentity(item) {
+  if (!item || typeof item !== "object") return { item, itemId: null, itemName: "" };
+  const itemId = resolveItemId(item);
+  const itemName = resolveItemName(item);
+  if (itemId && !sanitizeResolvedId(item?.Id)) {
+    try { item.Id = itemId; } catch {}
+  }
+  if (itemName && !item?.Name) {
+    try { item.Name = itemName; } catch {}
+  }
+  return { item, itemId, itemName };
 }
 
 function getPrimaryImageCandidate(item) {
@@ -974,9 +1020,10 @@ function getPlaybackPercent(item) {
 }
 
 function createRecommendationCard(item, serverId, aboveFold = false) {
+  const { itemId, itemName } = primeItemIdentity(item);
   const card = document.createElement("div");
   card.className = "card personal-recs-card";
-  card.dataset.itemId = item.Id;
+  if (itemId) card.dataset.itemId = itemId;
 
   const posterUrlHQ = buildPosterUrlHQ(item);
   const posterSetHQ = posterUrlHQ ? buildPosterSrcSet(item) : "";
@@ -999,10 +1046,10 @@ function createRecommendationCard(item, serverId, aboveFold = false) {
 
   card.innerHTML = `
     <div class="cardBox">
-      <a class="cardLink" href="${getDetailsUrl(item.Id, serverId)}">
+      <a class="cardLink" href="${itemId ? getDetailsUrl(itemId, serverId) : '#'}">
         <div class="cardImageContainer">
           <img class="cardImage"
-            alt="${item.Name}"
+            alt="${escapeHtml(itemName)}"
             loading="${aboveFold ? 'eager' : 'lazy'}"
             decoding="async"
             ${aboveFold ? 'fetchpriority="high"' : ''}>
@@ -1016,7 +1063,7 @@ function createRecommendationCard(item, serverId, aboveFold = false) {
           <div class="prc-gradient"></div>
           <div class="prc-overlay">
           <div class="prc-titleline">
-            ${escapeHtml(clampText(item.Name, 42))}
+            ${escapeHtml(clampText(itemName, 42))}
           </div>
             <div class="prc-meta">
               ${ageChip ? `<span class="prc-age">${ageChip}</span><span class="prc-dot">•</span>` : ""}
@@ -1067,11 +1114,12 @@ function createRecommendationCard(item, serverId, aboveFold = false) {
     cardLink.addEventListener("click", async (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if (!itemId) return;
       const hostEl = card.querySelector(".cardImageContainer");
       const backdropIndex = localStorage.getItem("jms_backdrop_index") || "0";
       try {
         await openDetailsModal({
-          itemId: item.Id,
+          itemId,
           serverId,
           preferBackdropIndex: backdropIndex,
           originEl: hostEl?.querySelector?.("img.cardImage") || hostEl || card,
@@ -1089,7 +1137,7 @@ function createRecommendationCard(item, serverId, aboveFold = false) {
 
   const cleanupLazyPreview = scheduleLazyDirectorWork(card, () => {
     if (!card.isConnected) return;
-    attachPreviewByMode(card, { Id: item.Id, Name: item.Name }, mode);
+    attachPreviewByMode(card, { ...item, Id: itemId, Name: itemName }, mode);
   }, {
     eager: aboveFold && !IS_MOBILE,
     timeout: aboveFold ? 220 : 480,
@@ -1120,9 +1168,10 @@ function scheduleDirectorRowsRetry(ms = 500) {
 }
 
 function createDirectorHeroCard(item, serverId, directorName) {
+  const { itemId, itemName } = primeItemIdentity(item);
   const hero = document.createElement('div');
   hero.className = 'dir-row-hero';
-  hero.dataset.itemId = item.Id;
+  if (itemId) hero.dataset.itemId = itemId;
 
   const bg   = buildBackdropUrlHQ(item) || buildPosterUrlHQ(item) || PLACEHOLDER_URL;
   const logo = buildLogoUrl(item);
@@ -1155,7 +1204,7 @@ function createDirectorHeroCard(item, serverId, directorName) {
 
   hero.innerHTML = `
     <div class="dir-row-hero-bg-wrap">
-      <img class="dir-row-hero-bg" alt="${escapeHtml(item.Name)}" loading="lazy" decoding="async">
+      <img class="dir-row-hero-bg" alt="${escapeHtml(itemName)}" loading="lazy" decoding="async">
     </div>
 
     <div class="dir-row-hero-inner">
@@ -1166,11 +1215,11 @@ function createDirectorHeroCard(item, serverId, directorName) {
 
         ${logo ? `
           <div class="dir-row-hero-logo">
-            <img src="${logo}" alt="${escapeHtml(item.Name)} logo">
+            <img src="${logo}" alt="${escapeHtml(itemName)} logo">
           </div>
         ` : ``}
 
-        <div class="dir-row-hero-title">${escapeHtml(item.Name)}</div>
+        <div class="dir-row-hero-title">${escapeHtml(itemName)}</div>
 
         ${metaHtml ? `<div class="dir-row-hero-submeta">${metaHtml}</div>` : ""}
 
@@ -1186,8 +1235,9 @@ function createDirectorHeroCard(item, serverId, directorName) {
     const backdropIndex = localStorage.getItem("jms_backdrop_index") || "0";
     const originEl = hero.querySelector(".dir-row-hero-bg") || hero;
     try {
+      if (!itemId) return;
       await openDetailsModal({
-        itemId: item.Id,
+        itemId,
         serverId,
         preferBackdropIndex: backdropIndex,
         originEl,
@@ -1237,9 +1287,9 @@ function createDirectorHeroCard(item, serverId, directorName) {
         slide: hero,
         backdropImg,
         extraHoverTargets: [heroInner],
-        itemId: item.Id,
+        itemId,
         serverId,
-        detailsUrl: getDetailsUrl(item.Id, serverId),
+        detailsUrl: itemId ? getDetailsUrl(itemId, serverId) : "#",
         detailsText: (config.languageLabels?.details || labels.details || "Ayrıntılar"),
         showDetailsOverlay: false,
       });
@@ -1370,7 +1420,8 @@ function safeCloseHoverModal() {
 }
 
 function attachHoverTrailer(cardEl, itemLike) {
-  if (!cardEl || !itemLike?.Id) return;
+  const itemId = resolveItemId(itemLike) || sanitizeResolvedId(cardEl?.dataset?.itemId);
+  if (!cardEl || !itemId) return;
   if (!__enterSeq.has(cardEl)) __enterSeq.set(cardEl, 0);
 
   const onEnter = (e) => {
@@ -1396,7 +1447,7 @@ function attachHoverTrailer(cardEl, itemLike) {
       __openTokenMap.set(cardEl, token);
 
       try { hardWipeHoverModalDom(); } catch {}
-      safeOpenHoverModal(itemLike.Id, cardEl);
+      safeOpenHoverModal(itemId, cardEl);
 
       if (isTouch) {
         __touchStickyOpen = true;
@@ -1449,11 +1500,14 @@ function detachPreviewHandlers(cardEl) {
 
 function attachPreviewByMode(cardEl, itemLike, mode) {
   detachPreviewHandlers(cardEl);
+  const itemId = resolveItemId(itemLike) || sanitizeResolvedId(cardEl?.dataset?.itemId);
+  if (!itemId) return;
+  const normalizedItem = { ...(itemLike || {}), Id: itemId, Name: resolveItemName(itemLike) };
   if (mode === 'studioMini') {
-    attachMiniPosterHover(cardEl, itemLike);
+    attachMiniPosterHover(cardEl, normalizedItem);
     __boundPreview.set(cardEl, { mode: 'studioMini', onEnter: ()=>{}, onLeave: ()=>{} });
   } else {
-    attachHoverTrailer(cardEl, itemLike);
+    attachHoverTrailer(cardEl, normalizedItem);
   }
 }
 

@@ -1,7 +1,32 @@
 import { getLanguageLabels, getDefaultLanguage } from '../language/index.js';
 
-let __globalOverride = null;
+let __globalOverride =
+  (typeof window !== "undefined" && window.__JMS_MANAGED_STORAGE__?.bootstrapOverride)
+    ? window.__JMS_MANAGED_STORAGE__.bootstrapOverride
+    : null;
 let __globalApplied = false;
+
+function getManagedStorageBridge() {
+  try {
+    return (typeof window !== "undefined" && window.__JMS_MANAGED_STORAGE__)
+      ? window.__JMS_MANAGED_STORAGE__
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function registerManagedStorageKeys(keys = []) {
+  try {
+    getManagedStorageBridge()?.registerKeys?.(keys);
+  } catch {}
+}
+
+function maybeBootstrapManagedStorage(snapshot) {
+  try {
+    getManagedStorageBridge()?.maybeBootstrapFromLocal?.(snapshot);
+  } catch {}
+}
 
 export function getDeviceProfileAuto() {
   try {
@@ -22,6 +47,11 @@ export function getAdminTargetProfile() {
 
 async function __fetchGlobalOverride(force = false) {
   if (!force && __globalOverride !== null) return __globalOverride;
+  const managed = getManagedStorageBridge();
+  if (!force && managed?.bootstrapOverride) {
+    __globalOverride = managed.bootstrapOverride;
+    return __globalOverride;
+  }
   try {
     const profile = getDeviceProfileAuto();
     const r = await fetch(`/Plugins/JMSFusion/UserSettings?ts=${Date.now()}&profile=${profile}`, {
@@ -235,7 +265,7 @@ export function getConfig() {
 }
 
   const defaultLanguage = getDefaultLanguage();
-  return {
+  const resolvedConfig = {
     customQueryString: localStorage.getItem('customQueryString') || 'IncludeItemTypes=Movie,Series&Recursive=true&hasOverview=true&imageTypes=Logo,Backdrop&sortBy=DateCreated&sortOrder=Descending',
     sortingKeywords: (() => {
       const raw = localStorage.getItem('sortingKeywords');
@@ -314,7 +344,7 @@ export function getConfig() {
     useRandomContent: localStorage.getItem('useRandomContent') !== 'false',
     fullscreenMode: localStorage.getItem('fullscreenMode') === 'true' ? true : false,
     listLimit: 20,
-    version: "v2.1.0",
+    version: "v2.1.1",
     historySize: 20,
     updateInterval: 300000,
     nextTracksSource: localStorage.getItem('nextTracksSource') || 'playlist',
@@ -323,7 +353,7 @@ export function getConfig() {
     sliderDuration: parseInt(localStorage.getItem('sliderDuration'), 10) || 15000,
     artistLimit: parseInt(localStorage.getItem('artistLimit'), 10) || 10,
     gecikmeSure: parseInt(localStorage.getItem('gecikmeSure'), 10) || 500,
-    limit: parseInt(localStorage.getItem('limit'), 10) || 20,
+    limit: parseInt(localStorage.getItem('limit'), 10) || 15,
     onlyUnwatchedRandom: localStorage.getItem('onlyUnwatchedRandom') === 'true',
     maxShufflingLimit: parseInt(localStorage.getItem('maxShufflingLimit'), 10) || 10000,
     excludeEpisodesFromPlaying: localStorage.getItem('excludeEpisodesFromPlaying') !== 'false',
@@ -773,6 +803,16 @@ export function getConfig() {
     })(),
     forceGlobalUserSettings: forceGlobal
   };
+
+  registerManagedStorageKeys([
+    ...Object.keys(resolvedConfig),
+    "jms:settingsTargetProfile",
+    "settings.allowedTabs.v1",
+    "lyricsMode",
+    "lyricsOverwrite"
+  ]);
+
+  return resolvedConfig;
 }
 
 function pruneGlobalConfig(cfg) {
@@ -894,9 +934,13 @@ export function buildJfUrl(pathOrUrl) {
   try {
     const data = await __fetchGlobalOverride(true);
     window.__JMS_GLOBAL_OVERRIDE__ = data;
+    maybeBootstrapManagedStorage(pruneGlobalConfig(getConfig()));
+    const managedStorageActive = !!getManagedStorageBridge();
 
     if (!data?.forceGlobal) {
-      if (_restoreBackupIfAny()) console.log("[JMSFusion] Restored user settings (global off).");
+      if (!managedStorageActive && _restoreBackupIfAny()) {
+        console.log("[JMSFusion] Restored user settings (global off).");
+      }
       return;
     }
 

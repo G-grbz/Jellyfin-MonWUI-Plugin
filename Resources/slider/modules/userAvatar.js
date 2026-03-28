@@ -1,4 +1,4 @@
-import { makeApiRequest, getSessionInfo, waitForAuthReadyStrict } from "./api.js";
+import { makeApiRequest, getSessionInfo, waitForAuthReadyStrict } from "/Plugins/JMSFusion/runtime/api.js";
 import { getServerAddress, getConfig } from "./config.js";
 import { addStyleSpecificParams } from "./dicebearSpecificParams.js";
 

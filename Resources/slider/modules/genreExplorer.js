@@ -1,4 +1,4 @@
-import { makeApiRequest, getSessionInfo, getCachedUserTopGenres } from "./api.js";
+import { makeApiRequest, getSessionInfo, getCachedUserTopGenres } from "/Plugins/JMSFusion/runtime/api.js";
 import { getConfig } from "./config.js";
 import { withServer } from "./jfUrl.js";
 import { openDetailsModal } from "./detailsModal.js";

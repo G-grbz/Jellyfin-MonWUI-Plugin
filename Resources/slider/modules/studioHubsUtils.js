@@ -1,4 +1,4 @@
-import { makeApiRequest, updateFavoriteStatus, getSessionInfo, fetchItemDetails } from "./api.js";
+import { makeApiRequest, updateFavoriteStatus, getSessionInfo, fetchItemDetails } from "/Plugins/JMSFusion/runtime/api.js";
 import { getConfig } from "./config.js";
 import { getVideoQualityText } from "./containerUtils.js";
 import { tryOpenTrailerPopover, hideTrailerPopover } from "./studioTrailerPopover.js";

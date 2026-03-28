@@ -4,7 +4,7 @@ import {
   fetchLocalTrailers,
   pickBestLocalTrailer,
   getVideoStreamUrl
-} from "./api.js";
+} from "/Plugins/JMSFusion/runtime/api.js";
 import { cleanupImageResourceRefs } from "./imageResourceCleanup.js";
 
 let __pop = null;

@@ -6,10 +6,10 @@ import {
   waitForAuthReadyStrict,
   persistAuthSnapshotFromApiClient,
   getAuthHeader,
-} from "./api.js";
+} from "/Plugins/JMSFusion/runtime/api.js";
 import { getRandomAvatarUrl } from "./avatarPicker.js";
 import { createConfiguredUserAvatar } from "./userAvatar.js";
-import { saveCredentials, saveApiKey, clearCredentials } from "../auth.js";
+import { saveCredentials, saveApiKey, clearCredentials } from "/Plugins/JMSFusion/runtime/auth.js";
 
 const OVERLAY_ID = "jfProfileChooserOverlay";
 const HEADER_BTN_ID = "jfProfileChooserBtn";

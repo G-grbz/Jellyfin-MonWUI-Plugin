@@ -1,6 +1,6 @@
 import { getConfig } from "./config.js";
 import { applyContainerStyles } from "./positionUtils.js";
-import { fetchItemDetails } from "./api.js";
+import { fetchItemDetails } from "/Plugins/JMSFusion/runtime/api.js";
 import { calculateMatchPercentage } from "./hoverTrailerModal.js";
 import { withServer } from "./jfUrl.js";
 import { getTomatoIconHtml } from "./customIcons.js";
