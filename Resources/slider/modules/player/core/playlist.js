@@ -5,7 +5,7 @@ import { shuffleArray } from "../utils/domUtils.js";
 import { showNotification } from "../ui/notification.js";
 import { updateModernTrackInfo, playTrack } from "../player/playback.js";
 import { updatePlaylistModal } from "../ui/playlistModal.js";
-import { makeApiRequest } from "../../api.js";
+import { makeApiRequest } from "/Plugins/JMSFusion/runtime/api.js";
 import { isRadioTrack } from "./radio.js";
 
 const config = getConfig();

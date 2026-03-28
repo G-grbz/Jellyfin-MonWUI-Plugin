@@ -1,6 +1,6 @@
 import { createSection, createCheckbox, createTextInput } from '../settings.js';
 import { showNotification } from "../player/ui/notification.js";
-import { getServerBase } from "../api.js";
+import { getServerBase } from "/Plugins/JMSFusion/runtime/api.js";
 
 const LS_JOB_KEY = 'jmsf_trailer_job_running';
 const TRAILER_RESOLUTION_OPTIONS = [640, 720, 1080, 1440, 2160];

@@ -19,7 +19,7 @@ import { loadCSS, isMobileDevice } from "../main.js";
 import { makeCleanupBag, addEvent, trackTimeout, trackObserver } from "../utils/cleanup.js";
 import { withServer, withParams } from "../../jfUrl.js";
 import { showRadioModal } from "./radioModal.js";
-import { updateFavoriteStatus } from "../../api.js";
+import { updateFavoriteStatus } from "/Plugins/JMSFusion/runtime/api.js";
 import { getCachedWatchlistMembership, getWatchlistButtonTitle, getWatchlistToast } from "../../watchlist.js";
 import {
   getRadioPersistenceInfo,

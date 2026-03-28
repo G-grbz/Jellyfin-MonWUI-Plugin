@@ -1,7 +1,7 @@
 import { getConfig } from "../config.js";
 import { createCheckbox, createSection, createNumberInput } from "../settings.js";
 import { applySettings } from "./applySettings.js";
-import { getEmbyHeaders, makeApiRequest } from "../api.js";
+import { getEmbyHeaders, makeApiRequest } from "/Plugins/JMSFusion/runtime/api.js";
 import { withServer } from "../jfUrl.js";
 
 const cfg = getConfig();
