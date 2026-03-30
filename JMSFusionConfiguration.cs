@@ -103,6 +103,15 @@ namespace Jellyfin.Plugin.JMSFusion
 
         [JsonPropertyName("watchlistRevision")]
         public long WatchlistRevision { get; set; } = 0;
+
+        [JsonPropertyName("studioHubVideoEntries")]
+        public List<StudioHubVideoEntry> StudioHubVideoEntries { get; set; } = new();
+
+        [JsonPropertyName("studioHubManualEntries")]
+        public List<StudioHubManualEntry> StudioHubManualEntries { get; set; } = new();
+
+        [JsonPropertyName("studioHubVisibilityEntries")]
+        public List<StudioHubVisibilityEntry> StudioHubVisibilityEntries { get; set; } = new();
     }
 
     public class SharedRadioStationEntry
@@ -164,6 +173,69 @@ namespace Jellyfin.Plugin.JMSFusion
         public string? TargetUserName { get; set; }
         public string? Note { get; set; }
         public long SharedAtUtc { get; set; }
+    }
+
+    public class StudioHubVideoEntry
+    {
+        [JsonPropertyName("name")]
+        public string Name { get; set; } = string.Empty;
+
+        [JsonPropertyName("fileName")]
+        public string FileName { get; set; } = string.Empty;
+
+        [JsonPropertyName("updatedAtUtc")]
+        public long UpdatedAtUtc { get; set; } = 0;
+
+        [JsonPropertyName("updatedBy")]
+        public string? UpdatedBy { get; set; }
+
+        [JsonPropertyName("updatedByUserId")]
+        public string? UpdatedByUserId { get; set; }
+    }
+
+    public class StudioHubManualEntry
+    {
+        [JsonPropertyName("studioId")]
+        public string StudioId { get; set; } = string.Empty;
+
+        [JsonPropertyName("name")]
+        public string Name { get; set; } = string.Empty;
+
+        [JsonPropertyName("logoFileName")]
+        public string? LogoFileName { get; set; }
+
+        [JsonPropertyName("addedAtUtc")]
+        public long AddedAtUtc { get; set; } = 0;
+
+        [JsonPropertyName("updatedAtUtc")]
+        public long UpdatedAtUtc { get; set; } = 0;
+
+        [JsonPropertyName("addedBy")]
+        public string? AddedBy { get; set; }
+
+        [JsonPropertyName("addedByUserId")]
+        public string? AddedByUserId { get; set; }
+    }
+
+    public class StudioHubVisibilityEntry
+    {
+        [JsonPropertyName("userId")]
+        public string UserId { get; set; } = string.Empty;
+
+        [JsonPropertyName("userName")]
+        public string? UserName { get; set; }
+
+        [JsonPropertyName("profile")]
+        public string Profile { get; set; } = "desktop";
+
+        [JsonPropertyName("hiddenNames")]
+        public List<string> HiddenNames { get; set; } = new();
+
+        [JsonPropertyName("orderNames")]
+        public List<string> OrderNames { get; set; } = new();
+
+        [JsonPropertyName("updatedAtUtc")]
+        public long UpdatedAtUtc { get; set; } = 0;
     }
 
     public enum OverwritePolicy

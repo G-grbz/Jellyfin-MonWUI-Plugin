@@ -19,12 +19,14 @@ namespace Jellyfin.Plugin.JMSFusion
         public override string Description => "Inject custom JS into Jellyfin UI via in-memory transformation, middleware fallback, or index.html patch.";
 
         private readonly ILogger<JMSFusionPlugin> _logger;
+        private readonly IApplicationPaths _paths;
         public static JMSFusionPlugin Instance { get; private set; } = null!;
 
         public JMSFusionPlugin(IApplicationPaths paths, IXmlSerializer xmlSerializer, ILoggerFactory loggerFactory)
             : base(paths, xmlSerializer)
         {
             _logger = loggerFactory.CreateLogger<JMSFusionPlugin>();
+            _paths = paths;
             Instance = this;
 
             ConfigurationChanged += (_, __) =>
@@ -181,6 +183,47 @@ namespace Jellyfin.Plugin.JMSFusion
                     MenuIcon = "developer_mode"
                 }
             };
+        }
+
+        public string GetStorageDirectory(params string[] segments)
+        {
+            var basePath =
+                ReadPathValue(_paths, "PluginConfigurationsPath") ??
+                ReadPathValue(_paths, "ProgramDataPath") ??
+                ReadPathValue(_paths, "DataPath") ??
+                Path.GetDirectoryName(ReadPathValue(this, "ConfigurationPath") ?? string.Empty) ??
+                AppContext.BaseDirectory;
+
+            var current = Path.Combine(basePath, "JMSFusion");
+            Directory.CreateDirectory(current);
+
+            foreach (var segment in segments ?? Array.Empty<string>())
+            {
+                var cleanSegment = string.IsNullOrWhiteSpace(segment)
+                    ? string.Empty
+                    : segment.Trim().Trim(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (string.IsNullOrWhiteSpace(cleanSegment))
+                {
+                    continue;
+                }
+
+                current = Path.Combine(current, cleanSegment);
+                Directory.CreateDirectory(current);
+            }
+
+            return current;
+        }
+
+        private static string? ReadPathValue(object? source, string propertyName)
+        {
+            try
+            {
+                return source?.GetType().GetProperty(propertyName)?.GetValue(source) as string;
+            }
+            catch
+            {
+                return null;
+            }
         }
     }
 }
