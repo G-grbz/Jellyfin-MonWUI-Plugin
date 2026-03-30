@@ -10,7 +10,7 @@
     "versions": [
       {
         "version": "2.2.0.0",
-        "changelog": "Refactored slider system with `monwui-` namespace",
+        "changelog": "Fix CSS updates and studio modal behavior",
         "targetAbi": "10.10.0.0",
         "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v2.2.0/JMSFusion-2.2.0.0-server.zip",
         "checksum": "54a751d2aa7d7ba8808d753ad4f0fb01",
