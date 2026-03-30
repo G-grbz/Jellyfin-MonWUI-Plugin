@@ -364,15 +364,15 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
     html[data-jms-notif="0"] .skinHeader .headerRight #jfNotifBtn { display:none !important; }
     .skinHeader .headerRight #jfNotifBtn { order: -9999; }
 
-    html[data-jms-home-slider-only="1"][data-jms-home-tab-active="0"] #slides-container,
-    html[data-jms-home-slider-only="1"][data-jms-home-tab-active="0"] .slide-progress-bar,
-    html[data-jms-home-slider-only="1"][data-jms-home-tab-active="0"] .slide-progress-seconds,
-    html[data-jms-home-slider-only="1"][data-jms-home-tab-active="0"] .dot-navigation-container {
+    html[data-jms-home-slider-only="1"][data-jms-home-tab-active="0"] #monwui-slides-container,
+    html[data-jms-home-slider-only="1"][data-jms-home-tab-active="0"] .monwui-slide-progress-bar,
+    html[data-jms-home-slider-only="1"][data-jms-home-tab-active="0"] .monwui-slide-progress-seconds,
+    html[data-jms-home-slider-only="1"][data-jms-home-tab-active="0"] .monwui-dot-navigation-container {
       display: none !important;
     }
     html[data-jms-home-slider-only="1"][data-jms-home-tab-active="0"] .jms-slider,
     html[data-jms-home-slider-only="1"][data-jms-home-tab-active="0"] .homeSlider,
-    html[data-jms-home-slider-only="1"][data-jms-home-tab-active="0"] #slides-container {
+    html[data-jms-home-slider-only="1"][data-jms-home-tab-active="0"] #monwui-slides-container {
       display: none !important;
     }
   `;
@@ -454,9 +454,9 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
 
   function isSliderCssActive(cfg) {
     return cfg.enableSlider !== false || matchesAny([
-      '#slides-container',
-      '.slide-progress-bar',
-      '.dot-navigation-container'
+      '#monwui-slides-container',
+      '.monwui-slide-progress-bar',
+      '.monwui-dot-navigation-container'
     ]);
   }
 
@@ -696,7 +696,7 @@ function clearCycleArm() {
 }
 
 function getPerSlideDurationMs() {
-  const pb = document.querySelector(".slide-progress-bar");
+  const pb = document.querySelector(".monwui-slide-progress-bar");
   if (pb) {
     const raw = getComputedStyle(pb).getPropertyValue("--slide-duration-ms");
     const v = parseInt(raw, 10);
@@ -800,7 +800,7 @@ function buildPeakCreationBatches(total, peakOpts = {}) {
 
 function hardProgressReset() {
   ensureProgressBarExists();
-  const pb = document.querySelector(".slide-progress-bar");
+  const pb = document.querySelector(".monwui-slide-progress-bar");
   if (!pb) return;
   console.debug("[JMS] hardProgressReset()");
   pb.style.transition = "none";
@@ -848,7 +848,7 @@ async function scheduleSliderRebuild(reason = "cycle-complete") {
     try { stopSlideTimer?.(); } catch {}
     try { hardProgressReset?.(); } catch {}
     try { fullSliderReset(); } catch {}
-    document.querySelectorAll(".dot-navigation-container").forEach(n => n.remove());
+    document.querySelectorAll(".monwui-dot-navigation-container").forEach(n => n.remove());
     await new Promise(r => setTimeout(r, 30));
     window.__initOnHomeOnce = false;
     initializeSliderOnHome();
@@ -859,7 +859,7 @@ async function scheduleSliderRebuild(reason = "cycle-complete") {
 
 function getSlidesNodeList() {
   const idxPage = document.querySelector("#indexPage:not(.hide), #homePage:not(.hide)");
-  return idxPage ? idxPage.querySelectorAll(".slide") : null;
+  return idxPage ? idxPage.querySelectorAll(".monwui-slide") : null;
 }
 function getSlideIndex(el) {
   const slides = getSlidesNodeList();
@@ -875,7 +875,7 @@ function isLastIndex(i) {
 }
 
 function getSlideDurationMs() {
-  const pb = document.querySelector(".slide-progress-bar");
+  const pb = document.querySelector(".monwui-slide-progress-bar");
   if (pb) {
     const raw = getComputedStyle(pb).getPropertyValue("--slide-duration-ms");
     const v = parseInt(raw, 10);
@@ -1236,9 +1236,9 @@ function observeDOMChanges() {
   return observer;
 }
 
-function hydrateSlideMedia(slide) {
-  if (!slide) return;
-  slide
+function hydrateSlideMedia(slideEl) {
+  if (!slideEl) return;
+  slideEl
     .querySelectorAll("img[data-src],img[data-lazy],img[data-original],img[data-image]")
     .forEach((img) => {
       const src =
@@ -1254,17 +1254,17 @@ function hydrateSlideMedia(slide) {
         img.removeAttribute("data-image");
       }
     });
-  slide.querySelectorAll("[data-backdrop],[data-bg],[data-bg-src]").forEach((el) => {
+  slideEl.querySelectorAll("[data-backdrop],[data-bg],[data-bg-src]").forEach((el) => {
     const u = el.getAttribute("data-backdrop") || el.getAttribute("data-bg") || el.getAttribute("data-bg-src");
     if (u && !el.style.backgroundImage) el.style.backgroundImage = `url("${u}")`;
   });
-  slide.style.visibility = "visible";
-  slide.removeAttribute("aria-hidden");
-  slide.style.opacity = "";
-  slide.style.filter = "";
-  slide.style.display = "";
-  slide.classList.remove("lazyloaded", "lazyload");
-  slide.classList.remove("is-loading", "hidden", "hide");
+  slideEl.style.visibility = "visible";
+  slideEl.removeAttribute("aria-hidden");
+  slideEl.style.opacity = "";
+  slideEl.style.filter = "";
+  slideEl.style.display = "";
+  slideEl.classList.remove("lazyloaded", "lazyload");
+  slideEl.classList.remove("is-loading", "hidden", "hide");
 }
 
 function safeRaf(fn) {
@@ -1280,10 +1280,10 @@ function debounce(fn, wait = 150) {
 
 function upsertSlidesContainerAtTop(indexPage) {
   if (!indexPage) return null;
-  let c = indexPage.querySelector("#slides-container");
+  let c = indexPage.querySelector("#monwui-slides-container");
   if (!c) {
     c = document.createElement("div");
-    c.id = "slides-container";
+    c.id = "monwui-slides-container";
   } else {
     if (c.parentElement) c.parentElement.removeChild(c);
   }
@@ -1402,7 +1402,7 @@ function setBg(el, url) {
 
 function hydrateFirstSlide(indexPage) {
   if (!indexPage) return;
-  const firstActive = indexPage.querySelector(".slide.active") || indexPage.querySelector(".slide");
+  const firstActive = indexPage.querySelector(".monwui-slide.active") || indexPage.querySelector(".monwui-slide");
   if (!firstActive) return;
 
   firstActive.style.visibility = "visible";
@@ -1429,9 +1429,9 @@ function hydrateFirstSlide(indexPage) {
   });
 
   const bgCandidates = [
-    firstActive.querySelector(".horizontal-gradient-overlay"),
-    firstActive.querySelector(".slide-backdrop"),
-    firstActive.querySelector(".backdrop"),
+    firstActive.querySelector(".monwui-horizontal-gradient-overlay"),
+    firstActive.querySelector(".monwui-slide-backdrop"),
+    firstActive.querySelector(".monwui-backdrop"),
     firstActive.querySelector(".background"),
     firstActive,
   ].filter(Boolean);
@@ -1459,7 +1459,7 @@ function hydrateFirstSlide(indexPage) {
 
 function primeProgressBar(indexPage) {
   if (!indexPage) return;
-  const pb = indexPage.querySelector(".slide-progress-bar");
+  const pb = indexPage.querySelector(".monwui-slide-progress-bar");
   if (!pb) return;
   try {
     resetProgressBar?.();
@@ -1473,7 +1473,7 @@ function primeProgressBar(indexPage) {
 
 function ensureInitialActivation(indexPage) {
   if (!indexPage) return;
-  const slides = indexPage.querySelectorAll(".slide");
+  const slides = indexPage.querySelectorAll(".monwui-slide");
   if (!slides.length) return;
   const cur = getCurrentIndex();
   const idx = Number.isFinite(cur) && cur >= 0 ? cur : 0;
@@ -1482,7 +1482,7 @@ function ensureInitialActivation(indexPage) {
 }
 
 function triggerSlideEnterHooks(indexPage) {
-  const active = indexPage.querySelector(".slide.active") || indexPage.querySelector(".slide");
+  const active = indexPage.querySelector(".monwui-slide.active") || indexPage.querySelector(".monwui-slide");
   if (!active) return;
   try {
     active.dispatchEvent(new CustomEvent("jms:slide-enter", { bubbles: true }));
@@ -1496,12 +1496,12 @@ function repairVisibleSliderLayout({ forcePrime = false } = {}) {
     document.querySelector("#homePage:not(.hide)");
   if (!indexPage) return;
 
-  const slides = Array.from(indexPage.querySelectorAll(".slide"));
+  const slides = Array.from(indexPage.querySelectorAll(".monwui-slide"));
   if (!slides.length) return;
 
   const cfg = (typeof getConfig === "function" ? getConfig() : config) || {};
   const isPeak = !!cfg.peakSlider;
-  const slidesContainer = indexPage.querySelector("#slides-container");
+  const slidesContainer = indexPage.querySelector("#monwui-slides-container");
   const safeIndex = Math.min(
     Math.max(Number(getCurrentIndex()) || 0, 0),
     Math.max(0, slides.length - 1)
@@ -1524,30 +1524,30 @@ function repairVisibleSliderLayout({ forcePrime = false } = {}) {
     }
   }
 
-  slides.forEach((slide, index) => {
-    try { hardCleanupSlide(slide); } catch {}
-    slide.classList.remove("peak-batch-pending", "peak-snap-in");
-    slide.style.removeProperty("left");
-    slide.style.removeProperty("top");
+  slides.forEach((slideEl, index) => {
+    try { hardCleanupSlide(slideEl); } catch {}
+    slideEl.classList.remove("peak-batch-pending", "peak-snap-in");
+    slideEl.style.removeProperty("left");
+    slideEl.style.removeProperty("top");
 
     const active = index === safeIndex;
-    slide.classList.toggle("active", active);
+    slideEl.classList.toggle("active", active);
 
     if (isPeak) {
-      slide.classList.remove("is-hidden");
-      slide.style.removeProperty("display");
-      slide.style.removeProperty("opacity");
+      slideEl.classList.remove("is-hidden");
+      slideEl.style.removeProperty("display");
+      slideEl.style.removeProperty("opacity");
       return;
     }
 
-    slide.classList.toggle("is-visible", active);
-    slide.classList.toggle("is-hidden", !active);
+    slideEl.classList.toggle("is-visible", active);
+    slideEl.classList.toggle("is-hidden", !active);
     if (active) {
-      slide.style.removeProperty("display");
-      slide.style.removeProperty("opacity");
+      slideEl.style.removeProperty("display");
+      slideEl.style.removeProperty("opacity");
     } else {
-      slide.style.opacity = "0";
-      slide.style.display = "none";
+      slideEl.style.opacity = "0";
+      slideEl.style.display = "none";
     }
   });
 
@@ -1596,17 +1596,17 @@ function shouldRepairVisibleSliderOnRestore({ forcePrime = false } = {}) {
     document.querySelector("#homePage:not(.hide)");
   if (!indexPage) return false;
 
-  const slidesContainer = indexPage.querySelector("#slides-container");
+  const slidesContainer = indexPage.querySelector("#monwui-slides-container");
   if (!slidesContainer || !isVisible(slidesContainer)) return false;
 
-  const slides = Array.from(indexPage.querySelectorAll(".slide"));
+  const slides = Array.from(indexPage.querySelectorAll(".monwui-slide"));
   if (!slides.length) return false;
 
   const safeIndex = Math.min(
     Math.max(Number(getCurrentIndex()) || 0, 0),
     Math.max(0, slides.length - 1)
   );
-  const activeSlide = slides[safeIndex] || slides.find((slide) => slide.classList.contains("active")) || slides[0];
+  const activeSlide = slides[safeIndex] || slides.find((slideEl) => slideEl.classList.contains("active")) || slides[0];
   if (!activeSlide) return true;
   if (!activeSlide.classList.contains("active")) return true;
 
@@ -1632,7 +1632,7 @@ function scheduleVisibleSliderRestoreRepair(options = {}) {
 
 function startTimerAndRevealPB(indexPage) {
   if (!indexPage) return;
-  const pb = indexPage.querySelector(".slide-progress-bar");
+  const pb = indexPage.querySelector(".monwui-slide-progress-bar");
   startSlideTimer();
   safeRaf(() => {
     if (pb) pb.style.opacity = "1";
@@ -1653,7 +1653,7 @@ function restartSlideTimerDeterministic() {
 }
 
 function watchActiveSlideChanges() {
-  let lastActive = document.querySelector("#indexPage:not(.hide) .slide.active, #homePage:not(.hide) .slide.active");
+  let lastActive = document.querySelector("#indexPage:not(.hide) .monwui-slide.active, #homePage:not(.hide) .monwui-slide.active");
   let resetRafA = 0;
   let resetRafB = 0;
 
@@ -1678,10 +1678,10 @@ function watchActiveSlideChanges() {
   };
 
   const handleChange = (ev) => {
-    const eventSlide = ev?.target?.closest?.('.slide');
+    const eventSlide = ev?.target?.closest?.('.monwui-slide');
     const cur = eventSlide?.classList?.contains('active')
       ? eventSlide
-      : document.querySelector("#indexPage:not(.hide) .slide.active, #homePage:not(.hide) .slide.active");
+      : document.querySelector("#indexPage:not(.hide) .monwui-slide.active, #homePage:not(.hide) .monwui-slide.active");
     if (!cur || cur === lastActive) return;
     lastActive = cur;
     hardResetNextFrame();
@@ -1702,8 +1702,8 @@ function warmUpcomingBackdrops(count = 3) {
       document.querySelector("#homePage:not(.hide)");
     if (!indexPage) return;
 
-    const slides = [...indexPage.querySelectorAll(".slide")];
-    const active = indexPage.querySelector(".slide.active") || slides[0];
+    const slides = [...indexPage.querySelectorAll(".monwui-slide")];
+    const active = indexPage.querySelector(".monwui-slide.active") || slides[0];
     const i = slides.indexOf(active);
     for (let k = 1; k <= count; k++) {
       const s = slides[i + k];
@@ -2188,9 +2188,9 @@ export async function slidesInit() {
   window.__slidesCreated = 0;
 
     const peakBatches = config.peakSlider ? buildPeakCreationBatches(items.length, getPeakDisplayOptions()) : [];
-    const markSlideReadyWhenVisualSyncOpens = (slide) => {
-      if (typeof slide?.__waitForBackdropReady === "function") {
-        slide.__waitForBackdropReady({
+    const markSlideReadyWhenVisualSyncOpens = (slideEl) => {
+      if (typeof slideEl?.__waitForBackdropReady === "function") {
+        slideEl.__waitForBackdropReady({
           timeoutMs: config.peakSlider ? 2200 : 1400
         }).finally(() => {
           markFirstSlideReady();
@@ -2202,13 +2202,13 @@ export async function slidesInit() {
     const createItemAt = async (itemIndex, options = {}) => {
       const item = items[itemIndex];
       if (!item) return;
-      const slide = await createSlide(item, { insertAt: itemIndex, ...options });
+      const slideEl = await createSlide(item, { insertAt: itemIndex, ...options });
       if (itemIndex === 0) {
-        markSlideReadyWhenVisualSyncOpens(slide);
+        markSlideReadyWhenVisualSyncOpens(slideEl);
       }
       try { annotateDomWithQualityHints(document); } catch {}
       markSlideCreated();
-      return slide;
+      return slideEl;
     };
 
     if (config.peakSlider) {
@@ -2246,25 +2246,25 @@ export async function slidesInit() {
           try {
             const createdSlides = [];
             for (const itemIndex of batch) {
-              const slide = await createItemAt(itemIndex, {
+              const slideEl = await createItemAt(itemIndex, {
                 suppressInitialDisplay: true,
                 deferPeakReveal: config.peakSlider
               });
-              if (slide) createdSlides.push(slide);
+              if (slideEl) createdSlides.push(slideEl);
             }
             if (config.peakSlider) {
               const idxPage = document.querySelector('#indexPage:not(.hide), #homePage:not(.hide)');
               if (idxPage) syncPeakStructureNow(idxPage);
               const releasePending = () => {
-                createdSlides.forEach((slide) => {
-                  if (typeof slide?.__releasePeakReveal === "function") {
-                    slide.__releasePeakReveal();
+                createdSlides.forEach((slideEl) => {
+                  if (typeof slideEl?.__releasePeakReveal === "function") {
+                    slideEl.__releasePeakReveal();
                     return;
                   }
-                  slide?.classList?.remove('peak-batch-pending');
+                  slideEl?.classList?.remove('peak-batch-pending');
                 });
               };
-              const container = idxPage?.querySelector?.('#slides-container');
+              const container = idxPage?.querySelector?.('#monwui-slides-container');
               if (container?.classList?.contains('peak-ready')) {
                 requestAnimationFrame(releasePending);
               } else {
@@ -2306,8 +2306,8 @@ function initializeSlider() {
     hydrateFirstSlide(indexPage);
     initSwipeEvents();
     if (config.peakSlider) {
-      const sc = indexPage.querySelector('#slides-container');
-      const slides = indexPage.querySelectorAll('.slide');
+      const sc = indexPage.querySelector('#monwui-slides-container');
+      const slides = indexPage.querySelectorAll('.monwui-slide');
       if (sc && slides.length) {
         sc.classList.add('peak-mode');
         primePeakFirstPaint(slides, getCurrentIndex(), sc, getPeakDisplayOptions());
@@ -2320,12 +2320,12 @@ function initializeSlider() {
       updateSlidePosition();
     } catch {}
 
-    const slides = indexPage.querySelectorAll(".slide");
-    const slidesContainer = indexPage.querySelector("#slides-container");
+    const slides = indexPage.querySelectorAll(".monwui-slide");
+    const slidesContainer = indexPage.querySelector("#monwui-slides-container");
     let focusedSlide = null;
     let keyboardActive = false;
 
-    const pb = indexPage.querySelector(".slide-progress-bar");
+    const pb = indexPage.querySelector(".monwui-slide-progress-bar");
     if (pb) {
       pb.style.opacity = "0";
       pb.style.width = "0%";
@@ -2341,7 +2341,7 @@ function queueHardResetNextFrame() {
 
 function startWhenAllReady() {
   try {
-    const oldDots = document.querySelector(".dot-navigation-container");
+    const oldDots = document.querySelector(".monwui-dot-navigation-container");
     if (oldDots) oldDots.remove();
     createDotNavigation();
   } catch {}
@@ -2360,8 +2360,8 @@ function startWhenAllReady() {
     try {
       window.__peakBooting = false;
       if (config.peakSlider) {
-        const sc = indexPage.querySelector('#slides-container');
-        const slides = indexPage.querySelectorAll('.slide');
+        const sc = indexPage.querySelector('#monwui-slides-container');
+        const slides = indexPage.querySelectorAll('.monwui-slide');
         if (sc && slides.length) {
           sc.classList.add('peak-ready');
           sc.classList.remove('peak-init');
@@ -2382,23 +2382,23 @@ if (window.__totalSlidesPlanned > 0 && window.__slidesCreated >= window.__totalS
   document.addEventListener("jms:all-slides-ready", startWhenAllReady, { once: true });
 }
     attachMouseEvents();
-    const firstImg = indexPage.querySelector(".slide.active img");
+    const firstImg = indexPage.querySelector(".monwui-slide.active img");
     if (firstImg && !firstImg.complete && firstImg.decode) {
       firstImg.decode().catch(() => {}).finally(() => {});
     }
-    slides.forEach((slide) => {
-      slide.addEventListener(
+    slides.forEach((slideEl) => {
+      slideEl.addEventListener(
         "focus",
         () => {
-          focusedSlide = slide;
+          focusedSlide = slideEl;
           slidesContainer?.classList.remove("disable-interaction");
         },
         true
       );
-      slide.addEventListener(
+      slideEl.addEventListener(
         "blur",
         () => {
-          if (focusedSlide === slide) focusedSlide = null;
+          if (focusedSlide === slideEl) focusedSlide = null;
         },
         true
       );
@@ -2417,7 +2417,7 @@ if (window.__totalSlidesPlanned > 0 && window.__slidesCreated >= window.__totalS
         const itemId = focusedSlide.dataset.itemId;
         if (!itemId) return;
         const preferBackdropIndex = localStorage.getItem("jms_backdrop_index") || "0";
-        const originEl = focusedSlide.__backdropImg || focusedSlide.querySelector?.(".backdrop") || focusedSlide;
+        const originEl = focusedSlide.__backdropImg || focusedSlide.querySelector?.(".monwui-backdrop") || focusedSlide;
         try {
           await openDetailsModal({
             itemId,
@@ -2432,13 +2432,13 @@ if (window.__totalSlidesPlanned > 0 && window.__slidesCreated >= window.__totalS
     });
 
     indexPage.addEventListener("focusin", (e) => {
-      if (e.target.closest("#slides-container")) {
+      if (e.target.closest("#monwui-slides-container")) {
         keyboardActive = true;
         slidesContainer?.classList.remove("disable-interaction");
       }
     });
     indexPage.addEventListener("focusout", (e) => {
-      if (!e.target.closest("#slides-container")) {
+      if (!e.target.closest("#monwui-slides-container")) {
         keyboardActive = false;
         slidesContainer?.classList.add("disable-interaction");
       }
@@ -2449,7 +2449,7 @@ if (window.__totalSlidesPlanned > 0 && window.__slidesCreated >= window.__totalS
     window.__cleanupActiveWatch = watchActiveSlideChanges();
     document.addEventListener("jms:per-slide-complete", (ev) => {
   try {
-    const active = document.querySelector("#indexPage:not(.hide) .slide.active, #homePage:not(.hide) .slide.active");
+    const active = document.querySelector("#indexPage:not(.hide) .monwui-slide.active, #homePage:not(.hide) .monwui-slide.active");
     const idx = getSlideIndex(active);
 
     if (window.__cycleExpired && isPlannedLastIndex(idx)) {
@@ -2558,7 +2558,7 @@ function initializeSliderOnHome() {
     return;
   }
 
-  const hasContainer = !!document.querySelector('#indexPage:not(.hide) #slides-container, #homePage:not(.hide) #slides-container');
+  const hasContainer = !!document.querySelector('#indexPage:not(.hide) #monwui-slides-container, #homePage:not(.hide) #monwui-slides-container');
   const willEarlyReturn = (window.__initOnHomeOnce && hasContainer);
 
   function bootPersonalRecsWires() {
@@ -2620,7 +2620,7 @@ function initializeSliderOnHome() {
   fullSliderReset();
   bootPersonalRecsWires();
   upsertSlidesContainerAtTop(indexPage);
-  const sc = indexPage.querySelector('#slides-container');
+  const sc = indexPage.querySelector('#monwui-slides-container');
   if (config.peakSlider && sc) {
     sc.scrollLeft = 0;
     sc.classList.remove('peak-ready');
@@ -2633,7 +2633,7 @@ function initializeSliderOnHome() {
     updateSlidePosition();
   } catch {}
   ensureProgressBarExists();
-  const pb = document.querySelector(".slide-progress-bar");
+  const pb = document.querySelector(".monwui-slide-progress-bar");
   if (pb) {
     pb.style.opacity = "0";
     pb.style.width = "0%";
@@ -2671,7 +2671,7 @@ function cleanupSlider() {
     document.querySelector("#homePage:not(.hide)");
 
   if (host) {
-    const sliderContainer = host.querySelector("#slides-container");
+    const sliderContainer = host.querySelector("#monwui-slides-container");
     if (sliderContainer) {
       try {
         sliderContainer.scrollLeft = 0;
