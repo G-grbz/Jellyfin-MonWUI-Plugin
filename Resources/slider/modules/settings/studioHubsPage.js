@@ -1,10 +1,22 @@
-import { getConfig } from "../config.js";
+import { getAdminTargetProfile, getDeviceProfileAuto } from "../config.js";
+import { getGlobalTmdbApiKey } from "../jmsPluginConfig.js";
 import { createCheckbox, createSection, createNumberInput } from "../settings.js";
 import { applySettings } from "./applySettings.js";
-import { getEmbyHeaders, makeApiRequest } from "/Plugins/JMSFusion/runtime/api.js";
-import { withServer } from "../jfUrl.js";
-
-const cfg = getConfig();
+import { fetchItemDetails, makeApiRequest } from "/Plugins/JMSFusion/runtime/api.js";
+import {
+  buildStudioHubLogoUrl,
+  createStudioHubManualEntry,
+  deleteStudioHubLogo,
+  deleteStudioHubManualEntry,
+  deleteStudioHubVideo,
+  fetchStudioHubManualEntries,
+  fetchStudioHubVisibility,
+  fetchStudioHubVideoEntries,
+  findStudioHubManualEntry,
+  findStudioHubVideoEntry,
+  uploadStudioHubLogo,
+  uploadStudioHubVideo
+} from "../studioHubsShared.js";
 
 const DEFAULT_ORDER = [
   "Marvel Studios","Pixar","Walt Disney Pictures","Disney+","DC",
@@ -30,6 +42,9 @@ const JUNK_WORDS = [
   "ltd","ltd.","llc","inc","inc.","company","co.","corp","corp.","the",
   "pictures","studios","animation","film","films","pictures.","studios."
 ];
+const TMDB_API_BASE = "https://api.themoviedb.org/3";
+const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/original";
+const TMDB_FILTERED_LOGO_BASE = "https://media.themoviedb.org/t/p/h100_filter(negate,000,666)";
 
 const nbase = s =>
   (s || "")
@@ -78,6 +93,30 @@ function mergeOrder(defaults, custom) {
   return out;
 }
 
+function nameKey(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function dedupeNames(items) {
+  const out = [];
+  const seen = new Set();
+  for (const item of items || []) {
+    const clean = String(item || "").trim();
+    if (!clean) continue;
+    const key = nameKey(clean);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(clean);
+  }
+  return out;
+}
+
+const DEFAULT_NAME_KEYS = new Set(DEFAULT_ORDER.map(nameKey));
+
+function isDefaultStudioHub(name) {
+  return DEFAULT_NAME_KEYS.has(nameKey(name));
+}
+
 function createHiddenInput(id, value) {
   const inp = document.createElement("input");
   inp.type = "hidden";
@@ -87,7 +126,257 @@ function createHiddenInput(id, value) {
   return inp;
 }
 
-function createDraggableList(id, items, labels) {
+function ensureStudioHubsSpinnerStyles() {
+  if (document.getElementById("jms-studio-hubs-spinner-style")) return;
+  const style = document.createElement("style");
+  style.id = "jms-studio-hubs-spinner-style";
+  style.textContent = `
+    @keyframes jmsStudioHubsSpin {
+      to { transform: rotate(360deg); }
+    }
+    .dnd-name {
+     text-decoration-color: var(--accent, #ff6b6b);
+   }
+  `;
+  document.head.appendChild(style);
+}
+
+function setButtonBusy(button, textEl, spinnerEl, busy, options = {}) {
+  if (!button) return;
+  const idleText = options.idleText;
+  const busyText = options.busyText;
+  button.disabled = !!busy;
+  if (textEl) {
+    const nextText = busy ? busyText : idleText;
+    if (nextText != null) textEl.textContent = nextText;
+  }
+  if (spinnerEl) spinnerEl.style.display = busy ? "inline-block" : "none";
+}
+
+function buildTmdbStudioQueries(studioName) {
+  const cleanName = String(studioName || "").trim();
+  if (!cleanName) return [];
+
+  const canonical = toCanonicalStudioName(cleanName);
+  const aliases = canonical ? (ALIASES[canonical] || []) : [];
+  return dedupeNames([cleanName, canonical, ...aliases]);
+}
+
+function scoreTmdbCompanyCandidate(candidate, studioName) {
+  const targetName = String(studioName || "").trim();
+  const candidateName = String(candidate?.name || candidate?.Name || "").trim();
+  if (!targetName || !candidateName) return Number.NEGATIVE_INFINITY;
+
+  const targetCanonical = toCanonicalStudioName(targetName) || targetName;
+  const candidateCanonical = toCanonicalStudioName(candidateName) || candidateName;
+  const targetNorm = nbase(targetName);
+  const candidateNorm = nbase(candidateName);
+  const targetStripped = strip(targetName);
+  const candidateStripped = strip(candidateName);
+  const targetTokens = new Set(toks(targetName));
+  const candidateTokens = new Set(toks(candidateName));
+
+  let score = 0;
+  if (nameKey(targetCanonical) === nameKey(candidateCanonical)) score += 8;
+  if (candidateStripped && targetStripped && candidateStripped === targetStripped) score += 7;
+  if (candidateNorm && targetNorm && candidateNorm === targetNorm) score += 5;
+  if (
+    candidateStripped &&
+    targetStripped &&
+    candidateStripped !== targetStripped &&
+    (candidateStripped.includes(targetStripped) || targetStripped.includes(candidateStripped))
+  ) {
+    score += 3;
+  }
+
+  let overlap = 0;
+  targetTokens.forEach(token => {
+    if (candidateTokens.has(token)) overlap += 1;
+  });
+  score += overlap * 0.6;
+  if (candidate?.logo_path) score += 1.25;
+  score += Math.min(Math.max(Number(candidate?.popularity || 0), 0), 40) / 100;
+  return score;
+}
+
+function guessTmdbLogoExtension(path, mimeType) {
+  const extMatch = String(path || "").match(/\.([a-z0-9]+)(?:$|\?)/i);
+  const ext = String(extMatch?.[1] || "").toLowerCase();
+  if (["png", "svg", "webp", "jpg", "jpeg"].includes(ext)) {
+    return ext === "jpeg" ? "jpg" : ext;
+  }
+
+  const type = String(mimeType || "").toLowerCase();
+  if (type.includes("svg")) return "svg";
+  if (type.includes("webp")) return "webp";
+  if (type.includes("jpeg")) return "jpg";
+  return "png";
+}
+
+async function fetchTmdbCompanyResults(studioName) {
+  const apiKey = await getGlobalTmdbApiKey().catch(() => "");
+  if (!apiKey) return [];
+
+  const queries = buildTmdbStudioQueries(studioName);
+  const allResults = [];
+  const seenIds = new Set();
+
+  for (const query of queries) {
+    const url = new URL(`${TMDB_API_BASE}/search/company`);
+    url.searchParams.set("api_key", apiKey);
+    url.searchParams.set("query", query);
+    url.searchParams.set("page", "1");
+
+    const res = await fetch(url.toString(), { method: "GET", cache: "no-store" });
+    if (!res.ok) continue;
+
+    const data = await res.json().catch(() => ({}));
+    const results = Array.isArray(data?.results) ? data.results : [];
+    results.forEach(result => {
+      const id = String(result?.id || "").trim();
+      if (id && seenIds.has(id)) return;
+      if (id) seenIds.add(id);
+      allResults.push(result);
+    });
+  }
+
+  return allResults;
+}
+
+async function resolveTmdbLogoFileForStudio(studioName) {
+  const results = await fetchTmdbCompanyResults(studioName);
+  if (!results.length) return null;
+
+  const best = results
+    .map(result => ({ result, score: scoreTmdbCompanyCandidate(result, studioName) }))
+    .sort((a, b) => b.score - a.score)[0];
+
+  const candidate = best?.result || null;
+  const minAcceptableScore = 4;
+  const logoPath = String(candidate?.logo_path || "").trim();
+  if (!candidate || best.score < minAcceptableScore || !logoPath) return null;
+
+  const logoUrls = logoPath.startsWith("http")
+    ? [logoPath]
+    : [`${TMDB_FILTERED_LOGO_BASE}${logoPath}`, `${TMDB_IMAGE_BASE}${logoPath}`];
+
+  let blob = null;
+  for (const logoUrl of logoUrls) {
+    const res = await fetch(logoUrl, { method: "GET", cache: "no-store" }).catch(() => null);
+    if (!res?.ok) continue;
+    const nextBlob = await res.blob().catch(() => null);
+    if (nextBlob?.size) {
+      blob = nextBlob;
+      break;
+    }
+  }
+  if (!blob?.size) return null;
+
+  const ext = guessTmdbLogoExtension(logoPath, blob.type);
+  const fileName = `tmdb-studio-${String(candidate?.id || "logo").trim() || "logo"}.${ext}`;
+
+  try {
+    return new File([blob], fileName, { type: blob.type || undefined });
+  } catch {
+    return null;
+  }
+}
+
+function refreshStudioHubHiddenInputs(list, orderInput, hiddenInput) {
+  const names = [...list.querySelectorAll(".dnd-item")].map(li => li.dataset.name).filter(Boolean);
+  const hiddenNames = [...list.querySelectorAll('.dnd-item[data-hidden="1"]')].map(li => li.dataset.name).filter(Boolean);
+  orderInput.value = JSON.stringify(dedupeNames(names));
+  hiddenInput.value = JSON.stringify(dedupeNames(hiddenNames));
+}
+
+function applyDnDItemState(li, labels, state = {}) {
+  if (!li) return;
+  const sharedVideos = Array.isArray(state.sharedVideos) ? state.sharedVideos : [];
+  const manualEntries = Array.isArray(state.manualEntries) ? state.manualEntries : [];
+  const visibilityDisabled = state.visibilityDisabled === true;
+
+  const hidden = li.dataset.hidden === "1";
+  li.style.opacity = hidden ? "0.58" : "1";
+  li.style.filter = hidden ? "saturate(0.65)" : "";
+
+  const txt = li.querySelector(".dnd-name");
+  if (txt) {
+    if (hidden) {
+      txt.style.textDecoration = "line-through";
+      txt.style.textDecorationColor = "var(--accent-color, #ff6b6b)";
+    } else {
+      txt.style.textDecoration = "none";
+    }
+  }
+
+  const toggleBtn = li.querySelector(".dnd-btn-visibility");
+  if (toggleBtn) {
+    const showText = labels?.showCollection || "Göster";
+    const hideText = labels?.hideCollection || "Gizle";
+    toggleBtn.textContent = hidden ? showText : hideText;
+    toggleBtn.disabled = visibilityDisabled;
+    toggleBtn.title = visibilityDisabled
+      ? (labels?.showCollectionLockedHint || "Bu ayar global modda sadece admin tarafından değiştirilebilir")
+      : (hidden ? (labels?.showCollectionHint || "Koleksiyonu göster") : (labels?.hideCollectionHint || "Koleksiyonu gizle"));
+    toggleBtn.style.opacity = visibilityDisabled ? "0.55" : "";
+    toggleBtn.style.cursor = visibilityDisabled ? "not-allowed" : "";
+  }
+
+  const manualBadge = li.querySelector(".dnd-manual-badge");
+  if (manualBadge) {
+    manualBadge.style.display = li.dataset.manual === "1" ? "" : "none";
+  }
+
+  const removeBtn = li.querySelector(".dnd-btn-remove");
+  if (removeBtn) {
+    removeBtn.style.display = li.dataset.manual === "1" ? "" : "none";
+  }
+
+  const videoBadge = li.querySelector(".dnd-video-badge");
+  const hasSharedVideo = !!findStudioHubVideoEntry(sharedVideos, li.dataset.name);
+  const manualEntry = findStudioHubManualEntry(manualEntries, li.dataset.studioId || li.dataset.name);
+  const hasCustomLogo = !!buildStudioHubLogoUrl(manualEntry);
+  if (videoBadge) {
+    videoBadge.textContent = hasSharedVideo ? (labels?.hoverVideoAvailable || "Video") : "";
+    videoBadge.style.color = "var(--accent, #10b981)";
+    videoBadge.style.display = hasSharedVideo ? "" : "none";
+  }
+
+  const deleteVideoBtn = li.querySelector(".dnd-btn-delete-video");
+  if (deleteVideoBtn) {
+    deleteVideoBtn.disabled = !hasSharedVideo;
+    deleteVideoBtn.style.display = hasSharedVideo ? "" : "none";
+    deleteVideoBtn.title = labels?.deleteHoverVideo || "Yüklü videoyu sil";
+  }
+
+  const logoBadge = li.querySelector(".dnd-logo-badge");
+  if (logoBadge) {
+    logoBadge.textContent = hasCustomLogo ? (labels?.logoAvailable || "Logo") : "";
+    logoBadge.style.color = "var(--accent, #10b981)";
+    logoBadge.style.display = hasCustomLogo ? "" : "none";
+  }
+
+  const deleteLogoBtn = li.querySelector(".dnd-btn-delete-logo");
+  if (deleteLogoBtn) {
+    deleteLogoBtn.disabled = !hasCustomLogo;
+    deleteLogoBtn.style.display = (li.dataset.manual === "1" && hasCustomLogo) ? "" : "none";
+    deleteLogoBtn.title = labels?.deleteLogo || "Yüklü logoyu sil";
+  }
+
+  const uploadLogoBtn = li.querySelector(".dnd-btn-upload-logo");
+  if (uploadLogoBtn) {
+    uploadLogoBtn.style.display = li.dataset.manual === "1" ? "" : "none";
+  }
+}
+
+function createDraggableList(id, items, labels, options = {}) {
+  const enableStudioControls = options.enableStudioControls === true;
+  const hiddenNames = new Set((options.hiddenNames || []).map(nameKey));
+  const sharedVideos = Array.isArray(options.sharedVideos) ? options.sharedVideos : [];
+  const manualEntries = Array.isArray(options.manualEntries) ? options.manualEntries : [];
+  const isAdmin = options.isAdmin === true;
+  const visibilityDisabled = options.visibilityDisabled === true;
+
   const wrap = document.createElement("div");
   wrap.className = "setting-input setting-dnd";
 
@@ -107,8 +396,17 @@ function createDraggableList(id, items, labels) {
   list.style.maxHeight = "320px";
   list.style.overflow = "auto";
 
-  items.forEach(name => {
-    list.appendChild(createDnDItem(name, labels));
+  dedupeNames(items).forEach(name => {
+    list.appendChild(createDnDItem(name, labels, {
+      enableStudioControls,
+      hidden: hiddenNames.has(nameKey(name)),
+      isManual: !!findStudioHubManualEntry(manualEntries, name),
+      studioId: String(findStudioHubManualEntry(manualEntries, name)?.studioId || findStudioHubManualEntry(manualEntries, name)?.StudioId || "").trim(),
+      isAdmin,
+      visibilityDisabled,
+      manualEntries,
+      sharedVideos
+    }));
   });
 
   let dragEl = null;
@@ -160,15 +458,72 @@ function createDraggableList(id, items, labels) {
   return { wrap: wrapAll, list };
 }
 
-function createDnDItem(name, labels) {
+function createDnDItem(name, labels, options = {}) {
+  if (!options.enableStudioControls) {
+    const li = document.createElement("li");
+    li.className = "dnd-item";
+    li.draggable = true;
+    li.dataset.name = name;
+    li.style.display = "flex";
+    li.style.alignItems = "center";
+    li.style.gap = "8px";
+    li.style.padding = "8px 10px";
+    li.style.borderBottom = "1px solid #0002";
+    li.style.background = "var(--theme-background, rgba(255,255,255,0.02))";
+
+    const handle = document.createElement("span");
+    handle.className = "dnd-handle";
+    handle.textContent = "↕";
+    handle.title = labels?.dragToReorder || "Sürükle-bırak";
+    handle.style.cursor = "grab";
+    handle.style.userSelect = "none";
+    handle.style.fontWeight = "700";
+
+    const txt = document.createElement("span");
+    txt.textContent = name;
+    txt.style.flex = "1";
+    txt.style.textDecorationColor = "var(--accent-color, #ff6b6b)";
+
+    const btns = document.createElement("div");
+    btns.style.display = "flex";
+    btns.style.gap = "6px";
+
+    const up = document.createElement("button");
+    up.type = "button";
+    up.className = "dnd-btn-up";
+    up.textContent = "↑";
+    up.title = labels?.moveUp || "Yukarı taşı";
+    up.style.minWidth = "28px";
+
+    const down = document.createElement("button");
+    down.type = "button";
+    down.className = "dnd-btn-down";
+    down.textContent = "↓";
+    down.title = labels?.moveDown || "Aşağı taşı";
+    down.style.minWidth = "28px";
+
+    btns.appendChild(up);
+    btns.appendChild(down);
+
+    li.appendChild(handle);
+    li.appendChild(txt);
+    li.appendChild(btns);
+    return li;
+  }
+
   const li = document.createElement("li");
   li.className = "dnd-item";
   li.draggable = true;
   li.dataset.name = name;
+  li.dataset.hidden = options.hidden ? "1" : "0";
+  li.dataset.manual = options.isManual ? "1" : "0";
+  li.dataset.studioId = String(options.studioId || "").trim();
+  li.dataset.visibilityDisabled = options.visibilityDisabled ? "1" : "0";
   li.style.display = "flex";
   li.style.alignItems = "center";
   li.style.gap = "8px";
   li.style.padding = "8px 10px";
+  li.style.flexWrap = "wrap";
   li.style.borderBottom = "1px solid #0002";
   li.style.background = "var(--theme-background, rgba(255,255,255,0.02))";
 
@@ -180,13 +535,88 @@ function createDnDItem(name, labels) {
   handle.style.userSelect = "none";
   handle.style.fontWeight = "700";
 
+  const content = document.createElement("div");
+  content.style.display = "flex";
+  content.style.flex = "1";
+  content.style.minWidth = "0";
+  content.style.flexDirection = "column";
+  content.style.gap = "4px";
+
   const txt = document.createElement("span");
+  txt.className = "dnd-name";
   txt.textContent = name;
   txt.style.flex = "1";
+  txt.style.fontWeight = "600";
+  txt.style.wordBreak = "break-word";
+  txt.style.textDecorationColor = "var(--accent-color, #ff6b6b)";
+
+  const meta = document.createElement("div");
+  meta.style.display = "flex";
+  meta.style.gap = "6px";
+  meta.style.flexWrap = "wrap";
+  meta.style.fontSize = "12px";
+
+  const manualBadge = document.createElement("span");
+  manualBadge.className = "dnd-manual-badge";
+  manualBadge.textContent = labels?.manualCollectionBadge || "Manuel";
+  manualBadge.style.padding = "2px 6px";
+  manualBadge.style.borderRadius = "999px";
+  manualBadge.style.background = "rgba(16,185,129,0.18)";
+
+  const videoBadge = document.createElement("span");
+  videoBadge.className = "dnd-video-badge";
+  videoBadge.style.padding = "2px 6px";
+  videoBadge.style.borderRadius = "999px";
+  videoBadge.style.background = "rgba(255,255,255,0.08)";
+
+  const logoBadge = document.createElement("span");
+  logoBadge.className = "dnd-logo-badge";
+  logoBadge.style.padding = "2px 6px";
+  logoBadge.style.borderRadius = "999px";
+  logoBadge.style.background = "rgba(255,255,255,0.08)";
+
+  meta.appendChild(manualBadge);
+  meta.appendChild(logoBadge);
+  meta.appendChild(videoBadge);
+  content.appendChild(txt);
+  content.appendChild(meta);
 
   const btns = document.createElement("div");
   btns.style.display = "flex";
   btns.style.gap = "6px";
+  btns.style.flexWrap = "wrap";
+  btns.style.justifyContent = "flex-end";
+
+  const toggleVisibility = document.createElement("button");
+  toggleVisibility.type = "button";
+  toggleVisibility.className = "dnd-btn-visibility";
+  toggleVisibility.style.minWidth = "56px";
+
+  const uploadVideo = document.createElement("button");
+  uploadVideo.type = "button";
+  uploadVideo.className = "dnd-btn-upload-video";
+  uploadVideo.textContent = labels?.uploadHoverVideo || "Video";
+  uploadVideo.title = labels?.uploadHoverVideoHint || "Hover videosu yükle";
+  uploadVideo.style.minWidth = "56px";
+
+  const uploadLogo = document.createElement("button");
+  uploadLogo.type = "button";
+  uploadLogo.className = "dnd-btn-upload-logo";
+  uploadLogo.textContent = labels?.uploadLogoShort || "Logo";
+  uploadLogo.title = labels?.uploadLogoHint || "Logo yükle";
+  uploadLogo.style.minWidth = "56px";
+
+  const deleteLogo = document.createElement("button");
+  deleteLogo.type = "button";
+  deleteLogo.className = "dnd-btn-delete-logo";
+  deleteLogo.textContent = labels?.deleteLogoShort || "Logo Sil";
+  deleteLogo.style.minWidth = "72px";
+
+  const deleteVideo = document.createElement("button");
+  deleteVideo.type = "button";
+  deleteVideo.className = "dnd-btn-delete-video";
+  deleteVideo.textContent = labels?.deleteHoverVideoShort || "Sil";
+  deleteVideo.style.minWidth = "44px";
 
   const up = document.createElement("button");
   up.type = "button";
@@ -202,16 +632,37 @@ function createDnDItem(name, labels) {
   down.title = labels?.moveDown || "Aşağı taşı";
   down.style.minWidth = "28px";
 
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "dnd-btn-remove";
+  remove.textContent = labels?.removeCollection || "Kaldır";
+  remove.title = labels?.removeCollectionHint || "Manuel koleksiyonu kaldır";
+  remove.style.minWidth = "60px";
+
+  btns.appendChild(toggleVisibility);
+  if (options.isAdmin) {
+    btns.appendChild(uploadLogo);
+    btns.appendChild(deleteLogo);
+    btns.appendChild(uploadVideo);
+    btns.appendChild(deleteVideo);
+  }
+  btns.appendChild(remove);
   btns.appendChild(up);
   btns.appendChild(down);
 
   li.appendChild(handle);
-  li.appendChild(txt);
+  li.appendChild(content);
   li.appendChild(btns);
+  applyDnDItemState(li, labels, {
+    visibilityDisabled: options.visibilityDisabled,
+    sharedVideos: options.sharedVideos,
+    manualEntries: options.manualEntries
+  });
   return li;
 }
 
 export function createStudioHubsPanel(config, labels) {
+  ensureStudioHubsSpinnerStyles();
   const panel = document.createElement('div');
   panel.id = 'studio-panel';
   panel.className = 'setting-item';
@@ -234,7 +685,7 @@ export function createStudioHubsPanel(config, labels) {
     labels?.studioHubsCardCount || 'Gösterilecek kart sayısı (Ana ekran)',
     Number.isFinite(config.studioHubsCardCount) ? config.studioHubsCardCount : 10,
     1,
-    12
+    100
   );
   section.appendChild(countWrap);
 
@@ -244,12 +695,399 @@ export function createStudioHubsPanel(config, labels) {
       ? config.studioHubsOrder
       : []
   );
+  const isForceGlobal = config.forceGlobalUserSettings === true;
+  const isAdmin = config.currentUserIsAdmin === true;
+  const visibilityDisabled = isForceGlobal && !isAdmin;
+  const useGlobalVisibility = isForceGlobal;
+  const useGlobalOrder = isForceGlobal;
+  let manualEntries = [];
+  let sharedVideos = [];
+  let currentOrderNames = dedupeNames(baseOrder);
+  let currentHiddenNames = useGlobalVisibility
+    ? dedupeNames(Array.isArray(config.studioHubsHidden) ? config.studioHubsHidden : [])
+    : [];
+  const getVisibilityProfile = () => ((isForceGlobal && isAdmin) ? getAdminTargetProfile() : getDeviceProfileAuto());
 
-  const hidden = createHiddenInput('studioHubsOrder', JSON.stringify(baseOrder));
-  const { wrap: dndWrap, list } = createDraggableList('studioHubsOrderList', baseOrder, labels);
+  const orderHiddenInput = createHiddenInput('studioHubsOrder', JSON.stringify(dedupeNames(baseOrder)));
+  const hiddenHiddenInput = createHiddenInput('studioHubsHidden', JSON.stringify(currentHiddenNames));
+  const { wrap: dndWrap, list } = createDraggableList('studioHubsOrderList', baseOrder, labels, {
+    enableStudioControls: true,
+    hiddenNames: currentHiddenNames,
+    isAdmin,
+    visibilityDisabled,
+    manualEntries,
+    sharedVideos
+  });
+
+  const syncHiddenNamesFromInput = () => {
+    try {
+      const parsed = JSON.parse(hiddenHiddenInput.value || "[]");
+      currentHiddenNames = dedupeNames(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      currentHiddenNames = [];
+    }
+    return currentHiddenNames;
+  };
+
+  const syncOrderNamesFromInput = () => {
+    try {
+      const parsed = JSON.parse(orderHiddenInput.value || "[]");
+      currentOrderNames = dedupeNames(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      currentOrderNames = dedupeNames(baseOrder);
+    }
+    return currentOrderNames;
+  };
+
+  const applyOrderNamesToList = (orderNames) => {
+    currentOrderNames = dedupeNames(orderNames);
+    const desiredOrder = mergeOrder(
+      [...list.querySelectorAll(".dnd-item")].map(li => li.dataset.name).filter(Boolean),
+      currentOrderNames
+    );
+    const itemsByKey = new Map(
+      [...list.querySelectorAll(".dnd-item")].map(li => [nameKey(li.dataset.name), li])
+    );
+
+    desiredOrder.forEach(name => {
+      const key = nameKey(name);
+      const li = itemsByKey.get(key);
+      if (!li) return;
+      list.appendChild(li);
+      itemsByKey.delete(key);
+    });
+
+    itemsByKey.forEach(li => list.appendChild(li));
+    refreshListState();
+  };
+
+  const applyHiddenNamesToList = (hiddenNames) => {
+    currentHiddenNames = dedupeNames(hiddenNames);
+    const hiddenSet = new Set(currentHiddenNames.map(nameKey));
+    [...list.querySelectorAll(".dnd-item")].forEach(li => {
+      li.dataset.hidden = hiddenSet.has(nameKey(li.dataset.name)) ? "1" : "0";
+    });
+    refreshListState();
+  };
+
+  const findListItemsByManualEntry = (entry) => {
+    const name = String(entry?.name || entry?.Name || "").trim();
+    const studioId = String(entry?.studioId || entry?.StudioId || "").trim();
+    return [...list.querySelectorAll(".dnd-item")].filter(li => {
+      const sameStudioId = studioId && nameKey(li.dataset.studioId) === nameKey(studioId);
+      const sameName = name && nameKey(li.dataset.name) === nameKey(name);
+      return sameStudioId || sameName;
+    });
+  };
+
+  const upsertManualEntryInList = (entry) => {
+    const name = String(entry?.name || entry?.Name || "").trim();
+    const studioId = String(entry?.studioId || entry?.StudioId || "").trim();
+    if (!name || !studioId) return null;
+
+    const matches = findListItemsByManualEntry(entry);
+    const existing = matches[0] || null;
+    if (existing) {
+      existing.dataset.name = name;
+      existing.dataset.studioId = studioId;
+      existing.dataset.manual = "1";
+      const nameEl = existing.querySelector(".dnd-name");
+      if (nameEl) nameEl.textContent = name;
+      matches.slice(1).forEach(li => li.remove());
+      return existing;
+    }
+
+    const li = createDnDItem(name, labels, {
+      enableStudioControls: true,
+      hidden: currentHiddenNames.some(item => nameKey(item) === nameKey(name)),
+      isManual: true,
+      studioId,
+      isAdmin,
+      visibilityDisabled,
+      manualEntries,
+      sharedVideos
+    });
+    list.appendChild(li);
+    return li;
+  };
+
+  const refreshListState = () => {
+    refreshStudioHubHiddenInputs(list, orderHiddenInput, hiddenHiddenInput);
+    syncOrderNamesFromInput();
+    syncHiddenNamesFromInput();
+    [...list.querySelectorAll(".dnd-item")].forEach(li => applyDnDItemState(li, labels, {
+      visibilityDisabled: li.dataset.visibilityDisabled === "1",
+      sharedVideos,
+      manualEntries
+    }));
+  };
+
+  const statusText = document.createElement("div");
+  statusText.className = "description-text2";
+  statusText.style.margin = "8px 0 12px";
+  statusText.style.minHeight = "18px";
+
+  const setStatus = (text = "", tone = "") => {
+    statusText.textContent = text;
+    statusText.style.color =
+      tone === "error" ? "#ff7b7b" :
+      tone === "success" ? "var(--accent, #10b981)" :
+      "";
+  };
+
+  const formatLabel = (key, fallback, vars = {}) => {
+    let text = String(labels?.[key] || fallback);
+    for (const [name, value] of Object.entries(vars)) {
+      text = text.split(`{${name}}`).join(String(value ?? ""));
+    }
+    return text;
+  };
+
+  const manualAddWrap = document.createElement("div");
+  manualAddWrap.className = "input-container";
+  manualAddWrap.style.display = isAdmin ? "" : "none";
+
+  const manualAddLabel = document.createElement("label");
+  manualAddLabel.textContent = labels?.addManualCollection || "Yeni koleksiyon ekle";
+  manualAddWrap.appendChild(manualAddLabel);
+
+  const manualAddHint = document.createElement("div");
+  manualAddHint.className = "description-text2";
+  manualAddHint.style.marginBottom = "8px";
+  manualAddHint.textContent = labels?.manualCollectionStudioIdHint || "Studio ID girin. Başlık otomatik çözülür; logo ve video yükleme opsiyoneldir.";
+  manualAddWrap.appendChild(manualAddHint);
+
+  const manualAddRow = document.createElement("div");
+  manualAddRow.style.display = "flex";
+  manualAddRow.style.gap = "8px";
+  manualAddRow.style.flexWrap = "wrap";
+
+  const studioIdInput = document.createElement("input");
+  studioIdInput.type = "text";
+  studioIdInput.placeholder = labels?.studioIdPlaceholder || "Studio ID";
+  studioIdInput.style.flex = "1";
+  studioIdInput.style.minWidth = "240px";
+
+  const manualAddBtn = document.createElement("button");
+  manualAddBtn.type = "button";
+  manualAddBtn.style.display = "inline-flex";
+  manualAddBtn.style.alignItems = "center";
+  manualAddBtn.style.justifyContent = "center";
+  manualAddBtn.style.gap = "8px";
+
+  const manualAddSpinner = document.createElement("span");
+  manualAddSpinner.setAttribute("aria-hidden", "true");
+  manualAddSpinner.style.display = "none";
+  manualAddSpinner.style.width = "14px";
+  manualAddSpinner.style.height = "14px";
+  manualAddSpinner.style.border = "2px solid currentColor";
+  manualAddSpinner.style.borderRightColor = "transparent";
+  manualAddSpinner.style.borderRadius = "50%";
+  manualAddSpinner.style.animation = "jmsStudioHubsSpin 0.7s linear infinite";
+
+  const manualAddBtnText = document.createElement("span");
+  manualAddBtnText.textContent = labels?.addCollectionButton || "Ekle";
+  manualAddBtn.append(manualAddSpinner, manualAddBtnText);
+
+  manualAddRow.appendChild(studioIdInput);
+  manualAddRow.appendChild(manualAddBtn);
+  manualAddWrap.appendChild(manualAddRow);
+
+  const manualAssetRow = document.createElement("div");
+  manualAssetRow.style.display = "flex";
+  manualAssetRow.style.gap = "8px";
+  manualAssetRow.style.flexWrap = "wrap";
+  manualAssetRow.style.marginTop = "8px";
+
+  const manualLogoInput = document.createElement("input");
+  manualLogoInput.type = "file";
+  manualLogoInput.accept = "image/png,image/webp,image/svg+xml,image/jpeg,.png,.webp,.svg,.jpg,.jpeg";
+  manualLogoInput.title = labels?.optionalLogoTitle || "Opsiyonel logo";
+
+  const manualVideoInput = document.createElement("input");
+  manualVideoInput.type = "file";
+  manualVideoInput.accept = "video/mp4,video/webm,video/quicktime,.mp4,.webm,.m4v,.mov";
+  manualVideoInput.title = labels?.optionalVideoTitle || "Opsiyonel hover video";
+
+  manualAssetRow.appendChild(manualLogoInput);
+  manualAssetRow.appendChild(manualVideoInput);
+  manualAddWrap.appendChild(manualAssetRow);
+
+  const sharedVideoHint = document.createElement("div");
+  sharedVideoHint.className = "description-text2";
+  sharedVideoHint.style.marginBottom = "8px";
+  sharedVideoHint.textContent = isAdmin
+    ? (labels?.hoverVideoAdminHint || "Hover videoları anında sunucuya kaydedilir ve tüm kullanıcılar kullanır.")
+    : (labels?.hoverVideoAdminOnlyHint || "Hover video yükleme ve silme sadece admin kullanıcılar içindir.");
+
+  const videoFileInput = document.createElement("input");
+  videoFileInput.type = "file";
+  videoFileInput.accept = "video/mp4,video/webm,video/quicktime,.mp4,.webm,.m4v,.mov";
+  videoFileInput.style.display = "none";
+
+  const logoFileInput = document.createElement("input");
+  logoFileInput.type = "file";
+  logoFileInput.accept = "image/png,image/webp,image/svg+xml,image/jpeg,.png,.webp,.svg,.jpg,.jpeg";
+  logoFileInput.style.display = "none";
+
+  let pendingVideoTarget = "";
+  let pendingLogoTargetStudioId = "";
+  let manualAddBusy = false;
+
+  const setManualAddBusy = (busy) => {
+    manualAddBusy = !!busy;
+    setButtonBusy(manualAddBtn, manualAddBtnText, manualAddSpinner, manualAddBusy, {
+      idleText: labels?.addCollectionButton || "Ekle",
+      busyText: labels?.addCollectionBusy || "Ekleniyor..."
+    });
+    studioIdInput.disabled = manualAddBusy;
+    manualLogoInput.disabled = manualAddBusy;
+    manualVideoInput.disabled = manualAddBusy;
+  };
+
+  const addManualCollection = async () => {
+    if (manualAddBusy) return;
+    const studioId = String(studioIdInput.value || "").trim();
+    if (!studioId) {
+      setStatus(labels?.manualCollectionEmpty || "Önce Studio ID girin.", "error");
+      return;
+    }
+
+    setManualAddBusy(true);
+    try {
+      setStatus(labels?.studioResolving || "Stüdyo çözümleniyor...");
+      const item = await fetchItemDetails(studioId).catch(() => null);
+      const resolvedName = String(item?.Name || "").trim();
+      if (!resolvedName) {
+        setStatus(labels?.studioResolveFailed || "Bu Studio ID için başlık çözümlenemedi.", "error");
+        return;
+      }
+
+      const existing = findStudioHubManualEntry(manualEntries, studioId) || findStudioHubManualEntry(manualEntries, resolvedName);
+      if (existing) {
+        setStatus(labels?.manualCollectionDuplicate || "Bu koleksiyon zaten ekli.", "error");
+        return;
+      }
+
+      const existingListName = [...list.querySelectorAll(".dnd-item")].some(li => nameKey(li.dataset.name) === nameKey(resolvedName));
+      if (existingListName) {
+        setStatus(labels?.manualCollectionDuplicate || "Bu koleksiyon zaten listede var.", "error");
+        return;
+      }
+
+      const created = await createStudioHubManualEntry({ studioId, name: resolvedName });
+      manualEntries = Array.isArray(created?.entries) ? created.entries : manualEntries;
+      upsertManualEntryInList(created?.entry || { studioId, name: resolvedName });
+
+      const logoFile = manualLogoInput.files?.[0];
+      let autoLogoUploaded = false;
+      if (logoFile) {
+        const logoRes = await uploadStudioHubLogo(studioId, logoFile);
+        manualEntries = Array.isArray(logoRes?.entries) ? logoRes.entries : manualEntries;
+      } else {
+        setStatus(formatLabel("studioHubTmdbLogoSearching", "{name} için TMDB logosu aranıyor...", {
+          name: resolvedName
+        }));
+        const tmdbLogoFile = await resolveTmdbLogoFileForStudio(resolvedName).catch(() => null);
+        if (tmdbLogoFile) {
+          const logoRes = await uploadStudioHubLogo(studioId, tmdbLogoFile);
+          manualEntries = Array.isArray(logoRes?.entries) ? logoRes.entries : manualEntries;
+          autoLogoUploaded = true;
+        }
+      }
+
+      const videoFile = manualVideoInput.files?.[0];
+      if (videoFile) {
+        const videoRes = await uploadStudioHubVideo(resolvedName, videoFile);
+        sharedVideos = Array.isArray(videoRes?.entries) ? videoRes.entries : sharedVideos;
+      }
+
+      studioIdInput.value = "";
+      manualLogoInput.value = "";
+      manualVideoInput.value = "";
+      refreshListState();
+      setStatus(
+        autoLogoUploaded
+          ? formatLabel("studioHubManualCollectionAddedWithTmdbLogo", "{name} eklendi. TMDB logosu otomatik kaydedildi.", {
+            name: resolvedName
+          })
+          : formatLabel("studioHubManualCollectionAdded", "{name} eklendi.", {
+            name: resolvedName
+          }),
+        "success"
+      );
+    } catch (error) {
+      setStatus(error?.message || (labels?.studioHubManualCollectionAddFailed || "Koleksiyon eklenemedi."), "error");
+    } finally {
+      setManualAddBusy(false);
+    }
+  };
+
+  manualAddBtn.addEventListener("click", addManualCollection);
+  studioIdInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addManualCollection();
+    }
+  });
+
+  videoFileInput.addEventListener("change", async () => {
+    const file = videoFileInput.files?.[0];
+    const targetName = pendingVideoTarget;
+    pendingVideoTarget = "";
+    videoFileInput.value = "";
+
+    if (!file || !targetName) return;
+
+    setStatus(formatLabel("studioHubHoverVideoUploading", "{name} için video yükleniyor...", {
+      name: targetName
+    }));
+    try {
+      const result = await uploadStudioHubVideo(targetName, file);
+      sharedVideos = Array.isArray(result?.entries) ? result.entries : sharedVideos;
+      refreshListState();
+      setStatus(formatLabel("studioHubHoverVideoSaved", "{name} için hover videosu kaydedildi.", {
+        name: targetName
+      }), "success");
+    } catch (error) {
+      setStatus(error?.message || (labels?.studioHubHoverVideoUploadFailed || "Hover videosu yüklenemedi."), "error");
+    }
+  });
+
+  logoFileInput.addEventListener("change", async () => {
+    const file = logoFileInput.files?.[0];
+    const studioId = pendingLogoTargetStudioId;
+    pendingLogoTargetStudioId = "";
+    logoFileInput.value = "";
+
+    if (!file || !studioId) return;
+
+    const target = findStudioHubManualEntry(manualEntries, studioId);
+    const targetName = String(target?.name || target?.Name || studioId);
+
+    setStatus(formatLabel("studioHubLogoUploading", "{name} için logo yükleniyor...", {
+      name: targetName
+    }));
+    try {
+      const result = await uploadStudioHubLogo(studioId, file);
+      manualEntries = Array.isArray(result?.entries) ? result.entries : manualEntries;
+      refreshListState();
+      setStatus(formatLabel("studioHubLogoSaved", "{name} için logo kaydedildi.", {
+        name: targetName
+      }), "success");
+    } catch (error) {
+      setStatus(error?.message || (labels?.studioHubLogoUploadFailed || "Logo yüklenemedi."), "error");
+    }
+  });
 
   section.appendChild(dndWrap);
-  section.appendChild(hidden);
+  section.appendChild(statusText);
+  if (isAdmin) section.appendChild(manualAddWrap);
+  section.appendChild(sharedVideoHint);
+  section.appendChild(videoFileInput);
+  section.appendChild(logoFileInput);
+  section.appendChild(orderHiddenInput);
+  section.appendChild(hiddenHiddenInput);
 
   (async () => {
     try {
@@ -278,26 +1116,151 @@ export function createStudioHubsPanel(config, labels) {
         );
 
         for (const name of appendSorted) {
-          list.appendChild(createDnDItem(name, labels));
+          list.appendChild(createDnDItem(name, labels, {
+            enableStudioControls: true,
+            hidden: currentHiddenNames.some(item => nameKey(item) === nameKey(name)),
+            isManual: false,
+            isAdmin,
+            visibilityDisabled,
+            manualEntries,
+            sharedVideos
+          }));
         }
 
-        const names = [...list.querySelectorAll(".dnd-item")].map(li => li.dataset.name);
-        hidden.value = JSON.stringify(names);
+        applyOrderNamesToList(currentOrderNames);
+        refreshListState();
       }
     } catch (e) {
       console.warn("studioHubsPage: Studios genişletme başarısız:", e);
     }
   })();
 
-  const refreshHidden = () => {
-    const names = [...list.querySelectorAll(".dnd-item")].map(li => li.dataset.name);
-    hidden.value = JSON.stringify(names);
-  };
-  list.addEventListener("dragend", refreshHidden);
-  list.addEventListener("drop", refreshHidden);
-  list.addEventListener("click", (e) => {
-    if (e.target.closest(".dnd-btn-up") || e.target.closest(".dnd-btn-down")) refreshHidden();
+  list.addEventListener("click", async (e) => {
+    const li = e.target.closest(".dnd-item");
+    if (!li) return;
+
+    const toggleBtn = e.target.closest(".dnd-btn-visibility");
+    if (toggleBtn) {
+      if (toggleBtn.disabled || li.dataset.visibilityDisabled === "1") return;
+      li.dataset.hidden = li.dataset.hidden === "1" ? "0" : "1";
+      refreshListState();
+      return;
+    }
+
+    const removeBtn = e.target.closest(".dnd-btn-remove");
+    if (removeBtn) {
+      const studioId = li.dataset.studioId || "";
+      if (!studioId) return;
+      const targetName = li.dataset.name || formatLabel("studioHubCollectionFallbackName", "Koleksiyon");
+      setStatus(formatLabel("studioHubCollectionRemoving", "{name} kaldırılıyor...", {
+        name: targetName
+      }));
+      try {
+        const result = await deleteStudioHubManualEntry(studioId);
+        manualEntries = Array.isArray(result?.manualEntries) ? result.manualEntries : manualEntries;
+        sharedVideos = Array.isArray(result?.videoEntries) ? result.videoEntries : sharedVideos;
+        li.remove();
+        refreshListState();
+        setStatus(labels?.manualCollectionRemoved || "Koleksiyon listeden kaldırıldı.", "success");
+      } catch (error) {
+        setStatus(error?.message || (labels?.studioHubManualCollectionRemoveFailed || "Koleksiyon kaldırılamadı."), "error");
+      }
+      return;
+    }
+
+    const uploadLogoBtn = e.target.closest(".dnd-btn-upload-logo");
+    if (uploadLogoBtn) {
+      pendingLogoTargetStudioId = li.dataset.studioId || "";
+      logoFileInput.click();
+      return;
+    }
+
+    const deleteLogoBtn = e.target.closest(".dnd-btn-delete-logo");
+    if (deleteLogoBtn && !deleteLogoBtn.disabled) {
+      const studioId = li.dataset.studioId || "";
+      const targetName = li.dataset.name || "";
+      setStatus(formatLabel("studioHubLogoDeleting", "{name} için logo siliniyor...", {
+        name: targetName
+      }));
+      try {
+        const result = await deleteStudioHubLogo(studioId);
+        manualEntries = Array.isArray(result?.entries) ? result.entries : manualEntries;
+        refreshListState();
+        setStatus(formatLabel("studioHubLogoDeleted", "{name} için logo silindi.", {
+          name: targetName
+        }), "success");
+      } catch (error) {
+        setStatus(error?.message || (labels?.studioHubLogoDeleteFailed || "Logo silinemedi."), "error");
+      }
+      return;
+    }
+
+    const uploadBtn = e.target.closest(".dnd-btn-upload-video");
+    if (uploadBtn) {
+      pendingVideoTarget = li.dataset.name || "";
+      videoFileInput.click();
+      return;
+    }
+
+    const deleteVideoBtn = e.target.closest(".dnd-btn-delete-video");
+    if (deleteVideoBtn && !deleteVideoBtn.disabled) {
+      const targetName = li.dataset.name || "";
+      setStatus(formatLabel("studioHubHoverVideoDeleting", "{name} için hover videosu siliniyor...", {
+        name: targetName
+      }));
+      try {
+        const result = await deleteStudioHubVideo(targetName);
+        sharedVideos = Array.isArray(result?.entries) ? result.entries : [];
+        refreshListState();
+        setStatus(formatLabel("studioHubHoverVideoDeleted", "{name} için hover videosu silindi.", {
+          name: targetName
+        }), "success");
+      } catch (error) {
+        setStatus(error?.message || (labels?.studioHubHoverVideoDeleteFailed || "Hover videosu silinemedi."), "error");
+      }
+    }
   });
+
+  list.addEventListener("dragend", refreshListState);
+  list.addEventListener("drop", refreshListState);
+  list.addEventListener("click", (e) => {
+    if (e.target.closest(".dnd-btn-up") || e.target.closest(".dnd-btn-down")) refreshListState();
+  });
+  refreshListState();
+
+  if (useGlobalVisibility) {
+    if (useGlobalOrder) applyOrderNamesToList(currentOrderNames);
+    applyHiddenNamesToList(currentHiddenNames);
+  } else {
+    (async () => {
+      try {
+        const visibility = await fetchStudioHubVisibility({
+          force: true,
+          profile: getVisibilityProfile()
+        });
+        applyOrderNamesToList(
+          Array.isArray(visibility?.orderNames) && visibility.orderNames.length
+            ? visibility.orderNames
+            : currentOrderNames
+        );
+        applyHiddenNamesToList(visibility?.hiddenNames || []);
+      } catch (e) {
+        console.warn("studioHubsPage: visibility alınamadı:", e);
+      }
+    })();
+  }
+
+  (async () => {
+    try {
+      manualEntries = await fetchStudioHubManualEntries();
+      manualEntries.forEach(entry => upsertManualEntryInList(entry));
+      sharedVideos = await fetchStudioHubVideoEntries();
+      applyOrderNamesToList(currentOrderNames);
+      refreshListState();
+    } catch (e) {
+      console.warn("studioHubsPage: shared data alınamadı:", e);
+    }
+  })();
 
   const enableHoverVideo = createCheckbox(
     'studioHubsHoverVideo',
@@ -586,7 +1549,7 @@ export function createStudioHubsPanel(config, labels) {
       const items = Array.isArray(v?.Items) ? v.Items : [];
       return items.filter(x => x?.CollectionType === "tvshows" && x?.Id).map(x => ({
         Id: x.Id,
-        Name: x.Name || "TV"
+        Name: x.Name || (labels?.studioHubTvLibraryFallbackName || "TV")
       }));
     } catch {
       return [];
@@ -604,7 +1567,7 @@ export function createStudioHubsPanel(config, labels) {
         .filter(x => x?.Id)
         .map(x => ({
           Id: x.Id,
-          Name: x.Name || "Library",
+          Name: x.Name || (labels?.studioHubLibraryFallbackName || "Library"),
           CollectionType: (x.CollectionType || "").toString()
         }));
     } catch { return []; }

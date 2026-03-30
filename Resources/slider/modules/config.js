@@ -344,7 +344,7 @@ export function getConfig() {
     useRandomContent: localStorage.getItem('useRandomContent') !== 'false',
     fullscreenMode: localStorage.getItem('fullscreenMode') === 'true' ? true : false,
     listLimit: 20,
-    version: "v2.1.1",
+    version: "v2.2.0",
     historySize: 20,
     updateInterval: 300000,
     nextTracksSource: localStorage.getItem('nextTracksSource') || 'playlist',
@@ -535,6 +535,18 @@ export function getConfig() {
         "Marvel Studios","Pixar","Walt Disney Pictures","Disney+","DC",
         "Warner Bros. Pictures","Lucasfilm Ltd.","Columbia Pictures","Paramount Pictures","Netflix"
       ];
+    })(),
+    studioHubsHidden: (() => {
+      try {
+        const raw = localStorage.getItem('studioHubsHidden');
+        if (!raw || raw === '[object Object]') return [];
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr)
+          ? arr.map(x => String(x || '').trim()).filter(Boolean)
+          : [];
+      } catch {
+        return [];
+      }
     })(),
 
     slideTop: parseInt(localStorage.getItem('slideTop'), 10) || 0,

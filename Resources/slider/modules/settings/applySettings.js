@@ -1,4 +1,4 @@
-import { getConfig, publishAdminSnapshotIfForced } from "../config.js";
+import { getAdminTargetProfile, getConfig, getDeviceProfileAuto, publishAdminSnapshotIfForced } from "../config.js";
 import { loadCSS } from "../player/main.js";
 import { updateSlidePosition } from '../positionUtils.js';
 import { createCheckbox, createImageTypeSelect, bindCheckboxKontrol, bindTersCheckboxKontrol, updateConfig } from "../settings.js";
@@ -6,6 +6,7 @@ import { updateHeaderUserAvatar, updateAvatarStyles, clearAvatarCache } from "..
 import { showNotification } from "../player/ui/notification.js";
 import { initOsdHeaderRatings } from "../osdHeaderRatings.js";
 import { updateJmsPluginConfig } from "../jmsPluginConfig.js";
+import { saveStudioHubVisibility } from "../studioHubsShared.js";
 
 const _intOr = (v, def) => {
   const n = parseInt(v, 10);
@@ -102,6 +103,33 @@ const USER_ONLY_KEYS = [
         const config = getConfig();
         const oldTheme = getConfig().playerTheme;
         const oldPlayerStyle = getConfig().playerStyle;
+        const useGlobalStudioHubsVisibility = cfgGuard?.forceGlobalUserSettings === true;
+        const studioHubsVisibilityProfile =
+          (useGlobalStudioHubsVisibility && cfgGuard?.currentUserIsAdmin) ? getAdminTargetProfile() : getDeviceProfileAuto();
+        const studioHubsOrderValue = (() => {
+          const raw = formData.get('studioHubsOrder');
+          if (!raw) return [];
+          try {
+            const arr = JSON.parse(raw);
+            return Array.isArray(arr)
+              ? arr.map(x => String(x || '').trim()).filter(Boolean)
+              : [];
+          } catch {
+            return [];
+          }
+        })();
+        const studioHubsHiddenValue = (() => {
+          const raw = formData.get('studioHubsHidden');
+          if (!raw) return [];
+          try {
+            const arr = JSON.parse(raw);
+            return Array.isArray(arr)
+              ? arr.map(x => String(x || '').trim()).filter(Boolean)
+              : [];
+          } catch {
+            return [];
+          }
+        })();
         const sapEnabled = formData.get('sapEnabled') === 'on';
         const sapBlurMin = _clamp(
           _floatOr(formData.get('sapBlurMs'), _DEFAULT_UNFOCUS_MS) / 60000,
@@ -347,16 +375,10 @@ const USER_ONLY_KEYS = [
             studioHubsMinRating: parseFloat(formData.get('studioHubsMinRating')) || 6.5,
             studioHubsCardCount: parseInt(formData.get('studioHubsCardCount'), 10) || 10,
             personalRecsCardCount: parseInt(formData.get('personalRecsCardCount'), 10) || 9,
-            studioHubsOrder: (() => {
-              const raw = formData.get('studioHubsOrder');
-              if (!raw) return getConfig().studioHubsOrder;
-              try {
-                const arr = JSON.parse(raw);
-                return Array.isArray(arr) && arr.length ? arr : getConfig().studioHubsOrder;
-              } catch {
-                return getConfig().studioHubsOrder;
-              }
-            })(),
+            studioHubsOrder: useGlobalStudioHubsVisibility
+              ? (studioHubsOrderValue.length ? studioHubsOrderValue : getConfig().studioHubsOrder)
+              : undefined,
+            studioHubsHidden: useGlobalStudioHubsVisibility ? studioHubsHiddenValue : undefined,
 
             enableGenreHubs: formData.get('enableGenreHubs') === 'on',
             studioHubsGenreCardCount: parseInt(formData.get('studioHubsGenreCardCount'), 10) || 10,
@@ -661,6 +683,18 @@ const USER_ONLY_KEYS = [
           localStorage.setItem('smartAutoPause', JSON.stringify(updatedConfig.smartAutoPause));
           localStorage.setItem('pauseOverlay', JSON.stringify(updatedConfig.pauseOverlay));
         } catch {}
+
+        if (!useGlobalStudioHubsVisibility) {
+          try {
+            await saveStudioHubVisibility(studioHubsHiddenValue, {
+              profile: studioHubsVisibilityProfile,
+              orderNames: studioHubsOrderValue
+            });
+          } finally {
+            try { localStorage.removeItem('studioHubsHidden'); } catch {}
+            try { localStorage.removeItem('studioHubsOrder'); } catch {}
+          }
+        }
 
         const toSave =
           (cfgGuard?.forceGlobalUserSettings && !isAdmin)

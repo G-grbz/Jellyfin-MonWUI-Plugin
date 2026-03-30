@@ -1,13 +1,21 @@
 import { getSessionInfo, getEmbyHeaders, makeApiRequest, updateFavoriteStatus } from "/Plugins/JMSFusion/runtime/api.js";
-import { getConfig } from './config.js';
+import { getConfig, getDeviceProfileAuto } from './config.js';
 import { getLanguageLabels } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";
+import { openDetailsModal } from "./detailsModal.js";
 import { waitForAnyVisible } from "../main.js";
 import { withServer } from "./jfUrl.js";
 import { ensureWatchlistLoaded, getCachedWatchlistMembership, getWatchlistButtonText } from "./watchlist.js";
+import {
+  buildStudioHubLogoUrl,
+  buildStudioHubVideoUrl,
+  fetchStudioHubVisibility,
+  fetchStudioHubManualEntries,
+  fetchStudioHubVideoEntries,
+  findStudioHubVideoEntry
+} from "./studioHubsShared.js";
 
 const config = getConfig();
-const MANUAL_IDS = {};
 const ALIASES = {
   "Marvel Studios": ["marvel studios","marvel","marvel entertainment","marvel studios llc"],
   "Pixar": ["pixar","pixar animation studios","disney pixar"],
@@ -118,8 +126,9 @@ function mergeOrder(defaults, custom) {
   return out;
 }
 
-const USER_ORDER = Array.isArray(config.studioHubsOrder) ? config.studioHubsOrder : [];
-const ORDER = mergeOrder(DEFAULT_ORDER, USER_ORDER);
+function nameKey(value) {
+  return String(value || "").trim().toLowerCase();
+}
 
 const LOGO_BASE = "./slider/src/images/studios/";
 const LOCAL_EXTS = [".webp"];
@@ -284,10 +293,22 @@ function setPopoverContent(studioName, items) {
       favoriteBtn.setAttribute('aria-label', synced ? favRemoveText : favAddText);
     }).catch(() => {});
 
-    itemEl.addEventListener('click', (e) => {
+    itemEl.addEventListener('click', async (e) => {
       if (!e.target.closest('.favorite-heart')) {
-        hidePreviewPopover();
-        window.location.href = `#/details?id=${item.Id}&serverId=${encodeURIComponent(serverId)}`;
+        e.preventDefault();
+        e.stopPropagation();
+        const backdropIndex = localStorage.getItem("jms_backdrop_index") || "0";
+        try {
+          await openDetailsModal({
+            itemId: item.Id,
+            serverId,
+            preferBackdropIndex: backdropIndex,
+            originEl: itemEl.querySelector(".hub-preview-poster") || itemEl,
+          });
+          hidePreviewPopover();
+        } catch (err) {
+          console.warn("openDetailsModal failed (studio hub preview item):", err);
+        }
       }
     });
 
@@ -485,11 +506,41 @@ function createPreviewButton(card, studioName, studioId, userId) {
   return btn;
 }
 
-async function setupHoverVideo(card, logoUrl, studioName, studioId, userId) {
-  if (!card || !logoUrl) return;
-  const candidates = deriveVideoCandidatesFromLogo(logoUrl);
+async function setupHoverVideo(card, options = {}) {
+  if (!card) return;
+
+  try {
+    card.__hoverVideoCleanup?.();
+  } catch {}
+  card.__hoverVideoCleanup = null;
+
+  const oldVideo = card.querySelector("video.hub-video");
+  if (oldVideo) {
+    try { oldVideo.pause(); } catch {}
+    try { oldVideo.removeAttribute("src"); oldVideo.load?.(); } catch {}
+    try { oldVideo.remove(); } catch {}
+  }
+
+  const logoUrl = options.logoUrl || null;
+  const customVideoUrl = options.customVideoUrl || null;
+  const studioName = options.studioName || "";
+  const studioId = options.studioId || "";
+  const userId = options.userId || "";
+
+  const candidates = [];
+  if (customVideoUrl) candidates.push(customVideoUrl);
+  if (logoUrl) candidates.push(...deriveVideoCandidatesFromLogo(logoUrl));
+
+  const uniqueCandidates = [];
+  const seen = new Set();
+  for (const url of candidates) {
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    uniqueCandidates.push(url);
+  }
+
   let playableUrl = null;
-  for (const u of candidates) {
+  for (const u of uniqueCandidates) {
     const ok = await probeVideo(u);
     if (ok) { playableUrl = u; break; }
   }
@@ -533,27 +584,37 @@ async function setupHoverVideo(card, logoUrl, studioName, studioId, userId) {
     }
   };
 
-  card.addEventListener("mouseenter", () => { if (__userInteracted) play(); });
-  card.addEventListener("mouseleave", () => stop(false));
-  card.addEventListener("focus", play);
-  card.addEventListener("blur", () => stop(false));
+  const onMouseEnter = () => { if (__userInteracted) play(); };
+  const onMouseLeave = () => stop(false);
+  const onFocus = () => play();
+  const onBlur = () => stop(false);
   const stopAndRemove = () => stop(true);
+  card.addEventListener("mouseenter", onMouseEnter);
+  card.addEventListener("mouseleave", onMouseLeave);
+  card.addEventListener("focus", onFocus);
+  card.addEventListener("blur", onBlur);
   card.addEventListener("click", stopAndRemove);
   card.addEventListener("pointerdown", stopAndRemove);
 
   const onRouteOrHide = () => stop(true);
+  const onVisibilityChange = () => {
+    if (document.hidden) onRouteOrHide();
+  };
   window.addEventListener("hashchange", onRouteOrHide);
   window.addEventListener("beforeunload", onRouteOrHide);
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) onRouteOrHide();
-  });
+  document.addEventListener("visibilitychange", onVisibilityChange);
 
   card.__hoverVideoCleanup = () => {
     stop(true);
+    card.removeEventListener("mouseenter", onMouseEnter);
+    card.removeEventListener("mouseleave", onMouseLeave);
+    card.removeEventListener("focus", onFocus);
+    card.removeEventListener("blur", onBlur);
     card.removeEventListener("click", stopAndRemove);
     card.removeEventListener("pointerdown", stopAndRemove);
     window.removeEventListener("hashchange", onRouteOrHide);
     window.removeEventListener("beforeunload", onRouteOrHide);
+    document.removeEventListener("visibilitychange", onVisibilityChange);
   };
 }
 
@@ -661,6 +722,42 @@ function buildPosterUrl(item, height = 300, quality = 95) {
   return withServer(`/Items/${item.Id}/Images/Primary?tag=${encodeURIComponent(tag)}&fillHeight=${height}&quality=${quality}`);
 }
 function pickRandom(arr) { return arr.length ? arr[Math.floor(Math.random()*arr.length)] : null; }
+
+async function getHiddenStudioNameSet() {
+  const liveConfig = getConfig();
+  if (liveConfig?.forceGlobalUserSettings) {
+    const globalHidden = Array.isArray(liveConfig?.studioHubsHidden) ? liveConfig.studioHubsHidden : [];
+    return new Set(globalHidden.map(nameKey));
+  }
+
+  try {
+    const profile = getDeviceProfileAuto();
+    const visibility = await fetchStudioHubVisibility({ profile });
+    return new Set((visibility?.hiddenNames || []).map(nameKey));
+  } catch {
+    return new Set();
+  }
+}
+
+async function getStudioOrderList() {
+  const liveConfig = getConfig();
+  const globalOrder = Array.isArray(liveConfig?.studioHubsOrder) ? liveConfig.studioHubsOrder : [];
+
+  if (liveConfig?.forceGlobalUserSettings) {
+    return mergeOrder(DEFAULT_ORDER, globalOrder);
+  }
+
+  try {
+    const profile = getDeviceProfileAuto();
+    const visibility = await fetchStudioHubVisibility({ profile });
+    const userOrder = Array.isArray(visibility?.orderNames) && visibility.orderNames.length
+      ? visibility.orderNames
+      : globalOrder;
+    return mergeOrder(DEFAULT_ORDER, userOrder);
+  } catch {
+    return mergeOrder(DEFAULT_ORDER, globalOrder);
+  }
+}
 
 async function chooseBackdropForStudio(studio, userId, signal) {
   const map = loadCache(IMG_KEY, IMG_TTL) || {};
@@ -771,8 +868,24 @@ export async function renderStudioHubs() {
      serverId = serverId || localStorage.getItem("serverId") || sessionStorage.getItem("serverId") || null;
      const shells = {};
 
-    const maxCards = Number.isFinite(config.studioHubsCardCount) ? config.studioHubsCardCount : ORDER.length;
-    const wanted = ORDER.slice(0, Math.max(1, maxCards));
+    const hiddenNames = await getHiddenStudioNameSet();
+    const userOrder = await getStudioOrderList();
+    const manualEntries = await fetchStudioHubManualEntries().catch(() => []);
+    const manualOrder = (manualEntries || [])
+      .map(entry => String(entry?.name || entry?.Name || "").trim())
+      .filter(Boolean);
+    const effectiveOrder = mergeOrder(manualOrder, userOrder);
+    const visibleOrder = effectiveOrder.filter(name => !hiddenNames.has(nameKey(name)));
+    if (!visibleOrder.length) {
+      row.parentElement.style.display = "none";
+      return;
+    }
+
+    const maxCards = Number.isFinite(config.studioHubsCardCount) ? config.studioHubsCardCount : visibleOrder.length;
+    const wanted = visibleOrder.slice(0, Math.max(1, maxCards));
+    const sharedVideos = config.studioHubsHoverVideo
+      ? await fetchStudioHubVideoEntries().catch(() => [])
+      : [];
 
     for (const desired of wanted) {
       const existing = row.querySelector(`.hub-card[data-hub="${CSS.escape(desired)}"]`);
@@ -789,7 +902,8 @@ export async function renderStudioHubs() {
     const nameMap = loadCache(MAP_KEY, MAP_TTL) || {};
     const resolved = [];
     for (const desired of wanted) {
-      const manualId = MANUAL_IDS[desired];
+      const manualEntry = (manualEntries || []).find(entry => nameKey(entry?.name || entry?.Name) === nameKey(desired)) || null;
+      const manualId = String(manualEntry?.studioId || manualEntry?.StudioId || "").trim();
       let studio = manualId
         ? { Id: manualId, Name: desired }
         : (nameMap[desired] || studios.find(s => matches(desired, s.Name)) || await searchStudiosByAliases(desired, __fetchAbort.signal));
@@ -801,7 +915,11 @@ export async function renderStudioHubs() {
       const card = shells[name];
       if (!card) return;
       let used = false;
-      const logoUrl = await resolveLogoUrl(name);
+      const manualEntry = (manualEntries || []).find(entry => nameKey(entry?.name || entry?.Name) === nameKey(name)) || null;
+      const customLogoUrl = buildStudioHubLogoUrl(manualEntry);
+      const logoUrl = customLogoUrl || await resolveLogoUrl(name);
+      const sharedVideoEntry = findStudioHubVideoEntry(sharedVideos, name);
+      const customVideoUrl = buildStudioHubVideoUrl(sharedVideoEntry);
 
       if (logoUrl) {
         const img = upsertImg(card, "hub-img hub-logo");
@@ -813,23 +931,32 @@ export async function renderStudioHubs() {
         card.href = buildStudioHref(studio.Id, serverId);
 
         ensurePreviewButton(card, name, studio.Id, userId);
-        if (config.studioHubsHoverVideo) {
-          setupHoverVideo(card, logoUrl, name, studio.Id, userId);
-        }
         used = true;
       }
 
       if (!used) {
         const chosen = await chooseBackdropForStudio(studio, userId, __fetchAbort.signal);
-        if (!chosen?.url) return;
-
-        const img = upsertImg(card, "hub-img");
-        img.alt = name;
-        if (img.src !== chosen.url) {
-          img.style.opacity = '0';
-          img.src = chosen.url;
+        if (chosen?.url) {
+          const img = upsertImg(card, "hub-img");
+          img.alt = name;
+          if (img.src !== chosen.url) {
+            img.style.opacity = '0';
+            img.src = chosen.url;
+          }
+          ensurePreviewButton(card, name, studio.Id, userId);
+        } else if (!customVideoUrl) {
+          return;
         }
-        ensurePreviewButton(card, name, studio.Id, userId);
+      }
+
+      if (config.studioHubsHoverVideo) {
+        await setupHoverVideo(card, {
+          logoUrl,
+          customVideoUrl,
+          studioName: name,
+          studioId: studio.Id,
+          userId
+        });
       }
     }));
 
@@ -842,6 +969,12 @@ export async function renderStudioHubs() {
     __fetchAbort = null;
   }
 }
+
+window.addEventListener("jms:studio-hubs-visibility-updated", () => {
+  try {
+    void renderStudioHubs();
+  } catch {}
+});
 
 function ensureContainer(indexPage) {
   const all = indexPage.querySelectorAll("#studio-hubs");
