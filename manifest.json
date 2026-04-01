@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/G-grbz/Jellyfin-MonWUI-Plugin/main/img/icon.png",
     "versions": [
       {
+        "version": "2.3.0.0",
+        "changelog": "Enhance modals, UI cards & media session",
+        "targetAbi": "10.10.0.0",
+        "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v2.3.0/JMSFusion-2.3.0.0-server.zip",
+        "checksum": "d9d1b28be60fdf8e21911aadca9bcd7c",
+        "timestamp": "2026-04-01T22:02:45.1384330Z"
+      },
+      {
         "version": "2.2.0.0",
         "changelog": "Fix CSS updates and studio modal behavior",
         "targetAbi": "10.10.0.0",
