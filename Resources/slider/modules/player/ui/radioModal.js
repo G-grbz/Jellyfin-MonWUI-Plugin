@@ -160,7 +160,7 @@ function ensureStyles() {
       --gmmp-radio-shadow-glow: var(--gmmp-shadow-glow, 0 0 0 2px var(--gmmp-radio-accent-soft));
       position: fixed;
       inset: 0;
-      z-index: 2147483647;
+      z-index: 9996;
       display: none;
       place-items: center;
       padding: 18px;

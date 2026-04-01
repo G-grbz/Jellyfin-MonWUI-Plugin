@@ -5,6 +5,8 @@ import { getLanguageLabels } from "../language/index.js";
 import { CollectionCacheDB } from "./collectionCacheDb.js";
 import { getYoutubeEmbedUrl } from "./utils.js";
 import { getGlobalTmdbApiKey, sanitizeTmdbApiKey } from "./jmsPluginConfig.js";
+import { ensureStudioHubLogoFromTmdb, ensureStudioHubManualEntry, JMS_STUDIO_HUB_MANUAL_ENTRY_ADDED_EVENT } from "./studioHubsShared.js";
+import { showNotification } from "./player/ui/notification.js";
 import { WATCHLIST_MODAL_ID, getWatchlistButtonText, getWatchlistTabKey, getWatchlistToast, openWatchlistModal } from "./watchlist.js";
 
 const config = getConfig();
@@ -29,6 +31,10 @@ let _closing = false;
 let _openOrigin = null;
 let _ytApiPromise = null;
 const _boxSetCache = new Map();
+const _autoAddStudioHubPendingIds = new Set();
+const _autoAddedStudioHubIds = new Set();
+const _autoStudioHubLogoPendingIds = new Set();
+const _autoStudioHubLogoResolvedIds = new Set();
 const TTL_MOVIE_BOXSET = 7 * 24 * 60 * 60 * 1000;
 const NESTED_MODAL_SCROLL_ALLOW_SELECTOR = [
   `#${MODAL_ID} .jmsdm-card`,
@@ -1404,6 +1410,526 @@ function safeText(s, fallback = "") {
   return t || fallback;
 }
 
+function label(key, fallback = "") {
+  return safeText(labels?.[key] || config?.languageLabels?.[key], fallback);
+}
+
+async function copyTextToClipboard(value) {
+  const raw = safeText(value);
+  if (!raw) return false;
+
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(raw);
+      return true;
+    }
+  } catch {}
+
+  try {
+    const input = document.createElement("textarea");
+    input.value = raw;
+    input.setAttribute("readonly", "");
+    input.style.position = "fixed";
+    input.style.top = "-9999px";
+    input.style.opacity = "0";
+    input.style.pointerEvents = "none";
+    document.body.appendChild(input);
+    input.focus();
+    input.select();
+    input.setSelectionRange(0, input.value.length);
+    const copied = document.execCommand("copy");
+    input.remove();
+    return !!copied;
+  } catch {}
+
+  return false;
+}
+
+function uniqTextList(values = []) {
+  const out = [];
+  const seen = new Set();
+
+  for (const value of values) {
+    const normalized = safeText(value);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(normalized);
+  }
+
+  return out;
+}
+
+function ticksToMs(value) {
+  const ticks = Number(value || 0);
+  if (!Number.isFinite(ticks) || ticks <= 0) return 0;
+  return Math.round(ticks / 10000);
+}
+
+function formatDateTime(ts) {
+  const date = new Date(Number(ts || 0));
+  if (Number.isNaN(date.getTime())) return "";
+
+  const now = new Date();
+  const sameDay = now.toDateString() === date.toDateString();
+
+  try {
+    return new Intl.DateTimeFormat(
+      config?.timeLocale || config?.dateLocale || "tr-TR",
+      sameDay
+        ? { hour: "2-digit", minute: "2-digit" }
+        : { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }
+    ).format(date);
+  } catch {
+    return sameDay ? date.toLocaleTimeString() : date.toLocaleString();
+  }
+}
+
+function formatFinishTime(runtimeTicks, playbackTicks = 0) {
+  const totalTicks = Math.max(Number(runtimeTicks || 0), 0);
+  const watchedTicks = Math.max(Number(playbackTicks || 0), 0);
+  const remainingTicks = Math.max(totalTicks - watchedTicks, 0);
+  if (!remainingTicks) return "";
+  return formatDateTime(Date.now() + ticksToMs(remainingTicks));
+}
+
+function formatCommunityRating(value) {
+  const rating = Number(value);
+  return Number.isFinite(rating) ? `★ ${rating.toFixed(1)}` : "";
+}
+
+function formatBitrate(value) {
+  const bitrate = Number(value || 0);
+  if (!Number.isFinite(bitrate) || bitrate <= 0) return "";
+  if (bitrate >= 1000000) {
+    const mbps = bitrate / 1000000;
+    return `${mbps >= 10 ? mbps.toFixed(0) : mbps.toFixed(1)} Mbps`;
+  }
+  return `${Math.round(bitrate / 1000)} kbps`;
+}
+
+function formatChannels(value) {
+  const channels = Number(value || 0);
+  if (!Number.isFinite(channels) || channels <= 0) return "";
+  if (channels === 1) return "1.0";
+  if (channels === 2) return "2.0";
+  if (channels === 6) return "5.1";
+  if (channels === 8) return "7.1";
+  return `${channels} ch`;
+}
+
+function parseNumberLike(value) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  const raw = safeText(value);
+  if (!raw) return 0;
+
+  if (raw.includes("/")) {
+    const [num, den] = raw.split("/").map((part) => Number(part));
+    if (Number.isFinite(num) && Number.isFinite(den) && den) {
+      return num / den;
+    }
+  }
+
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function getPeopleNames(item, type, limit = 8) {
+  return uniqTextList(
+    (Array.isArray(item?.People) ? item.People : [])
+      .filter((person) => safeText(person?.Type).toLowerCase() === safeText(type).toLowerCase())
+      .map((person) => person?.Name)
+  ).slice(0, limit);
+}
+
+function getActorNames(item, limit = 8) {
+  const roles = new Set(["actor", "gueststar", "voice"]);
+  return uniqTextList(
+    (Array.isArray(item?.People) ? item.People : [])
+      .filter((person) => roles.has(safeText(person?.Type).toLowerCase()))
+      .map((person) => person?.Name)
+  ).slice(0, limit);
+}
+
+function getStudioEntries(item, limit = 6) {
+  const out = [];
+  const seen = new Set();
+
+  for (const studio of (Array.isArray(item?.Studios) ? item.Studios : [])) {
+    const name = safeText(studio?.Name || studio);
+    if (!name) continue;
+
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    out.push({
+      name,
+      id: safeText(studio?.Id || studio?.StudioId || studio?.studioId)
+    });
+
+    if (out.length >= limit) break;
+  }
+
+  return out;
+}
+
+function getMediaStreamsByType(item, type) {
+  return (Array.isArray(item?.MediaStreams) ? item.MediaStreams : [])
+    .filter((stream) => safeText(stream?.Type).toLowerCase() === safeText(type).toLowerCase());
+}
+
+function getPrimaryVideoStream(item) {
+  return getMediaStreamsByType(item, "Video")[0] || null;
+}
+
+function getVideoQualityLabel(videoStream) {
+  if (!videoStream || safeText(videoStream?.Type).toLowerCase() !== "video") return "";
+
+  const height = Math.max(
+    Number(videoStream?.Height || 0),
+    Number(videoStream?.RealHeight || 0)
+  );
+  const width = Math.max(
+    Number(videoStream?.Width || 0),
+    Number(videoStream?.RealWidth || 0)
+  );
+  const range = safeText(videoStream?.VideoRangeType).toUpperCase();
+  const codec = safeText(videoStream?.Codec).toUpperCase();
+  const fps = parseNumberLike(videoStream?.RealFrameRate || videoStream?.AverageFrameRate || videoStream?.FrameRate);
+  const bitrate = formatBitrate(videoStream?.BitRate);
+
+  let quality = "";
+  if (height >= 2160 || width >= 3800) quality = "4K";
+  else if (height >= 1440) quality = "1440p";
+  else if (height >= 1080 || width >= 1900) quality = "1080p";
+  else if (height >= 720) quality = "720p";
+  else if (height >= 480) quality = "480p";
+  else if (height > 0) quality = `${Math.round(height)}p`;
+
+  const dynamicRange = range.includes("DOVI")
+    ? "Dolby Vision"
+    : (range.includes("HDR") ? "HDR" : "");
+  const fpsText = fps > 0 ? `${fps >= 10 ? fps.toFixed(0) : fps.toFixed(2)} fps`.replace(/\.00(?= fps)/, "") : "";
+
+  return [quality, dynamicRange, codec, fpsText, bitrate].filter(Boolean).join(" • ");
+}
+
+function formatAudioStream(stream) {
+  const language = safeText(stream?.DisplayLanguage || stream?.Language || stream?.LanguageCode);
+  const codec = safeText(stream?.Codec).toUpperCase();
+  const channels = formatChannels(stream?.Channels);
+  const bitrate = formatBitrate(stream?.BitRate);
+  const tags = [language, codec, channels, bitrate].filter(Boolean);
+  const flags = [];
+  if (stream?.IsDefault) flags.push(label("default", "Varsayılan"));
+  if (stream?.IsExternal) flags.push(label("external", "Harici"));
+  if (stream?.Title) flags.push(safeText(stream?.Title));
+  return [tags.join(" • "), flags.join(" • ")].filter(Boolean).join(" - ");
+}
+
+function formatSubtitleStream(stream) {
+  const language = safeText(stream?.DisplayLanguage || stream?.Language || stream?.LanguageCode);
+  const codec = safeText(stream?.Codec).toUpperCase();
+  const title = safeText(stream?.DisplayTitle || stream?.Title);
+  const flags = [];
+  if (stream?.IsDefault) flags.push(label("default", "Varsayılan"));
+  if (stream?.IsForced) flags.push(label("forced", "Zorunlu"));
+  if (stream?.IsExternal) flags.push(label("external", "Harici"));
+  return [language, codec, title, flags.join(" • ")].filter(Boolean).join(" • ");
+}
+
+function renderPreviewStats(stats = []) {
+  if (!stats.length) return "";
+  return `
+    <div class="jmsdm-preview-stats">
+      ${stats.map((stat) => `
+        <div class="jmsdm-preview-stat">
+          <div class="jmsdm-preview-stat-label">${escapeHtml(stat.label)}</div>
+          <div class="jmsdm-preview-stat-value">${escapeHtml(stat.value)}</div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderPreviewFieldSection(title, fields = []) {
+  const visible = (Array.isArray(fields) ? fields : []).filter((field) => safeText(field?.value));
+  if (!visible.length) return "";
+
+  return `
+    <section class="jmsdm-preview-section">
+      <h4 class="jmsdm-preview-section-title">${escapeHtml(title)}</h4>
+      <div class="jmsdm-preview-field-list">
+        ${visible.map((field) => `
+          <div class="jmsdm-preview-field">
+            <div class="jmsdm-preview-field-label">${escapeHtml(field.label)}</div>
+            <div class="jmsdm-preview-field-value">${escapeHtml(field.value)}</div>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderPreviewListSection(title, items = []) {
+  const visible = (Array.isArray(items) ? items : []).filter(Boolean);
+  if (!visible.length) return "";
+
+  return `
+    <section class="jmsdm-preview-section">
+      <h4 class="jmsdm-preview-section-title">${escapeHtml(title)}</h4>
+      <ul class="jmsdm-preview-list">
+        ${visible.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+      </ul>
+    </section>
+  `;
+}
+
+function renderPreviewTagSection(title, items = []) {
+  const visible = (Array.isArray(items) ? items : []).filter(Boolean);
+  if (!visible.length) return "";
+
+  return `
+    <section class="jmsdm-preview-section">
+      <h4 class="jmsdm-preview-section-title">${escapeHtml(title)}</h4>
+      <div class="jmsdm-preview-tags">
+        ${visible.map((item) => `<span class="jmsdm-preview-tag">${escapeHtml(item)}</span>`).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderPreviewChips(chips = []) {
+  const visible = (Array.isArray(chips) ? chips : []).filter((chip) => safeText(chip?.text));
+  if (!visible.length) return "";
+
+  const openTitle = label("watchlistPreviewStudioAdd", "Stüdyo koleksiyonuna ekle");
+
+  return `
+    <div class="jmsdm-preview-chips">
+      ${visible.map((chip) => {
+        const chipText = safeText(chip?.text);
+        const studioId = safeText(chip?.studioId);
+        const studioName = safeText(chip?.studioName, chipText);
+        const className = [
+          "jmsdm-preview-chip",
+          chip?.accent ? "accent" : "",
+          studioId ? "jmsdm-preview-tag-button" : ""
+        ].filter(Boolean).join(" ");
+
+        if (!studioId) {
+          return `<span class="${className}">${escapeHtml(chipText)}</span>`;
+        }
+
+        return `
+          <span
+            class="${className}"
+            role="button"
+            tabindex="0"
+            data-jmsdm-studio-id="${escapeHtml(studioId)}"
+            data-jmsdm-studio-name="${escapeHtml(studioName)}"
+            title="${escapeHtml(openTitle)}"
+            aria-label="${escapeHtml(`${studioName} - ${openTitle}`)}"
+          >${escapeHtml(chipText)}</span>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderPreviewStudioSection(title, studios = []) {
+  const visible = (Array.isArray(studios) ? studios : []).filter((studio) => safeText(studio?.name));
+  if (!visible.length) return "";
+
+  const openTitle = label("watchlistPreviewStudioAdd", "Stüdyo koleksiyonuna ekle");
+
+  return `
+    <section class="jmsdm-preview-section">
+      <h4 class="jmsdm-preview-section-title">${escapeHtml(title)}</h4>
+      <div class="jmsdm-preview-tags">
+        ${visible.map((studio) => {
+          const name = safeText(studio?.name);
+          const studioId = safeText(studio?.id);
+          if (!studioId) {
+            return `<span class="jmsdm-preview-tag">${escapeHtml(name)}</span>`;
+          }
+
+          return `
+            <button
+              type="button"
+              class="jmsdm-preview-tag jmsdm-preview-tag-button"
+              data-jmsdm-studio-id="${escapeHtml(studioId)}"
+              data-jmsdm-studio-name="${escapeHtml(name)}"
+              title="${escapeHtml(openTitle)}"
+              aria-label="${escapeHtml(`${name} - ${openTitle}`)}"
+            >${escapeHtml(name)}</button>
+          `;
+        }).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function notifyStudioHubResult(message, type = "success", icon = "building", duration = 2600) {
+  const cleanMessage = safeText(message);
+  if (!cleanMessage) return;
+
+  try {
+    showNotification(
+      `<i class="fas fa-${icon}" style="margin-right:8px;"></i> ${cleanMessage}`,
+      duration,
+      type
+    );
+  } catch {}
+
+  window.showMessage?.(cleanMessage, type === "error" ? "error" : "success");
+}
+
+function setStudioHubLoadingState(targetEl, isLoading) {
+  const el = targetEl?.closest?.("[data-jmsdm-studio-id]") || targetEl;
+  if (!el) return false;
+
+  if (isLoading) {
+    if (el.__studioHubBusy) return false;
+    el.__studioHubBusy = true;
+    el.__studioHubOriginalHtml = el.innerHTML;
+    el.classList.add("is-loading");
+    el.setAttribute("aria-busy", "true");
+    el.style.pointerEvents = "none";
+    el.style.opacity = "0.82";
+    el.innerHTML = `<i class="fas fa-spinner fa-spin" aria-hidden="true" style="margin-right:6px;"></i>${el.__studioHubOriginalHtml || ""}`;
+    try {
+      if ("disabled" in el) el.disabled = true;
+    } catch {}
+    return true;
+  }
+
+  if (el.__studioHubOriginalHtml != null) {
+    el.innerHTML = el.__studioHubOriginalHtml;
+  }
+  el.__studioHubOriginalHtml = null;
+  el.__studioHubBusy = false;
+  el.classList.remove("is-loading");
+  el.removeAttribute("aria-busy");
+  el.style.pointerEvents = "";
+  el.style.opacity = "";
+  try {
+    if ("disabled" in el) el.disabled = false;
+  } catch {}
+  return true;
+}
+
+async function maybeAutoEnsureStudioHub(studioId, studioName) {
+  const cleanStudioId = safeText(studioId);
+  const cleanStudioName = safeText(studioName);
+  if (!cleanStudioId || !cleanStudioName) {
+    return { attempted: false, added: false };
+  }
+
+  if (config?.currentUserIsAdmin !== true || config?.studioHubsAutoAddFromWatchlistCopy !== true) {
+    return { attempted: false, added: false };
+  }
+
+  if (_autoAddStudioHubPendingIds.has(cleanStudioId)) {
+    return { attempted: false, added: false, skipped: true, pending: true };
+  }
+
+  if (_autoAddedStudioHubIds.has(cleanStudioId)) {
+    return { attempted: false, added: false, skipped: true, existing: true };
+  }
+
+  _autoAddStudioHubPendingIds.add(cleanStudioId);
+  try {
+    const result = await ensureStudioHubManualEntry({
+      studioId: cleanStudioId,
+      name: cleanStudioName
+    });
+    _autoAddedStudioHubIds.add(cleanStudioId);
+
+    if (result?.created) {
+      try {
+        window.dispatchEvent(new CustomEvent(JMS_STUDIO_HUB_MANUAL_ENTRY_ADDED_EVENT, {
+          detail: {
+            source: "details-modal-auto-add",
+            studioId: cleanStudioId,
+            studioName: cleanStudioName,
+            entry: result?.entry || null,
+            entries: Array.isArray(result?.entries) ? result.entries : []
+          }
+        }));
+      } catch {}
+    }
+
+    return {
+      attempted: true,
+      added: result?.created === true,
+      existing: result?.existing === true,
+      entry: result?.entry || null,
+      entries: Array.isArray(result?.entries) ? result.entries : []
+    };
+  } catch (error) {
+    return {
+      attempted: true,
+      added: false,
+      error
+    };
+  } finally {
+    _autoAddStudioHubPendingIds.delete(cleanStudioId);
+  }
+}
+
+async function maybeAutoEnsureStudioHubTmdbLogo(studioId, studioName, { entries = null } = {}) {
+  const cleanStudioId = safeText(studioId);
+  const cleanStudioName = safeText(studioName);
+  if (!cleanStudioId || !cleanStudioName) {
+    return { attempted: false, uploaded: false };
+  }
+
+  if (config?.currentUserIsAdmin !== true || config?.studioHubsAutoAddFromWatchlistCopy !== true) {
+    return { attempted: false, uploaded: false };
+  }
+
+  if (_autoStudioHubLogoPendingIds.has(cleanStudioId)) {
+    return { attempted: false, uploaded: false, skipped: true, pending: true };
+  }
+
+  if (_autoStudioHubLogoResolvedIds.has(cleanStudioId)) {
+    return { attempted: false, uploaded: false, skipped: true };
+  }
+
+  _autoStudioHubLogoPendingIds.add(cleanStudioId);
+  try {
+    const result = await ensureStudioHubLogoFromTmdb({
+      studioId: cleanStudioId,
+      name: cleanStudioName,
+      manualEntries: Array.isArray(entries) ? entries : null
+    });
+    _autoStudioHubLogoResolvedIds.add(cleanStudioId);
+
+    return {
+      attempted: result?.attempted !== false,
+      uploaded: result?.uploaded === true,
+      skipped: result?.skipped === true,
+      reason: safeText(result?.reason),
+      entry: result?.entry || null,
+      entries: Array.isArray(result?.entries) ? result.entries : []
+    };
+  } catch (error) {
+    return {
+      attempted: true,
+      uploaded: false,
+      error
+    };
+  } finally {
+    _autoStudioHubLogoPendingIds.delete(cleanStudioId);
+  }
+}
+
 async function fetchSimilarItems(itemId, { signal, limit = 12 } = {}) {
   try {
     const userId =
@@ -2451,8 +2977,13 @@ export async function openDetailsModal({ itemId, serverId = "", preferBackdropIn
   const year = displayItem.ProductionYear ? String(displayItem.ProductionYear) : "";
   const rating = safeText(displayItem.OfficialRating, "");
   const community = displayItem.CommunityRating ? String(displayItem.CommunityRating.toFixed?.(1) ?? displayItem.CommunityRating) : "";
-  const runtime = fmtRuntime(displayItem.RunTimeTicks);
-  const genres = Array.isArray(displayItem.Genres) ? displayItem.Genres.slice(0, 4) : [];
+  const runtime = fmtRuntime(
+    baseItem?.RunTimeTicks ||
+    displayItem?.RunTimeTicks ||
+    baseItem?.CumulativeRunTimeTicks ||
+    displayItem?.CumulativeRunTimeTicks
+  );
+  const genres = Array.isArray(displayItem.Genres) ? displayItem.Genres.slice(0, 6) : [];
   const typeRaw = safeText(baseItem?.Type || displayItem?.Type, "");
   const type = localizeItemType(typeRaw);
 
@@ -2507,6 +3038,105 @@ export async function openDetailsModal({ itemId, serverId = "", preferBackdropIn
     seasons = await fetchSeasonsForSeries(seriesId, { signal: _abort.signal });
     if (!_open || _abort.signal.aborted) return;
   }
+
+  const mediaSource =
+    (Array.isArray(baseItem?.MediaStreams) && baseItem.MediaStreams.length)
+      ? baseItem
+      : displayItem;
+  const creditSource =
+    (Array.isArray(displayItem?.People) && displayItem.People.length)
+      ? displayItem
+      : baseItem;
+  const studioSource =
+    (Array.isArray(displayItem?.Studios) && displayItem.Studios.length)
+      ? displayItem
+      : baseItem;
+  const runtimeTicks = Number(
+    baseItem?.RunTimeTicks ||
+    displayItem?.RunTimeTicks ||
+    baseItem?.CumulativeRunTimeTicks ||
+    displayItem?.CumulativeRunTimeTicks ||
+    0
+  );
+  const playbackTicks = Number(
+    baseItem?.UserData?.PlaybackPositionTicks ||
+    displayItem?.UserData?.PlaybackPositionTicks ||
+    0
+  );
+  const remaining = runtimeTicks > playbackTicks ? fmtRuntime(runtimeTicks - playbackTicks) : "";
+  const finishTime = playbackTicks > 0 ? formatFinishTime(runtimeTicks, playbackTicks) : "";
+  const communityRatingText = formatCommunityRating(displayItem?.CommunityRating || baseItem?.CommunityRating);
+  const studioEntries = getStudioEntries(studioSource);
+  const studioNames = studioEntries.map((studio) => studio.name);
+  const primaryStudioEntry = studioEntries[0] || null;
+  const directors = isBoxSet ? [] : getPeopleNames(creditSource, "Director", 4);
+  const writers = isBoxSet ? [] : getPeopleNames(creditSource, "Writer", 4);
+  const actors = isBoxSet ? [] : getActorNames(creditSource, 8);
+  const artists = uniqTextList(baseItem?.Artists || displayItem?.Artists || []).slice(0, 8);
+  const albumArtist = safeText(baseItem?.AlbumArtist || displayItem?.AlbumArtist);
+  const albumName = safeText(baseItem?.Album || displayItem?.Album);
+  const videoStream = isBoxSet ? null : getPrimaryVideoStream(mediaSource);
+  const videoQuality = getVideoQualityLabel(videoStream);
+  const audioTracks = isBoxSet
+    ? []
+    : getMediaStreamsByType(mediaSource, "Audio").map(formatAudioStream).filter(Boolean).slice(0, 4);
+  const subtitleTracks = isBoxSet
+    ? []
+    : getMediaStreamsByType(mediaSource, "Subtitle").map(formatSubtitleStream).filter(Boolean).slice(0, 4);
+  const seasonEpisodeText = (() => {
+    if (!isEpisode) return "";
+    const seasonNumber = Number(baseItem?.ParentIndexNumber || 0);
+    const episodeNumber = Number(baseItem?.IndexNumber || 0);
+    const parts = [];
+    if (Number.isFinite(seasonNumber) && seasonNumber > 0) {
+      parts.push(`S${String(seasonNumber).padStart(2, "0")}`);
+    }
+    if (Number.isFinite(episodeNumber) && episodeNumber > 0) {
+      parts.push(`E${String(episodeNumber).padStart(2, "0")}`);
+    }
+    return parts.join(" • ");
+  })();
+  const subtitleLine = [year, runtime].filter(Boolean).join(" • ");
+  const infoLine = [
+    seasonEpisodeText,
+    isMusicType ? albumArtist : "",
+    isMusicType ? albumName : ""
+  ].filter(Boolean).join(" • ");
+  const previewChips = [
+    communityRatingText ? { text: communityRatingText } : null,
+    rating ? { text: rating, accent: true } : null,
+    videoQuality ? { text: videoQuality.split(" • ").slice(0, 2).join(" • ") } : null,
+    primaryStudioEntry ? {
+      text: primaryStudioEntry.name,
+      studioId: primaryStudioEntry.id,
+      studioName: primaryStudioEntry.name
+    } : null
+  ].filter((chip) => safeText(chip?.text)).slice(0, 4);
+  const stats = [
+    { label: label("sure", "Süre"), value: runtime },
+    { label: label("watchlistPreviewRemaining", "Kalan"), value: remaining },
+    { label: label("watchlistPreviewFinishAt", "Bitiş"), value: finishTime },
+    { label: label("watchlistPreviewVideoQuality", "Video"), value: videoQuality || safeText(baseItem?.MediaType || displayItem?.MediaType) },
+    { label: label("yonetmen", "Yönetmen"), value: directors.join(", ") },
+    { label: label("watchlistPreviewStudio", "Stüdyo"), value: studioNames.join(", ") || albumArtist || albumName }
+  ].filter((entry) => safeText(entry?.value));
+  const mediaFields = isBoxSet
+    ? []
+    : [
+        { label: label("watchlistPreviewVideoTrack", "Video"), value: videoQuality },
+        { label: label("watchlistPreviewAudioCount", "Ses"), value: audioTracks.length ? `${audioTracks.length} ${label("watchlistPreviewTrackSuffix", "parça")}` : "" },
+        { label: label("watchlistPreviewSubtitleCount", "Altyazı"), value: subtitleTracks.length ? `${subtitleTracks.length} ${label("watchlistPreviewTrackSuffix", "parça")}` : "" }
+      ];
+  const creditFields = isBoxSet
+    ? []
+    : [
+        { label: label("yonetmen", "Yönetmen"), value: directors.join(", ") },
+        { label: label("watchlistPreviewWriter", "Yazar"), value: writers.join(", ") },
+        { label: label("watchlistPreviewActors", "Oyuncular"), value: actors.join(", ") },
+        { label: label("watchlistPreviewArtists", "Sanatçılar"), value: artists.join(", ") },
+        { label: label("watchlistPreviewAlbum", "Albüm"), value: albumName },
+        { label: label("watchlistPreviewAlbumArtist", "Albüm Sanatçısı"), value: albumArtist }
+      ];
 
   let episodes = [];
   if (seriesId) {
@@ -2732,35 +3362,48 @@ wireMiniCardDelegation();
 
           <div class="jmsdm-body">
             <div class="jmsdm-left">
-              <div class="jmsdm-meta">
-                ${year ? `<span class="jmsdm-pill">${year}</span>` : ""}
-                ${rating ? `<span class="jmsdm-pill">${rating}</span>` : ""}
-                ${runtime ? `<span class="jmsdm-pill">${runtime}</span>` : ""}
-                ${community ? `<span class="jmsdm-pill">★ ${community}</span>` : ""}
-                ${type ? `<span class="jmsdm-pill">${type}</span>` : ""}
+              <div class="jmsdm-preview-shell">
+                <div class="jmsdm-preview-hero">
+                  <div class="jmsdm-preview-hero-inner">
+                    <div class="jmsdm-preview-head">
+                      <div class="jmsdm-preview-kicker">${escapeHtml(type || safeText(baseItem?.Type, ""))}</div>
+                      <h2 class="jmsdm-preview-title">${escapeHtml(name)}</h2>
+                      ${subtitleLine ? `<div class="jmsdm-preview-subtitle">${escapeHtml(subtitleLine)}</div>` : ""}
+                      ${infoLine ? `<div class="jmsdm-preview-subtitle">${escapeHtml(infoLine)}</div>` : ""}
+                      ${renderPreviewChips(previewChips)}
+                    </div>
+                  </div>
+                </div>
+
+                <div class="jmsdm-preview-body">
+                  <div class="jmsdm-actions">
+                    <button class="jmsdm-btn primary jmsdm-play">
+                      ${icon("M8 5v14l11-7z")} ${config.languageLabels.playNowLabel || "Şimdi Oynat"}
+                    </button>
+                    <button class="jmsdm-btn jmsdm-openpage">
+                      ${icon("M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3z")} ${config.languageLabels.goToPageLabel || "Sayfaya Git"}
+                    </button>
+                    <button class="jmsdm-btn jmsdm-fav" aria-pressed="${isFavorite ? "true" : "false"}">
+                      ${icon(isFavorite ? "M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" : "M12.1 18.55l-.1.1-.11-.1C7.14 14.24 4 11.39 4 8.5 4 6.5 5.5 5 7.5 5c1.54 0 3.04.99 3.57 2.36h1.87C13.46 5.99 14.96 5 16.5 5 18.5 5 20 6.5 20 8.5c0 2.89-3.14 5.74-7.9 10.05z")}
+                      ${getWatchlistButtonText(baseItem, isFavorite)}
+                    </button>
+                    <button class="jmsdm-btn jmsdm-watchlist-open">
+                      ${icon("M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z")} ${config.languageLabels.watchlistOpen || "İzleme Listesi"}
+                    </button>
+                  </div>
+
+                  <div class="jmsdm-overview">${overview}</div>
+                  ${renderPreviewStats(stats)}
+                  ${renderPreviewFieldSection(label("watchlistPreviewMediaSection", "Medya Özeti"), mediaFields)}
+                  ${renderPreviewListSection(label("watchlistPreviewAudioTracks", "Ses Parçaları"), audioTracks)}
+                  ${renderPreviewListSection(label("watchlistPreviewSubtitleTracks", "Altyazılar"), subtitleTracks)}
+                  ${renderPreviewFieldSection(label("watchlistPreviewCredits", "Künye"), creditFields)}
+                  ${renderPreviewTagSection(label("genre", "Tür"), genres)}
+                  ${renderPreviewStudioSection(label("watchlistPreviewStudios", "Stüdyolar"), studioEntries)}
+                </div>
               </div>
 
-              ${genres.length ? `<div class="jmsdm-meta">${genres.map(g => `<span class="jmsdm-pill">${g}</span>`).join("")}</div>` : ""}
-
-              <h2 class="jmsdm-title">${name}</h2>
-
-              <div class="jmsdm-actions">
-                <button class="jmsdm-btn primary jmsdm-play">
-                  ${icon("M8 5v14l11-7z")} ${config.languageLabels.playNowLabel || "Şimdi Oynat"}
-                </button>
-                <button class="jmsdm-btn jmsdm-openpage">
-                  ${icon("M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3z")} ${config.languageLabels.goToPageLabel || "Sayfaya Git"}
-                </button>
-                <button class="jmsdm-btn jmsdm-fav" aria-pressed="${isFavorite ? "true" : "false"}">
-                  ${icon(isFavorite ? "M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" : "M12.1 18.55l-.1.1-.11-.1C7.14 14.24 4 11.39 4 8.5 4 6.5 5.5 5 7.5 5c1.54 0 3.04.99 3.57 2.36h1.87C13.46 5.99 14.96 5 16.5 5 18.5 5 20 6.5 20 8.5c0 2.89-3.14 5.74-7.9 10.05z")}
-                  ${getWatchlistButtonText(baseItem, isFavorite)}
-                </button>
-                <button class="jmsdm-btn jmsdm-watchlist-open">
-                  ${icon("M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z")} ${config.languageLabels.watchlistOpen || "İzleme Listesi"}
-                </button>
-              </div>
-              <div class="jmsdm-overview">${overview}</div>
-              ${supportsTmdbReviews ? `<div class="jmsdm-tmdb-reviews" style="margin-top:14px;"></div>` : ""}
+              ${supportsTmdbReviews ? `<div class="jmsdm-tmdb-reviews" style="margin-top:18px;"></div>` : ""}
             </div>
 
             <div class="jmsdm-right">
@@ -2864,6 +3507,110 @@ wireMiniCardDelegation();
       });
     });
   }
+
+  addEventListener(root, "click", async (e) => {
+    const studioBtn = e.target?.closest?.(".jmsdm-preview-tag-button[data-jmsdm-studio-id]");
+    if (!studioBtn || !root.contains(studioBtn)) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (!setStudioHubLoadingState(studioBtn, true)) return;
+
+    const studioId = safeText(studioBtn.getAttribute("data-jmsdm-studio-id"));
+    const studioName = safeText(studioBtn.getAttribute("data-jmsdm-studio-name"));
+    if (!studioId) {
+      setStudioHubLoadingState(studioBtn, false);
+      return;
+    }
+
+    const copied = await copyTextToClipboard(studioId);
+    if (copied) {
+      studioBtn.classList.add("is-copied");
+      clearTimeout(studioBtn.__copiedTimer);
+      studioBtn.__copiedTimer = setTimeout(() => {
+        studioBtn.classList.remove("is-copied");
+        studioBtn.__copiedTimer = 0;
+      }, 1400);
+    } else {
+      const message = studioName
+        ? `${studioName}: ${label("watchlistPreviewStudioCopyFailed", "Studio ID kopyalanamadı.")}`
+        : label("watchlistPreviewStudioCopyFailed", "Studio ID kopyalanamadı.");
+      notifyStudioHubResult(message, "error", "clipboard", 2400);
+    }
+
+    void (async () => {
+      try {
+        const autoAddResult = await maybeAutoEnsureStudioHub(studioId, studioName);
+        if (autoAddResult?.pending) return;
+
+        if (autoAddResult?.attempted && autoAddResult?.added === false && autoAddResult?.existing !== true) {
+          const message = studioName
+            ? `${studioName}: ${safeText(autoAddResult?.error?.message, label("watchlistPreviewStudioAutoAddFailed", "Koleksiyon otomatik eklenemedi."))}`
+            : safeText(autoAddResult?.error?.message, label("watchlistPreviewStudioAutoAddFailed", "Koleksiyon otomatik eklenemedi."));
+          notifyStudioHubResult(message, "error", "triangle-exclamation", 3200);
+          return;
+        }
+
+        const logoResult = await maybeAutoEnsureStudioHubTmdbLogo(studioId, studioName, {
+          entries: autoAddResult?.entries
+        });
+
+        if (autoAddResult?.added && logoResult?.uploaded) {
+          const message = studioName
+            ? `${studioName}: ${label("watchlistPreviewStudioAutoAdded", "Koleksiyon listesine otomatik kaydedildi.")} ${label("watchlistPreviewStudioTmdbLogoSaved", "TMDb logosu da otomatik kaydedildi.")}`
+            : `${label("watchlistPreviewStudioAutoAdded", "Koleksiyon listesine otomatik kaydedildi.")} ${label("watchlistPreviewStudioTmdbLogoSaved", "TMDb logosu da otomatik kaydedildi.")}`;
+          notifyStudioHubResult(message, "success", "building", 3000);
+          return;
+        }
+
+        if (autoAddResult?.existing && logoResult?.uploaded) {
+          const message = studioName
+            ? `${studioName}: ${label("manualCollectionDuplicate", "Bu koleksiyon zaten ekli.")} ${label("watchlistPreviewStudioTmdbLogoSavedSingle", "TMDb logosu otomatik kaydedildi.")}`
+            : `${label("manualCollectionDuplicate", "Bu koleksiyon zaten ekli.")} ${label("watchlistPreviewStudioTmdbLogoSavedSingle", "TMDb logosu otomatik kaydedildi.")}`;
+          notifyStudioHubResult(message, "success", "building", 3000);
+          return;
+        }
+
+        if (autoAddResult?.added) {
+          const message = studioName
+            ? `${studioName}: ${label("watchlistPreviewStudioAutoAdded", "Koleksiyon listesine otomatik kaydedildi.")}`
+            : label("watchlistPreviewStudioAutoAdded", "Koleksiyon listesine otomatik kaydedildi.");
+          notifyStudioHubResult(message, "success", "building", 2600);
+          return;
+        }
+
+        if (autoAddResult?.existing) {
+          const message = studioName
+            ? `${studioName}: ${label("manualCollectionDuplicate", "Bu koleksiyon zaten ekli.")}`
+            : label("manualCollectionDuplicate", "Bu koleksiyon zaten ekli.");
+          notifyStudioHubResult(message, "success", "building", 2600);
+          return;
+        }
+
+        if (logoResult?.uploaded) {
+          const message = studioName
+            ? `${studioName}: ${label("watchlistPreviewStudioTmdbLogoSavedSingle", "TMDb logosu otomatik kaydedildi.")}`
+            : label("watchlistPreviewStudioTmdbLogoSavedSingle", "TMDb logosu otomatik kaydedildi.");
+          notifyStudioHubResult(message, "success", "image", 2600);
+        }
+      } finally {
+        setStudioHubLoadingState(studioBtn, false);
+      }
+    })();
+
+  });
+
+  addEventListener(root, "keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " " && e.key !== "Spacebar") return;
+
+    const studioChip = e.target?.closest?.(".jmsdm-preview-chip.jmsdm-preview-tag-button[data-jmsdm-studio-id]");
+    if (!studioChip || !root.contains(studioChip)) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    studioChip.click();
+  });
 
   if (favBtn) {
     addEventListener(favBtn, "click", async (e) => {

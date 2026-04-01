@@ -11,9 +11,11 @@ export const musicPlayerState = {
   isPlayingReported: false,
   lastReportedItemId: null,
   isPlayerVisible: false,
+  mediaSessionInitialized: false,
   modernPlayer: null,
   albumArtEl: document.querySelector('#player-album-art'),
   currentArtwork: null,
+  currentArtworkTrackId: null,
   volumeBtn: null,
   modernTitleEl: null,
   modernArtistEl: null,
@@ -38,6 +40,7 @@ export const musicPlayerState = {
   metaWrapper: null,
   metaContainer: null,
   mediaSession: null,
+  audioElement: null,
   id3TagsCache: {},
   showRemaining: false,
   selectionMode: false,
@@ -60,6 +63,11 @@ export const musicPlayerState = {
     const audio = new Audio();
     audio.preload = "metadata";
     audio.crossOrigin = "anonymous";
+    audio.playsInline = true;
+    audio.setAttribute("playsinline", "");
+    audio.setAttribute("webkit-playsinline", "");
+    audio.controls = true;
+    audio.setAttribute("controls", "");
 
     function fadeAudio(audioEl, fromVolume, toVolume, durationSec) {
       const steps = 30;

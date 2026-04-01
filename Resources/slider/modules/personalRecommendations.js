@@ -753,6 +753,69 @@ function markImageTerminalFailure(img, data, fallbackSrc = PLACEHOLDER_URL) {
   markImageSettled(img, fallbackSrc, { disableRecovery: true, disableHi: true });
 }
 
+function requestHiResImage(img) {
+  if (!img || !img.isConnected) return;
+  const data = img.__data || {};
+  if (img.__disableRecovery || hasKnownMissingImage(data)) {
+    markImageSettled(img, data.fallback || PLACEHOLDER_URL, { disableRecovery: true, disableHi: true });
+    return;
+  }
+  if (img.__disableHi) return;
+  if (!__shouldRequestHiRes()) return;
+
+  const now = Date.now();
+  const retryAfter = Number(img.__retryAfter || 0);
+  const canRetry = !retryAfter || now >= retryAfter;
+  const retryingHi = img.__hiFailed === true;
+
+  if (retryingHi && !canRetry) return;
+  if (img.__hiRequested && !(retryingHi && canRetry)) return;
+
+  img.__pendingHi = false;
+  img.__hiRequested = true;
+  img.__hiFailed = false;
+  img.__phase = 'hi';
+
+  const token = (img.__retryToken = (Number(img.__retryToken || 0) + 1));
+  const hqSrc = data.hqSrc
+    ? (retryingHi ? __appendCb(data.hqSrc, `${now}-${token}`) : data.hqSrc)
+    : null;
+  const hqSrcset = data.hqSrcset
+    ? data.hqSrcset.split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+        .map(part => {
+          const m = part.match(/^(\S+)\s+(.*)$/);
+          if (!m) return part;
+          const u = retryingHi ? __appendCb(m[1], `${now}-${token}`) : m[1];
+          return `${u} ${m[2]}`;
+        })
+        .join(', ')
+    : null;
+
+  (async () => {
+    if (hqSrc) {
+      const ok = await __preloadDecode(hqSrc);
+      if (!ok) throw new Error('decode failed');
+    }
+    if (hqSrcset) { try { img.srcset = hqSrcset; } catch {} }
+    if (hqSrc)    { try { img.src = hqSrc; } catch {} }
+  })().catch(() => {
+    const hiFailures = incrementImageFailure(img, 'hi');
+    if (hiFailures >= (PRC_IMAGE_RETRY_LIMITS.hi || 2)) {
+      const settleSrc = img.currentSrc || img.src || data.lqSrc || data.fallback || PLACEHOLDER_URL;
+      markImageSettled(img, settleSrc, { disableRecovery: true, disableHi: true });
+      return;
+    }
+    img.__hiFailed = true;
+    img.__hiRequested = false;
+    img.__phase = 'lq';
+    img.__retryAfter = Date.now() + 12_000;
+    try { __imgIO.unobserve(img); } catch {}
+    try { __imgIO.observe(img); } catch {}
+  });
+}
+
 const __imgIO = new IntersectionObserver((entries) => {
   for (const ent of entries) {
     const img = ent.target;
@@ -765,58 +828,12 @@ const __imgIO = new IntersectionObserver((entries) => {
         if (img.__disableHi) continue;
         if (!__shouldRequestHiRes()) continue;
 
-        const now = Date.now();
-        const retryAfter = Number(img.__retryAfter || 0);
-        const canRetry = !retryAfter || now >= retryAfter;
-        const retryingHi = img.__hiFailed === true;
-
-        if (retryingHi && !canRetry) continue;
-
-        if (!img.__hiRequested || (retryingHi && canRetry)) {
-          img.__hiRequested = true;
-          img.__hiFailed = false;
-          img.__phase = 'hi';
-
-          const data = img.__data || {};
-          const token = (img.__retryToken = (Number(img.__retryToken || 0) + 1));
-          const hqSrc = data.hqSrc
-            ? (retryingHi ? __appendCb(data.hqSrc, `${now}-${token}`) : data.hqSrc)
-            : null;
-          const hqSrcset = data.hqSrcset
-            ? data.hqSrcset.split(',')
-                .map(s => s.trim())
-                .filter(Boolean)
-                .map(part => {
-                  const m = part.match(/^(\S+)\s+(.*)$/);
-                  if (!m) return part;
-                  const u = retryingHi ? __appendCb(m[1], `${now}-${token}`) : m[1];
-                  return `${u} ${m[2]}`;
-                })
-                .join(', ')
-            : null;
-
-          (async () => {
-            if (hqSrc) {
-              const ok = await __preloadDecode(hqSrc);
-              if (!ok) throw new Error('decode failed');
-            }
-            if (hqSrcset) { try { img.srcset = hqSrcset; } catch {} }
-            if (hqSrc)    { try { img.src = hqSrc; } catch {} }
-          })().catch(() => {
-            const hiFailures = incrementImageFailure(img, 'hi');
-            if (hiFailures >= (PRC_IMAGE_RETRY_LIMITS.hi || 2)) {
-              const settleSrc = img.currentSrc || img.src || data.lqSrc || data.fallback || PLACEHOLDER_URL;
-              markImageSettled(img, settleSrc, { disableRecovery: true, disableHi: true });
-              return;
-            }
-            img.__hiFailed = true;
-            img.__hiRequested = false;
-            img.__phase = 'lq';
-            img.__retryAfter = Date.now() + 12_000;
-            try { __imgIO.unobserve(img); } catch {}
-            try { __imgIO.observe(img); } catch {}
-          });
+        if (data.lqSrc && img.__lqLoaded !== true) {
+          img.__pendingHi = true;
+          continue;
         }
+
+        requestHiResImage(img);
       } else {
     }
   }
@@ -1227,6 +1244,8 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
     img.__hiRequested = true;
     img.__disableHi = true;
     img.__hydrated = true;
+    img.__lqLoaded = true;
+    img.__pendingHi = false;
     return;
   }
 
@@ -1248,6 +1267,8 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
   img.__fallbackState = { lqNoTagTried: false, hiNoTagTried: false };
   img.__disableRecovery = false;
   img.__imageFailureCounts = { lq: 0, hi: 0 };
+  img.__lqLoaded = false;
+  img.__pendingHi = false;
 
   try { img.removeAttribute('srcset'); } catch {}
   try { img.classList.remove('__hydrated'); } catch {}
@@ -1348,10 +1369,34 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
       resetImageFailures(img);
     }
 
+    if (img.__phase === 'lq' && !fallbackRecoveryActive) {
+      img.__lqLoaded = true;
+      img.classList.add('__hydrated');
+      img.classList.add('is-lqip');
+      img.__hydrated = true;
+
+      if (!wantsHi) {
+        img.classList.remove('is-lqip');
+        try { __imgIO.unobserve(img); } catch {}
+        return;
+      }
+
+      if (img.__pendingHi) {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            if (!img.isConnected || img.__phase !== 'lq' || img.__pendingHi !== true) return;
+            requestHiResImage(img);
+          });
+        });
+      }
+      return;
+    }
+
     if (img.__phase === 'hi' || !wantsHi) {
       img.classList.add('__hydrated');
       img.classList.remove('is-lqip');
       img.__hydrated = true;
+      img.__pendingHi = false;
       try { __imgIO.unobserve(img); } catch {}
       try { img.removeEventListener('error', onError); } catch {}
       try { img.removeEventListener('load',  onLoad); } catch {}
@@ -1367,6 +1412,7 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
       img.classList.remove('is-lqip');
       img.__hydrated = true;
       img.__hiRequested = false;
+      img.__pendingHi = false;
       img.__retryAfter = Math.max(Number(img.__retryAfter || 0), Date.now() + 12_000);
       try { __imgIO.unobserve(img); } catch {}
       try { __imgIO.observe(img); } catch {}
@@ -1398,6 +1444,8 @@ function unobserveImage(img) {
   delete img.__retryToken;
   delete img.__fallbackState;
   delete img.__imageFailureCounts;
+  delete img.__lqLoaded;
+  delete img.__pendingHi;
   if (img) {
     try { img.removeAttribute('srcset'); } catch {}
     try { delete img.__data; } catch {}

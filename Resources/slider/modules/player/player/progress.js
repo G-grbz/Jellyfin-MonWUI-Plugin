@@ -43,15 +43,19 @@ function getEffectiveDuration() {
     return Number.NaN;
   }
 
-  const { audio } = musicPlayerState;
+  const { audio, currentTrack } = musicPlayerState;
 
   if (audio && isFinite(audio.duration) && audio.duration > 0) {
     return audio.duration;
   }
+  const runtimeTicks = Number(currentTrack?.RunTimeTicks);
+  if (Number.isFinite(runtimeTicks) && runtimeTicks > 0) {
+    return runtimeTicks / 10_000_000;
+  }
   if (isFinite(musicPlayerState.currentTrackDuration)) {
     return musicPlayerState.currentTrackDuration;
   }
-  return 30;
+  return 0;
 }
 
 function updateMediaPositionState() {

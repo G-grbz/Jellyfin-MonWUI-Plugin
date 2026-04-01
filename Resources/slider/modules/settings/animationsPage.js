@@ -9,15 +9,13 @@ export function createAnimationPanel(config, labels) {
 
     const slideAnimDiv = document.createElement('div');
     slideAnimDiv.className = 'fsetting-item';
-    const slideAnimLabel = document.createElement('label');
 
     const slideAnimCheckbox = createCheckbox(
         'enableSlideAnimations',
         labels.enableSlideAnimations || 'Slayt Animasyonlarını Etkinleştir',
         config.enableSlideAnimations
     );
-    slideAnimLabel.prepend(slideAnimCheckbox);
-    slideAnimDiv.appendChild(slideAnimLabel);
+    slideAnimDiv.appendChild(slideAnimCheckbox);
 
     const slideTypeDiv = document.createElement('div');
     slideTypeDiv.className = 'fsetting-item slide-anim-container';
@@ -78,7 +76,6 @@ export function createAnimationPanel(config, labels) {
 
     const dotAnimDiv = document.createElement('div');
     dotAnimDiv.className = 'fsetting-item';
-    const dotAnimLabel = document.createElement('label');
 
     const dotAnimCheckbox = createCheckbox(
         'enableDotPosterAnimations',
@@ -86,8 +83,7 @@ export function createAnimationPanel(config, labels) {
         config.enableDotPosterAnimations
     );
 
-    dotAnimLabel.prepend(dotAnimCheckbox);
-    dotAnimDiv.appendChild(dotAnimLabel);
+    dotAnimDiv.appendChild(dotAnimCheckbox);
 
     const dotTypeDiv = document.createElement('div');
     dotTypeDiv.className = 'fsetting-item dot-anim-container';

@@ -21,6 +21,20 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
     {
         private static readonly string[] AllowedVideoExtensions = { ".mp4", ".webm", ".m4v", ".mov" };
         private static readonly string[] AllowedLogoExtensions = { ".png", ".webp", ".svg", ".jpg", ".jpeg" };
+        private static readonly string[] DefaultStudioHubNames =
+        {
+            "Marvel Studios",
+            "Pixar",
+            "Walt Disney Pictures",
+            "Disney+",
+            "DC",
+            "Warner Bros. Pictures",
+            "Lucasfilm Ltd.",
+            "Columbia Pictures",
+            "Paramount Pictures",
+            "Netflix",
+            "DreamWorks Animation"
+        };
         private readonly IUserManager _users;
 
         public StudioHubsController(IUserManager users)
@@ -53,6 +67,10 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
             var plugin = JMSFusionPlugin.Instance ?? throw new InvalidOperationException("Plugin not available.");
             var cfg = plugin.Configuration;
             cfg.StudioHubVisibilityEntries ??= new();
+            if (SanitizeStudioHubVisibilityEntries(cfg))
+            {
+                plugin.UpdateConfiguration(cfg);
+            }
 
             var prof = NormalizeProfile(profile);
             var userId = userCheck.UserId.ToString("D");
@@ -87,6 +105,8 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
             var plugin = JMSFusionPlugin.Instance ?? throw new InvalidOperationException("Plugin not available.");
             var cfg = plugin.Configuration;
             cfg.StudioHubVisibilityEntries ??= new();
+            var visibilitySanitized = SanitizeStudioHubVisibilityEntries(cfg);
+            var allowedNames = BuildAllowedStudioHubNameSet(cfg);
 
             var prof = NormalizeProfile(request?.Profile ?? profile);
             var userId = userCheck.UserId.ToString("D");
@@ -95,11 +115,11 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
                 string.Equals(NormalizeProfile(item?.Profile), prof, StringComparison.OrdinalIgnoreCase));
 
             var hiddenNames = request?.HiddenNames is null
-                ? NormalizeHiddenNames(existing?.HiddenNames)
-                : NormalizeHiddenNames(request.HiddenNames);
+                ? SanitizeVisibilityNames(existing?.HiddenNames, allowedNames)
+                : SanitizeVisibilityNames(request.HiddenNames, allowedNames);
             var orderNames = request?.OrderNames is null
-                ? NormalizeHiddenNames(existing?.OrderNames)
-                : NormalizeHiddenNames(request.OrderNames);
+                ? SanitizeVisibilityNames(existing?.OrderNames, allowedNames)
+                : SanitizeVisibilityNames(request.OrderNames, allowedNames);
             var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
             cfg.StudioHubVisibilityEntries = cfg.StudioHubVisibilityEntries
@@ -131,7 +151,10 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
                 .ThenBy(item => NormalizeProfile(item?.Profile), StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            plugin.UpdateConfiguration(cfg);
+            if (visibilitySanitized || hiddenNames.Count > 0 || orderNames.Count > 0 || existing is not null)
+            {
+                plugin.UpdateConfiguration(cfg);
+            }
 
             NoCache();
             return Ok(new
@@ -197,6 +220,24 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
             return Ok(new { ok = true, entry, entries = cfg.StudioHubManualEntries });
         }
 
+        [HttpGet("collection")]
+        public IActionResult GetCollections()
+        {
+            var plugin = JMSFusionPlugin.Instance ?? throw new InvalidOperationException("Plugin not available.");
+            var cfg = plugin.Configuration;
+            if (SanitizeStudioHubAssets(plugin, cfg))
+            {
+                plugin.UpdateConfiguration(cfg);
+            }
+
+            NoCache();
+            return Ok(new
+            {
+                ok = true,
+                entries = cfg.StudioHubManualEntries
+            });
+        }
+
         [HttpDelete("collection")]
         public IActionResult DeleteCollection([FromQuery] string? studioId)
         {
@@ -233,6 +274,7 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
                 cfg.StudioHubVideoEntries.Remove(videoEntry);
             }
 
+            RemoveCollectionNameFromVisibilityEntries(cfg, existing.Name);
             cfg.StudioHubManualEntries.Remove(existing);
             plugin.UpdateConfiguration(cfg);
 
@@ -334,6 +376,7 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
         }
 
         [HttpGet("logo/{fileName}")]
+        [HttpHead("logo/{fileName}")]
         public IActionResult GetLogo(string fileName)
         {
             var cleanFileName = Path.GetFileName(fileName ?? string.Empty);
@@ -455,7 +498,26 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
             return Ok(new { ok = true, entries = cfg.StudioHubVideoEntries });
         }
 
+        [HttpGet("video")]
+        public IActionResult GetVideos()
+        {
+            var plugin = JMSFusionPlugin.Instance ?? throw new InvalidOperationException("Plugin not available.");
+            var cfg = plugin.Configuration;
+            if (SanitizeStudioHubAssets(plugin, cfg))
+            {
+                plugin.UpdateConfiguration(cfg);
+            }
+
+            NoCache();
+            return Ok(new
+            {
+                ok = true,
+                entries = cfg.StudioHubVideoEntries
+            });
+        }
+
         [HttpGet("video/{fileName}")]
+        [HttpHead("video/{fileName}")]
         public IActionResult GetVideo(string fileName)
         {
             var cleanFileName = Path.GetFileName(fileName ?? string.Empty);
@@ -555,6 +617,140 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
             return result;
         }
 
+        private static void RemoveCollectionNameFromVisibilityEntries(JMSFusionConfiguration cfg, string? collectionName)
+        {
+            cfg.StudioHubVisibilityEntries ??= new();
+
+            var cleanCollectionName = NormalizeCollectionName(collectionName);
+            if (string.IsNullOrWhiteSpace(cleanCollectionName))
+            {
+                return;
+            }
+
+            foreach (var entry in cfg.StudioHubVisibilityEntries)
+            {
+                if (entry is null)
+                {
+                    continue;
+                }
+
+                entry.HiddenNames = NormalizeHiddenNames(entry.HiddenNames)
+                    .Where(name => !NameEquals(name, cleanCollectionName))
+                    .ToList();
+
+                entry.OrderNames = NormalizeHiddenNames(entry.OrderNames)
+                    .Where(name => !NameEquals(name, cleanCollectionName))
+                    .ToList();
+            }
+
+            cfg.StudioHubVisibilityEntries = cfg.StudioHubVisibilityEntries
+                .Where(item =>
+                    !string.IsNullOrWhiteSpace(item?.UserId) &&
+                    (NormalizeHiddenNames(item?.HiddenNames).Count > 0 || NormalizeHiddenNames(item?.OrderNames).Count > 0))
+                .GroupBy(
+                    item => $"{item!.UserId}|{NormalizeProfile(item.Profile)}",
+                    StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.OrderByDescending(item => item?.UpdatedAtUtc ?? 0L).First())
+                .OrderBy(item => item?.UserId, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(item => NormalizeProfile(item?.Profile), StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private static HashSet<string> BuildAllowedStudioHubNameSet(JMSFusionConfiguration cfg)
+        {
+            var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var name in DefaultStudioHubNames)
+            {
+                var clean = NormalizeCollectionName(name);
+                if (!string.IsNullOrWhiteSpace(clean))
+                {
+                    allowed.Add(clean);
+                }
+            }
+
+            foreach (var entry in cfg.StudioHubManualEntries ?? new List<StudioHubManualEntry>())
+            {
+                var clean = NormalizeCollectionName(entry?.Name);
+                if (!string.IsNullOrWhiteSpace(clean))
+                {
+                    allowed.Add(clean);
+                }
+            }
+
+            return allowed;
+        }
+
+        private static List<string> SanitizeVisibilityNames(IEnumerable<string>? values, HashSet<string> allowedNames)
+        {
+            return NormalizeHiddenNames(values)
+                .Where(name => allowedNames.Contains(name))
+                .ToList();
+        }
+
+        private static bool SanitizeStudioHubVisibilityEntries(JMSFusionConfiguration cfg)
+        {
+            cfg.StudioHubManualEntries ??= new();
+            cfg.StudioHubVisibilityEntries ??= new();
+
+            var changed = false;
+            var allowedNames = BuildAllowedStudioHubNameSet(cfg);
+
+            foreach (var entry in cfg.StudioHubVisibilityEntries)
+            {
+                if (entry is null)
+                {
+                    continue;
+                }
+
+                var nextHidden = SanitizeVisibilityNames(entry.HiddenNames, allowedNames);
+                var nextOrder = SanitizeVisibilityNames(entry.OrderNames, allowedNames);
+
+                if (!Enumerable.SequenceEqual(nextHidden, entry.HiddenNames ?? new List<string>(), StringComparer.OrdinalIgnoreCase))
+                {
+                    entry.HiddenNames = nextHidden;
+                    changed = true;
+                }
+
+                if (!Enumerable.SequenceEqual(nextOrder, entry.OrderNames ?? new List<string>(), StringComparer.OrdinalIgnoreCase))
+                {
+                    entry.OrderNames = nextOrder;
+                    changed = true;
+                }
+            }
+
+            var nextEntries = cfg.StudioHubVisibilityEntries
+                .Where(item =>
+                    !string.IsNullOrWhiteSpace(item?.UserId) &&
+                    (NormalizeHiddenNames(item?.HiddenNames).Count > 0 || NormalizeHiddenNames(item?.OrderNames).Count > 0))
+                .GroupBy(
+                    item => $"{item!.UserId}|{NormalizeProfile(item.Profile)}",
+                    StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.OrderByDescending(item => item?.UpdatedAtUtc ?? 0L).First())
+                .OrderBy(item => item?.UserId, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(item => NormalizeProfile(item?.Profile), StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (nextEntries.Count != cfg.StudioHubVisibilityEntries.Count)
+            {
+                changed = true;
+            }
+            else
+            {
+                for (var i = 0; i < nextEntries.Count; i++)
+                {
+                    if (!ReferenceEquals(nextEntries[i], cfg.StudioHubVisibilityEntries[i]))
+                    {
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+
+            cfg.StudioHubVisibilityEntries = nextEntries;
+            return changed;
+        }
+
         private static string NormalizeId(string? value)
         {
             return string.Join(string.Empty, (value ?? string.Empty).Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries));
@@ -610,6 +806,85 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
             catch
             {
             }
+        }
+
+        private static bool SanitizeStudioHubAssets(JMSFusionPlugin plugin, JMSFusionConfiguration cfg)
+        {
+            cfg.StudioHubManualEntries ??= new();
+            cfg.StudioHubVideoEntries ??= new();
+
+            var changed = false;
+            var logosDir = plugin.GetStorageDirectory("studio-hub-logos");
+            var videosDir = plugin.GetStorageDirectory("studio-hub-videos");
+
+            foreach (var entry in cfg.StudioHubManualEntries)
+            {
+                var cleanLogoName = Path.GetFileName(entry?.LogoFileName ?? string.Empty);
+                if (string.IsNullOrWhiteSpace(cleanLogoName))
+                {
+                    if (!string.IsNullOrWhiteSpace(entry?.LogoFileName))
+                    {
+                        entry!.LogoFileName = null;
+                        changed = true;
+                    }
+                    continue;
+                }
+
+                var fullLogoPath = Path.Combine(logosDir, cleanLogoName);
+                if (!IOFile.Exists(fullLogoPath))
+                {
+                    entry!.LogoFileName = null;
+                    changed = true;
+                }
+                else if (!string.Equals(cleanLogoName, entry!.LogoFileName, StringComparison.Ordinal))
+                {
+                    entry.LogoFileName = cleanLogoName;
+                    changed = true;
+                }
+            }
+
+            var sanitizedVideos = new List<StudioHubVideoEntry>();
+            foreach (var entry in cfg.StudioHubVideoEntries)
+            {
+                var cleanName = NormalizeCollectionName(entry?.Name);
+                var cleanFileName = Path.GetFileName(entry?.FileName ?? string.Empty);
+                if (string.IsNullOrWhiteSpace(cleanName) || string.IsNullOrWhiteSpace(cleanFileName))
+                {
+                    changed = true;
+                    continue;
+                }
+
+                var fullVideoPath = Path.Combine(videosDir, cleanFileName);
+                if (!IOFile.Exists(fullVideoPath))
+                {
+                    changed = true;
+                    continue;
+                }
+
+                if (!string.Equals(cleanName, entry!.Name, StringComparison.Ordinal))
+                {
+                    entry.Name = cleanName;
+                    changed = true;
+                }
+
+                if (!string.Equals(cleanFileName, entry.FileName, StringComparison.Ordinal))
+                {
+                    entry.FileName = cleanFileName;
+                    changed = true;
+                }
+
+                sanitizedVideos.Add(entry);
+            }
+
+            if (sanitizedVideos.Count != cfg.StudioHubVideoEntries.Count)
+            {
+                cfg.StudioHubVideoEntries = sanitizedVideos
+                    .OrderBy(x => NormalizeCollectionName(x?.Name), StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                changed = true;
+            }
+
+            return changed;
         }
 
         private static string GetImageMimeType(string fileName)

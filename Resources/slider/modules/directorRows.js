@@ -712,6 +712,29 @@ function scheduleImgRetry(img, phase, delayMs) {
   return true;
 }
 
+function requestHiResImage(img) {
+  if (!img || !img.isConnected) return;
+  const data = img.__data || {};
+  if (img.__disableRecovery === true || img.__disableHi === true || hasKnownMissingImage(data)) return;
+  if (img.__hiRequested) return;
+  if (!data.hqSrc) {
+    markImageSettled(img, data.lqSrc || img.currentSrc || img.src || data.fallback || PLACEHOLDER_URL, { disableRecovery: true });
+    return;
+  }
+
+  img.__pendingHi = false;
+  img.__hiRequested = true;
+  img.__phase = "hi";
+  img.src = data.hqSrc;
+
+  const _rIC = window.requestIdleCallback || ((fn)=>setTimeout(fn, 0));
+  _rIC(() => {
+    if (img.__hiRequested && data.hqSrcset) {
+      img.srcset = data.hqSrcset;
+    }
+  });
+}
+
 let __imgIO = window.__JMS_DIR_IMGIO;
 
 if (!__imgIO) {
@@ -724,18 +747,11 @@ if (!__imgIO) {
       if (img.__disableRecovery === true || img.__disableHi === true || hasKnownMissingImage(data)) {
         continue;
       }
-      if (!img.__hiRequested) {
-        img.__hiRequested = true;
-        img.__phase = 'hi';
-        if (data.hqSrc) {
-          img.src = data.hqSrc;
-          _rIC(() => {
-            if (img.__hiRequested && data.hqSrcset) {
-              img.srcset = data.hqSrcset;
-            }
-          });
-        }
+      if (data.lqSrc && img.__lqLoaded !== true) {
+        img.__pendingHi = true;
+        continue;
       }
+      requestHiResImage(img);
     }
   }, {
     rootMargin: IS_MOBILE ? '400px 0px' : '600px 0px',
@@ -772,6 +788,8 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
     img.__hiRequested = true;
     img.__disableHi = true;
     img.__hydrated = true;
+    img.__lqLoaded = true;
+    img.__pendingHi = false;
     return;
   }
 
@@ -786,6 +804,8 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
   img.__phase = 'lq';
   img.__hiRequested = false;
   img.__fallbackState = { lqNoTagTried: false, hiNoTagTried: false };
+  img.__lqLoaded = false;
+  img.__pendingHi = false;
   delete img.__disableRecovery;
   delete img.__disableHi;
 
@@ -869,10 +889,34 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
     img.__retryState.hi && (img.__retryState.hi.tries = 0);
   }
 
+  if (img.__phase === "lq" && !fallbackRecoveryActive) {
+    img.__lqLoaded = true;
+    img.classList.add("__hydrated");
+    img.classList.add("is-lqip");
+    img.__hydrated = true;
+
+    if (!data.hqSrc && !data.hqSrcset) {
+      img.classList.remove("is-lqip");
+      img.__phase = "settled";
+      return;
+    }
+
+    if (img.__pendingHi) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!img.isConnected || img.__phase !== "lq" || img.__pendingHi !== true) return;
+          requestHiResImage(img);
+        });
+      });
+    }
+    return;
+  }
+
   if (img.__phase === "hi" || img.__phase === "settled" || fallbackRecoveryActive) {
     img.classList.add("__hydrated");
     img.classList.remove("is-lqip");
     img.__hydrated = true;
+    img.__pendingHi = false;
   }
 
   const loadedSrc = img.currentSrc || img.src || "";
@@ -912,6 +956,8 @@ function unobserveImage(img) {
   delete img.__fallbackRecoveryActive;
   delete img.__disableRecovery;
   delete img.__disableHi;
+  delete img.__lqLoaded;
+  delete img.__pendingHi;
 }
 
 function retryRecoverableImages() {
@@ -1173,7 +1219,8 @@ function createDirectorHeroCard(item, serverId, directorName) {
   hero.className = 'dir-row-hero';
   if (itemId) hero.dataset.itemId = itemId;
 
-  const bg   = buildBackdropUrlHQ(item) || buildPosterUrlHQ(item) || PLACEHOLDER_URL;
+  const bgLQ = buildBackdropUrlLQ(item) || buildPosterUrlLQ(item) || null;
+  const bgHQ = buildBackdropUrlHQ(item) || buildPosterUrlHQ(item) || null;
   const logo = buildLogoUrl(item);
   const year = item.ProductionYear || '';
   const plot = clampText(item.Overview, 1200);
@@ -1256,20 +1303,23 @@ function createDirectorHeroCard(item, serverId, directorName) {
   hero.classList.add('active');
 
   try {
-  const bgImg = hero.querySelector('.dir-row-hero-bg');
-  if (bgImg) {
-    const bgHQ = bg || PLACEHOLDER_URL;
-
-    hydrateBlurUp(bgImg, {
-      lqSrc: buildBackdropUrlLQ(item) || PLACEHOLDER_URL,
-      hqSrc: bgHQ,
-      hqSrcset: "",
-      fallback: PLACEHOLDER_URL
-    });
+    const bgImg = hero.querySelector('.dir-row-hero-bg');
+    if (bgImg) {
+      if (bgHQ || bgLQ) {
+        hydrateBlurUp(bgImg, {
+          lqSrc: bgLQ,
+          hqSrc: bgHQ,
+          hqSrcset: "",
+          fallback: PLACEHOLDER_URL
+        });
+      } else {
+        bgImg.src = PLACEHOLDER_URL;
+        bgImg.classList.add('__hydrated');
+      }
+    }
+  } catch (e) {
+    console.warn("dir-row-hero-bg hydrate failed:", e);
   }
-} catch (e) {
-  console.warn("dir-row-hero-bg hydrate failed:", e);
-}
 
   const cleanupLazyHeroTrailer = scheduleLazyDirectorWork(hero, () => {
     try {

@@ -71,9 +71,11 @@ export function createSettingsModal() {
       const lab = document.createElement("label");
       lab.textContent = labels?.profileTarget || "Ayar Profili";
       lab.style.marginRight = "10px";
+      lab.htmlFor = "jmsProfileTarget";
 
       const select = document.createElement("select");
       select.id = "jmsProfileTarget";
+      select.name = "jmsProfileTarget";
 
       const autoProfile = getDeviceProfileAuto();
       const profileNameMap = {

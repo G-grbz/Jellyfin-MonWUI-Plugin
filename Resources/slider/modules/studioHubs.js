@@ -12,7 +12,9 @@ import {
   fetchStudioHubVisibility,
   fetchStudioHubManualEntries,
   fetchStudioHubVideoEntries,
-  findStudioHubVideoEntry
+  findStudioHubVideoEntry,
+  sanitizeStudioHubHiddenNames,
+  sanitizeStudioHubOrderNames
 } from "./studioHubsShared.js";
 
 const config = getConfig();
@@ -137,6 +139,34 @@ const LOGO_CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
 const VIDEO_EXTS = [".mp4"];
 const HOVER_VIDEO_TIMEOUT = 4000;
 const MIN_RATING = Number.isFinite(config.studioHubsMinRating) ? config.studioHubsMinRating : 6.5;
+const LOCAL_STUDIO_LOGO_SLUGS = new Set([
+  "columbia-pictures",
+  "dc",
+  "disney",
+  "dreamworks-animation",
+  "lucasfilm-ltd",
+  "marvel-studios",
+  "netflix",
+  "paramount-pictures",
+  "pixar",
+  "universal",
+  "walt-disney-pictures",
+  "warner-bros-pictures"
+]);
+const LOCAL_STUDIO_VIDEO_SLUGS = new Set([
+  "columbia-pictures",
+  "dc",
+  "disney",
+  "dreamworks-animation",
+  "lucasfilm-ltd",
+  "marvel-studios",
+  "netflix",
+  "paramount-pictures",
+  "pixar",
+  "universal",
+  "walt-disney-pictures",
+  "warner-bros-pictures"
+]);
 
 const getRating = (it) => Number(it?.CommunityRating ?? it?.CriticRating ?? 0);
 function randomSample(arr, n) {
@@ -153,34 +183,38 @@ function selectTopNWithMinRating(items, min = MIN_RATING, count = 5) {
   return randomSample(pool, count);
 }
 
-function replaceExt(url, newExt) {
-  return url.replace(/\.[a-z0-9]+(?:\?.*)?$/i, newExt);
+function isLocalStudioAssetUrl(url) {
+  const clean = String(url || "");
+  return clean.includes("/slider/src/images/studios/") || clean.includes("./slider/src/images/studios/");
+}
+function getStudioAssetSlugFromUrl(url) {
+  const clean = String(url || "");
+  const match = clean.match(/\/([^/?#]+)\.[a-z0-9]+(?:\?|#|$)/i);
+  return String(match?.[1] || "").trim().toLowerCase();
+}
+function hasKnownLocalStudioLogo(url) {
+  const slug = getStudioAssetSlugFromUrl(url);
+  return !!slug && LOCAL_STUDIO_LOGO_SLUGS.has(slug);
 }
 function deriveVideoCandidatesFromLogo(logoUrl) {
-  return VIDEO_EXTS.map(ext => replaceExt(logoUrl, ext));
-}
-function probeVideo(url, timeoutMs = HOVER_VIDEO_TIMEOUT) {
-  return new Promise((resolve) => {
-    if (!url) return resolve(false);
-    const v = document.createElement("video");
-    let done = false;
-    const timer = setTimeout(() => {
-      if (done) return;
-      done = true; resolve(false);
-      try { v.src = ""; } catch {}
-    }, timeoutMs);
-    v.muted = true;
-    v.playsInline = true;
-    v.preload = "metadata";
-    v.src = url;
-    const ok = () => { if (done) return; done = true; clearTimeout(timer); resolve(true); };
-    const bad = () => { if (done) return; done = true; clearTimeout(timer); resolve(false); };
-    v.oncanplay = ok;
-    v.onloadeddata = ok;
-    v.onerror = bad;
-  });
+  if (!isLocalStudioAssetUrl(logoUrl) || !hasKnownLocalStudioLogo(logoUrl)) return [];
+  const slug = getStudioAssetSlugFromUrl(logoUrl);
+  if (!slug || !LOCAL_STUDIO_VIDEO_SLUGS.has(slug)) return [];
+  return VIDEO_EXTS.map(ext => withVer(`${LOGO_BASE}${slug}${ext}`));
 }
 
+function markCardReady(card, { textOnly = false } = {}) {
+  if (!card) return;
+  card.classList.remove("skeleton");
+  card.classList.toggle("hub-card-textonly", textOnly);
+}
+
+function clearCardImage(card) {
+  const img = card?.querySelector?.("img.hub-img");
+  if (!img) return;
+  try { img.removeAttribute("src"); } catch {}
+  try { img.remove(); } catch {}
+}
 let __hubPreviewPopover = null;
 let __hubPreviewCloseTimer = null;
 let __userInteracted = false;
@@ -527,23 +561,8 @@ async function setupHoverVideo(card, options = {}) {
   const studioId = options.studioId || "";
   const userId = options.userId || "";
 
-  const candidates = [];
-  if (customVideoUrl) candidates.push(customVideoUrl);
-  if (logoUrl) candidates.push(...deriveVideoCandidatesFromLogo(logoUrl));
-
-  const uniqueCandidates = [];
-  const seen = new Set();
-  for (const url of candidates) {
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
-    uniqueCandidates.push(url);
-  }
-
-  let playableUrl = null;
-  for (const u of uniqueCandidates) {
-    const ok = await probeVideo(u);
-    if (ok) { playableUrl = u; break; }
-  }
+  const derivedVideoUrls = logoUrl ? deriveVideoCandidatesFromLogo(logoUrl) : [];
+  const playableUrl = customVideoUrl || derivedVideoUrls[0] || null;
   if (!playableUrl) return;
 
   let vidEl = null;
@@ -640,34 +659,28 @@ function slugify(name) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 }
-function probeImage(url, timeoutMs = 4000) {
-  return new Promise((resolve) => {
-    if (!url) return resolve(false);
-    const img = new Image();
-    let done = false;
-    const timer = setTimeout(() => { if (done) return; done = true; resolve(false); try { img.src = ""; } catch {} }, timeoutMs);
-    img.onload  = () => { if (done) return; done = true; clearTimeout(timer); resolve(true); };
-    img.onerror = () => { if (done) return; done = true; clearTimeout(timer); resolve(false); };
-    img.decoding = "async";
-    img.referrerPolicy = "no-referrer";
-    img.src = url;
-  });
-}
 async function tryLocalLogo(name) {
-  const base = LOGO_BASE + slugify(name);
-  for (const ext of LOCAL_EXTS) {
-    const url = withVer(`${base}${ext}`);
-    if (await probeImage(url)) return url;
-  }
+  const slug = slugify(name);
+  if (!slug || !LOCAL_STUDIO_LOGO_SLUGS.has(slug)) return null;
+  const ext = LOCAL_EXTS[0];
+  if (!ext) return null;
+  const base = LOGO_BASE + slug;
+  return withVer(`${base}${ext}`);
+}
+function isCachedLocalStudioLogo(url) {
+  return isLocalStudioAssetUrl(url) && hasKnownLocalStudioLogo(url);
+}
+function sanitizeLogoCacheEntry(cache, key) {
+  if (!cache || !key || !cache[key]) return null;
+  if (isCachedLocalStudioLogo(cache[key])) return cache[key];
+  delete cache[key];
+  saveLogoCache(cache);
   return null;
 }
 async function resolveLogoUrl(name) {
   const cache = loadLogoCache();
-  if (cache[name]) {
-    if (await probeImage(cache[name])) return cache[name];
-    delete cache[name];
-    saveLogoCache(cache);
-  }
+  const cachedUrl = sanitizeLogoCacheEntry(cache, name);
+  if (cachedUrl) return cachedUrl;
   const localUrl = await tryLocalLogo(name);
   if (localUrl) { cache[name] = localUrl; saveLogoCache(cache); return localUrl; }
   return null;
@@ -723,28 +736,28 @@ function buildPosterUrl(item, height = 300, quality = 95) {
 }
 function pickRandom(arr) { return arr.length ? arr[Math.floor(Math.random()*arr.length)] : null; }
 
-async function getHiddenStudioNameSet() {
+async function getHiddenStudioNameSet(manualEntries = []) {
   const liveConfig = getConfig();
   if (liveConfig?.forceGlobalUserSettings) {
     const globalHidden = Array.isArray(liveConfig?.studioHubsHidden) ? liveConfig.studioHubsHidden : [];
-    return new Set(globalHidden.map(nameKey));
+    return new Set(sanitizeStudioHubHiddenNames(globalHidden, manualEntries).map(nameKey));
   }
 
   try {
     const profile = getDeviceProfileAuto();
     const visibility = await fetchStudioHubVisibility({ profile });
-    return new Set((visibility?.hiddenNames || []).map(nameKey));
+    return new Set(sanitizeStudioHubHiddenNames(visibility?.hiddenNames || [], manualEntries).map(nameKey));
   } catch {
     return new Set();
   }
 }
 
-async function getStudioOrderList() {
+async function getStudioOrderList(manualEntries = []) {
   const liveConfig = getConfig();
   const globalOrder = Array.isArray(liveConfig?.studioHubsOrder) ? liveConfig.studioHubsOrder : [];
 
   if (liveConfig?.forceGlobalUserSettings) {
-    return mergeOrder(DEFAULT_ORDER, globalOrder);
+    return mergeOrder(DEFAULT_ORDER, sanitizeStudioHubOrderNames(globalOrder, manualEntries));
   }
 
   try {
@@ -753,9 +766,9 @@ async function getStudioOrderList() {
     const userOrder = Array.isArray(visibility?.orderNames) && visibility.orderNames.length
       ? visibility.orderNames
       : globalOrder;
-    return mergeOrder(DEFAULT_ORDER, userOrder);
+    return mergeOrder(DEFAULT_ORDER, sanitizeStudioHubOrderNames(userOrder, manualEntries));
   } catch {
-    return mergeOrder(DEFAULT_ORDER, globalOrder);
+    return mergeOrder(DEFAULT_ORDER, sanitizeStudioHubOrderNames(globalOrder, manualEntries));
   }
 }
 
@@ -821,7 +834,7 @@ function saveCache(k, data) {
 }
 
 function buildStudioHref(studioId, serverId) {
-  return `#/list.html?studioId=${encodeURIComponent(studioId)}${serverId ? `&serverId=${encodeURIComponent(serverId)}` : ""}`;
+  return `#/list?studioId=${encodeURIComponent(studioId)}${serverId ? `&serverId=${encodeURIComponent(serverId)}` : ""}`;
 }
 
 function createBackdropCardShell(title, studio, serverId) {
@@ -868,9 +881,9 @@ export async function renderStudioHubs() {
      serverId = serverId || localStorage.getItem("serverId") || sessionStorage.getItem("serverId") || null;
      const shells = {};
 
-    const hiddenNames = await getHiddenStudioNameSet();
-    const userOrder = await getStudioOrderList();
     const manualEntries = await fetchStudioHubManualEntries().catch(() => []);
+    const hiddenNames = await getHiddenStudioNameSet(manualEntries);
+    const userOrder = await getStudioOrderList(manualEntries);
     const manualOrder = (manualEntries || [])
       .map(entry => String(entry?.name || entry?.Name || "").trim())
       .filter(Boolean);
@@ -914,6 +927,10 @@ export async function renderStudioHubs() {
     await Promise.allSettled(resolved.map(async ({ name, studio }) => {
       const card = shells[name];
       if (!card) return;
+      const detailsHref = buildStudioHref(studio.Id, serverId);
+      card.href = detailsHref;
+      card.classList.remove("hub-card-textonly");
+
       let used = false;
       const manualEntry = (manualEntries || []).find(entry => nameKey(entry?.name || entry?.Name) === nameKey(name)) || null;
       const customLogoUrl = buildStudioHubLogoUrl(manualEntry);
@@ -928,9 +945,7 @@ export async function renderStudioHubs() {
           img.style.opacity = '0';
           img.src = logoUrl;
         }
-        card.href = buildStudioHref(studio.Id, serverId);
-
-        ensurePreviewButton(card, name, studio.Id, userId);
+        markCardReady(card);
         used = true;
       }
 
@@ -943,11 +958,17 @@ export async function renderStudioHubs() {
             img.style.opacity = '0';
             img.src = chosen.url;
           }
-          ensurePreviewButton(card, name, studio.Id, userId);
+          markCardReady(card);
         } else if (!customVideoUrl) {
-          return;
+          clearCardImage(card);
+          markCardReady(card, { textOnly: true });
+        } else {
+          clearCardImage(card);
+          markCardReady(card, { textOnly: true });
         }
       }
+
+      ensurePreviewButton(card, name, studio.Id, userId);
 
       if (config.studioHubsHoverVideo) {
         await setupHoverVideo(card, {

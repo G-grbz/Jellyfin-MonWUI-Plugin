@@ -4,6 +4,7 @@ import { createCheckbox, createSection, createNumberInput } from "../settings.js
 import { applySettings } from "./applySettings.js";
 import { fetchItemDetails, makeApiRequest } from "/Plugins/JMSFusion/runtime/api.js";
 import {
+  JMS_STUDIO_HUB_MANUAL_ENTRY_ADDED_EVENT,
   buildStudioHubLogoUrl,
   createStudioHubManualEntry,
   deleteStudioHubLogo,
@@ -14,6 +15,9 @@ import {
   fetchStudioHubVideoEntries,
   findStudioHubManualEntry,
   findStudioHubVideoEntry,
+  getStudioHubAllowedNames,
+  sanitizeStudioHubHiddenNames,
+  sanitizeStudioHubOrderNames,
   uploadStudioHubLogo,
   uploadStudioHubVideo
 } from "../studioHubsShared.js";
@@ -380,7 +384,7 @@ function createDraggableList(id, items, labels, options = {}) {
   const wrap = document.createElement("div");
   wrap.className = "setting-input setting-dnd";
 
-  const lab = document.createElement("label");
+  const lab = document.createElement("div");
   lab.textContent = labels?.studioHubsOrderLabel || "Sıralama (sürükle-bırak)";
   lab.style.display = "block";
   lab.style.marginBottom = "6px";
@@ -700,7 +704,26 @@ export function createStudioHubsPanel(config, labels) {
   const visibilityDisabled = isForceGlobal && !isAdmin;
   const useGlobalVisibility = isForceGlobal;
   const useGlobalOrder = isForceGlobal;
+
+  const autoAddFromWatchlistCopyCheckbox = createCheckbox(
+    'studioHubsAutoAddFromWatchlistCopy',
+    labels?.studioHubsAutoAddFromWatchlistCopy || 'Watchlist stüdyo ID kopyasında koleksiyonu otomatik ekle',
+    config.studioHubsAutoAddFromWatchlistCopy === true
+  );
+  autoAddFromWatchlistCopyCheckbox.style.display = isAdmin ? '' : 'none';
+  section.appendChild(autoAddFromWatchlistCopyCheckbox);
+
+  const autoAddFromWatchlistCopyHint = document.createElement("div");
+  autoAddFromWatchlistCopyHint.className = "description-text2";
+  autoAddFromWatchlistCopyHint.style.margin = "4px 0 10px";
+  autoAddFromWatchlistCopyHint.style.display = isAdmin ? "" : "none";
+  autoAddFromWatchlistCopyHint.textContent =
+    labels?.studioHubsAutoAddFromWatchlistCopyHint ||
+    "Açıkken admin kullanıcı, watchlist önizlemesinde stüdyoya tıklayıp ID kopyaladığında ilgili stüdyo koleksiyonu otomatik oluşturulur veya güncellenir.";
+  section.appendChild(autoAddFromWatchlistCopyHint);
+
   let manualEntries = [];
+  let manualEntriesLoaded = false;
   let sharedVideos = [];
   let currentOrderNames = dedupeNames(baseOrder);
   let currentHiddenNames = useGlobalVisibility
@@ -719,10 +742,41 @@ export function createStudioHubsPanel(config, labels) {
     sharedVideos
   });
 
+  const normalizeOrderNamesForState = (names) => (
+    manualEntriesLoaded
+      ? sanitizeStudioHubOrderNames(names, manualEntries)
+      : dedupeNames(names)
+  );
+
+  const normalizeHiddenNamesForState = (names) => (
+    manualEntriesLoaded
+      ? sanitizeStudioHubHiddenNames(names, manualEntries)
+      : dedupeNames(names)
+  );
+
+  const getAllowedNames = () => (
+    manualEntriesLoaded
+      ? getStudioHubAllowedNames(manualEntries)
+      : dedupeNames([
+          ...[...list.querySelectorAll(".dnd-item")].map(li => li.dataset.name).filter(Boolean),
+          ...DEFAULT_ORDER
+        ])
+  );
+
+  const pruneInvalidListItems = () => {
+    if (!manualEntriesLoaded) return;
+    const allowedKeys = new Set(getAllowedNames().map(nameKey));
+    [...list.querySelectorAll(".dnd-item")].forEach(li => {
+      if (!allowedKeys.has(nameKey(li.dataset.name))) {
+        li.remove();
+      }
+    });
+  };
+
   const syncHiddenNamesFromInput = () => {
     try {
       const parsed = JSON.parse(hiddenHiddenInput.value || "[]");
-      currentHiddenNames = dedupeNames(Array.isArray(parsed) ? parsed : []);
+      currentHiddenNames = normalizeHiddenNamesForState(Array.isArray(parsed) ? parsed : []);
     } catch {
       currentHiddenNames = [];
     }
@@ -732,7 +786,7 @@ export function createStudioHubsPanel(config, labels) {
   const syncOrderNamesFromInput = () => {
     try {
       const parsed = JSON.parse(orderHiddenInput.value || "[]");
-      currentOrderNames = dedupeNames(Array.isArray(parsed) ? parsed : []);
+      currentOrderNames = normalizeOrderNamesForState(Array.isArray(parsed) ? parsed : []);
     } catch {
       currentOrderNames = dedupeNames(baseOrder);
     }
@@ -740,9 +794,10 @@ export function createStudioHubsPanel(config, labels) {
   };
 
   const applyOrderNamesToList = (orderNames) => {
-    currentOrderNames = dedupeNames(orderNames);
+    currentOrderNames = normalizeOrderNamesForState(orderNames);
+    pruneInvalidListItems();
     const desiredOrder = mergeOrder(
-      [...list.querySelectorAll(".dnd-item")].map(li => li.dataset.name).filter(Boolean),
+      getAllowedNames(),
       currentOrderNames
     );
     const itemsByKey = new Map(
@@ -757,12 +812,13 @@ export function createStudioHubsPanel(config, labels) {
       itemsByKey.delete(key);
     });
 
-    itemsByKey.forEach(li => list.appendChild(li));
+    itemsByKey.forEach(li => li.remove());
     refreshListState();
   };
 
   const applyHiddenNamesToList = (hiddenNames) => {
-    currentHiddenNames = dedupeNames(hiddenNames);
+    currentHiddenNames = normalizeHiddenNamesForState(hiddenNames);
+    pruneInvalidListItems();
     const hiddenSet = new Set(currentHiddenNames.map(nameKey));
     [...list.querySelectorAll(".dnd-item")].forEach(li => {
       li.dataset.hidden = hiddenSet.has(nameKey(li.dataset.name)) ? "1" : "0";
@@ -812,6 +868,7 @@ export function createStudioHubsPanel(config, labels) {
   };
 
   const refreshListState = () => {
+    pruneInvalidListItems();
     refreshStudioHubHiddenInputs(list, orderHiddenInput, hiddenHiddenInput);
     syncOrderNamesFromInput();
     syncHiddenNamesFromInput();
@@ -835,6 +892,46 @@ export function createStudioHubsPanel(config, labels) {
       "";
   };
 
+  const handleExternalManualEntryAdded = (event) => {
+    const entry = event?.detail?.entry || null;
+    const entries = Array.isArray(event?.detail?.entries) ? event.detail.entries : null;
+    const studioId = String(entry?.studioId || entry?.StudioId || "").trim();
+    const name = String(entry?.name || entry?.Name || "").trim();
+    if (!entries && !studioId && !name) return;
+
+    if (entries) {
+      manualEntries = entries;
+    } else if (entry) {
+      const existing = findStudioHubManualEntry(manualEntries, studioId || name);
+      manualEntries = existing
+        ? manualEntries.map((item) => {
+            const sameStudioId = studioId && nameKey(item?.studioId || item?.StudioId) === nameKey(studioId);
+            const sameName = name && nameKey(item?.name || item?.Name) === nameKey(name);
+            return (sameStudioId || sameName) ? entry : item;
+          })
+        : [...manualEntries, entry];
+    }
+
+    if (entry) {
+      upsertManualEntryInList(entry);
+    } else if (entries) {
+      entries.forEach(nextEntry => upsertManualEntryInList(nextEntry));
+    }
+
+    refreshListState();
+
+    if (event?.detail?.source === "watchlist-auto-add" && name) {
+      setStatus(
+        formatLabel("studioHubAutoAddedFromWatchlist", "{name} koleksiyon listesine eklendi.", {
+          name
+        }),
+        "success"
+      );
+    }
+  };
+
+  window.addEventListener(JMS_STUDIO_HUB_MANUAL_ENTRY_ADDED_EVENT, handleExternalManualEntryAdded);
+
   const formatLabel = (key, fallback, vars = {}) => {
     let text = String(labels?.[key] || fallback);
     for (const [name, value] of Object.entries(vars)) {
@@ -847,7 +944,7 @@ export function createStudioHubsPanel(config, labels) {
   manualAddWrap.className = "input-container";
   manualAddWrap.style.display = isAdmin ? "" : "none";
 
-  const manualAddLabel = document.createElement("label");
+  const manualAddLabel = document.createElement("div");
   manualAddLabel.textContent = labels?.addManualCollection || "Yeni koleksiyon ekle";
   manualAddWrap.appendChild(manualAddLabel);
 
@@ -857,6 +954,13 @@ export function createStudioHubsPanel(config, labels) {
   manualAddHint.textContent = labels?.manualCollectionStudioIdHint || "Studio ID girin. Başlık otomatik çözülür; logo ve video yükleme opsiyoneldir.";
   manualAddWrap.appendChild(manualAddHint);
 
+  const studioIdLabel = document.createElement("label");
+  studioIdLabel.textContent = labels?.studioIdPlaceholder || "Studio ID";
+  studioIdLabel.htmlFor = "studioHubsManualStudioId";
+  studioIdLabel.style.display = "block";
+  studioIdLabel.style.marginBottom = "6px";
+  manualAddWrap.appendChild(studioIdLabel);
+
   const manualAddRow = document.createElement("div");
   manualAddRow.style.display = "flex";
   manualAddRow.style.gap = "8px";
@@ -864,6 +968,8 @@ export function createStudioHubsPanel(config, labels) {
 
   const studioIdInput = document.createElement("input");
   studioIdInput.type = "text";
+  studioIdInput.id = "studioHubsManualStudioId";
+  studioIdInput.name = "studioHubsManualStudioId";
   studioIdInput.placeholder = labels?.studioIdPlaceholder || "Studio ID";
   studioIdInput.style.flex = "1";
   studioIdInput.style.minWidth = "240px";
@@ -899,18 +1005,41 @@ export function createStudioHubsPanel(config, labels) {
   manualAssetRow.style.flexWrap = "wrap";
   manualAssetRow.style.marginTop = "8px";
 
+  const manualLogoWrap = document.createElement("div");
+  manualLogoWrap.style.display = "flex";
+  manualLogoWrap.style.flexDirection = "column";
+  manualLogoWrap.style.gap = "6px";
+
+  const manualLogoLabel = document.createElement("label");
+  manualLogoLabel.textContent = labels?.optionalLogoTitle || "Opsiyonel logo";
+  manualLogoLabel.htmlFor = "studioHubsManualLogoInput";
+
   const manualLogoInput = document.createElement("input");
   manualLogoInput.type = "file";
+  manualLogoInput.id = "studioHubsManualLogoInput";
+  manualLogoInput.name = "studioHubsManualLogoInput";
   manualLogoInput.accept = "image/png,image/webp,image/svg+xml,image/jpeg,.png,.webp,.svg,.jpg,.jpeg";
   manualLogoInput.title = labels?.optionalLogoTitle || "Opsiyonel logo";
 
+  const manualVideoWrap = document.createElement("div");
+  manualVideoWrap.style.display = "flex";
+  manualVideoWrap.style.flexDirection = "column";
+  manualVideoWrap.style.gap = "6px";
+
+  const manualVideoLabel = document.createElement("label");
+  manualVideoLabel.textContent = labels?.optionalVideoTitle || "Opsiyonel hover video";
+  manualVideoLabel.htmlFor = "studioHubsManualVideoInput";
+
   const manualVideoInput = document.createElement("input");
   manualVideoInput.type = "file";
+  manualVideoInput.id = "studioHubsManualVideoInput";
+  manualVideoInput.name = "studioHubsManualVideoInput";
   manualVideoInput.accept = "video/mp4,video/webm,video/quicktime,.mp4,.webm,.m4v,.mov";
   manualVideoInput.title = labels?.optionalVideoTitle || "Opsiyonel hover video";
 
-  manualAssetRow.appendChild(manualLogoInput);
-  manualAssetRow.appendChild(manualVideoInput);
+  manualLogoWrap.append(manualLogoLabel, manualLogoInput);
+  manualVideoWrap.append(manualVideoLabel, manualVideoInput);
+  manualAssetRow.append(manualLogoWrap, manualVideoWrap);
   manualAddWrap.appendChild(manualAssetRow);
 
   const sharedVideoHint = document.createElement("div");
@@ -922,17 +1051,27 @@ export function createStudioHubsPanel(config, labels) {
 
   const videoFileInput = document.createElement("input");
   videoFileInput.type = "file";
+  videoFileInput.id = "studioHubsSharedVideoFileInput";
+  videoFileInput.name = "studioHubsSharedVideoFileInput";
   videoFileInput.accept = "video/mp4,video/webm,video/quicktime,.mp4,.webm,.m4v,.mov";
   videoFileInput.style.display = "none";
+  videoFileInput.setAttribute("aria-hidden", "true");
 
   const logoFileInput = document.createElement("input");
   logoFileInput.type = "file";
+  logoFileInput.id = "studioHubsSharedLogoFileInput";
+  logoFileInput.name = "studioHubsSharedLogoFileInput";
   logoFileInput.accept = "image/png,image/webp,image/svg+xml,image/jpeg,.png,.webp,.svg,.jpg,.jpeg";
   logoFileInput.style.display = "none";
+  logoFileInput.setAttribute("aria-hidden", "true");
 
   let pendingVideoTarget = "";
   let pendingLogoTargetStudioId = "";
   let manualAddBusy = false;
+
+  panel.addEventListener("jms:cleanup", () => {
+    window.removeEventListener(JMS_STUDIO_HUB_MANUAL_ENTRY_ADDED_EVENT, handleExternalManualEntryAdded);
+  }, { once: true });
 
   const setManualAddBusy = (busy) => {
     manualAddBusy = !!busy;
@@ -962,22 +1101,28 @@ export function createStudioHubsPanel(config, labels) {
         setStatus(labels?.studioResolveFailed || "Bu Studio ID için başlık çözümlenemedi.", "error");
         return;
       }
+      const canonicalName = toCanonicalStudioName(resolvedName) || resolvedName;
 
-      const existing = findStudioHubManualEntry(manualEntries, studioId) || findStudioHubManualEntry(manualEntries, resolvedName);
+      if (isDefaultStudioHub(canonicalName)) {
+        setStatus(labels?.manualCollectionDuplicate || "Bu koleksiyon zaten ekli.", "error");
+        return;
+      }
+
+      const existing = findStudioHubManualEntry(manualEntries, studioId) || findStudioHubManualEntry(manualEntries, canonicalName);
       if (existing) {
         setStatus(labels?.manualCollectionDuplicate || "Bu koleksiyon zaten ekli.", "error");
         return;
       }
 
-      const existingListName = [...list.querySelectorAll(".dnd-item")].some(li => nameKey(li.dataset.name) === nameKey(resolvedName));
+      const existingListName = [...list.querySelectorAll(".dnd-item")].some(li => nameKey(li.dataset.name) === nameKey(canonicalName));
       if (existingListName) {
         setStatus(labels?.manualCollectionDuplicate || "Bu koleksiyon zaten listede var.", "error");
         return;
       }
 
-      const created = await createStudioHubManualEntry({ studioId, name: resolvedName });
+      const created = await createStudioHubManualEntry({ studioId, name: canonicalName });
       manualEntries = Array.isArray(created?.entries) ? created.entries : manualEntries;
-      upsertManualEntryInList(created?.entry || { studioId, name: resolvedName });
+      upsertManualEntryInList(created?.entry || { studioId, name: canonicalName });
 
       const logoFile = manualLogoInput.files?.[0];
       let autoLogoUploaded = false;
@@ -986,9 +1131,9 @@ export function createStudioHubsPanel(config, labels) {
         manualEntries = Array.isArray(logoRes?.entries) ? logoRes.entries : manualEntries;
       } else {
         setStatus(formatLabel("studioHubTmdbLogoSearching", "{name} için TMDB logosu aranıyor...", {
-          name: resolvedName
+          name: canonicalName
         }));
-        const tmdbLogoFile = await resolveTmdbLogoFileForStudio(resolvedName).catch(() => null);
+        const tmdbLogoFile = await resolveTmdbLogoFileForStudio(canonicalName).catch(() => null);
         if (tmdbLogoFile) {
           const logoRes = await uploadStudioHubLogo(studioId, tmdbLogoFile);
           manualEntries = Array.isArray(logoRes?.entries) ? logoRes.entries : manualEntries;
@@ -998,7 +1143,7 @@ export function createStudioHubsPanel(config, labels) {
 
       const videoFile = manualVideoInput.files?.[0];
       if (videoFile) {
-        const videoRes = await uploadStudioHubVideo(resolvedName, videoFile);
+        const videoRes = await uploadStudioHubVideo(canonicalName, videoFile);
         sharedVideos = Array.isArray(videoRes?.entries) ? videoRes.entries : sharedVideos;
       }
 
@@ -1009,10 +1154,10 @@ export function createStudioHubsPanel(config, labels) {
       setStatus(
         autoLogoUploaded
           ? formatLabel("studioHubManualCollectionAddedWithTmdbLogo", "{name} eklendi. TMDB logosu otomatik kaydedildi.", {
-            name: resolvedName
+            name: canonicalName
           })
           : formatLabel("studioHubManualCollectionAdded", "{name} eklendi.", {
-            name: resolvedName
+            name: canonicalName
           }),
         "success"
       );
@@ -1253,6 +1398,7 @@ export function createStudioHubsPanel(config, labels) {
   (async () => {
     try {
       manualEntries = await fetchStudioHubManualEntries();
+      manualEntriesLoaded = true;
       manualEntries.forEach(entry => upsertManualEntryInList(entry));
       sharedVideos = await fetchStudioHubVideoEntries();
       applyOrderNamesToList(currentOrderNames);

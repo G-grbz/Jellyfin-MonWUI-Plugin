@@ -15,6 +15,7 @@ function createTextInputSimple(id, labelText, value, placeholder = '') {
   const input = document.createElement('input');
   input.type = 'text';
   input.id = id;
+  input.name = id;
   input.value = value || '';
   input.placeholder = placeholder || '';
   wrap.append(label, input);
@@ -28,6 +29,7 @@ function createSelectSimple(id, labelText, value, options) {
   label.htmlFor = id; label.textContent = labelText;
   const sel = document.createElement('select');
   sel.id = id;
+  sel.name = id;
   for (const opt of options) {
     const o = document.createElement('option');
     o.value = opt.value;
@@ -46,10 +48,9 @@ export function createSliderPanel(config, labels) {
 
   const languageDiv = document.createElement('div');
   languageDiv.className = 'setting-item';
-  const languageLabel = document.createElement('div');
+  const languageLabel = document.createElement('label');
   languageLabel.textContent = labels.defaultLanguage || 'Dil:';
-  languageLabel.htmlFor = 'languageDiv';
-  languageLabel.id = 'languageDiv';
+  languageLabel.htmlFor = 'defaultLanguageSelect';
   const languageSelect = document.createElement('select');
   languageSelect.name = 'defaultLanguage';
   languageSelect.id = 'defaultLanguageSelect';
@@ -667,7 +668,8 @@ export function createSliderPanel(config, labels) {
 
   const dotPreviewDiv = document.createElement('div');
   dotPreviewDiv.className = 'fsetting-item';
-  const dotPreviewLabel = document.createElement('label');
+  const dotPreviewLabel = document.createElement('div');
+  dotPreviewLabel.id = 'dotPreviewPlaybackModeLabel';
   dotPreviewLabel.textContent = labels.dotPreviewMode || 'Poster Dot Önizleme Modu:';
   dotPreviewLabel.style.display = 'block';
   dotPreviewLabel.style.marginBottom = '6px';
@@ -679,6 +681,8 @@ export function createSliderPanel(config, labels) {
   ];
 
   const dotPreviewGroup = document.createElement('div');
+  dotPreviewGroup.setAttribute('role', 'radiogroup');
+  dotPreviewGroup.setAttribute('aria-labelledby', 'dotPreviewPlaybackModeLabel');
   dotPreviewGroup.style.display = 'flex';
   dotPreviewGroup.style.flexDirection = 'column';
   dotPreviewGroup.style.gap = '4px';

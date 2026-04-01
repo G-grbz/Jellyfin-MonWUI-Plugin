@@ -3335,7 +3335,7 @@ function hideOverlay(opts = {}) {
     const type = item.Type;
     try { _hideRecoBadgeAndPanel(); } catch {}
     if (type === "Episode" || type === "Season" || true) {
-      location.href = `#!/details?id=${encodeURIComponent(item.Id)}&serverId=${encodeURIComponent(serverId)}`;
+      location.href = `#/details?id=${encodeURIComponent(item.Id)}&serverId=${encodeURIComponent(serverId)}`;
     }
   }
   async function fetchUnplayedEpisodesInSameSeason(currentEp, { limit = 5 } = {}) {

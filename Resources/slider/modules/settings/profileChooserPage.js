@@ -8,7 +8,6 @@ export function createProfileChooserPanel(config, labels) {
   const section = createSection(labels?.profileChooserHeader || "Kim izliyor?");
   const enableRow = document.createElement("div");
   enableRow.className = "fsetting-item";
-  const enableLabel = document.createElement("label");
 
   const enableCb = createCheckbox(
     "enableProfileChooser",
@@ -16,15 +15,13 @@ export function createProfileChooserPanel(config, labels) {
     config.enableProfileChooser
   );
 
-  enableLabel.prepend(enableCb);
-  enableRow.appendChild(enableLabel);
+  enableRow.appendChild(enableCb);
 
   const subWrap = document.createElement("div");
   subWrap.className = "profile-chooser-sub";
 
   const autoRow = document.createElement("div");
   autoRow.className = "fsetting-item profile-chooser-container";
-  const autoLabel = document.createElement("label");
 
   const autoCb = createCheckbox(
     "profileChooserAutoOpen",
@@ -32,15 +29,13 @@ export function createProfileChooserPanel(config, labels) {
     config.profileChooserAutoOpen
   );
 
-  autoLabel.prepend(autoCb);
-  autoRow.appendChild(autoLabel);
+  autoRow.appendChild(autoCb);
 
   const autoRuleWrap = document.createElement("div");
   autoRuleWrap.className = "profile-chooser-auto-sub";
 
   const autoRuleRow = document.createElement("div");
   autoRuleRow.className = "fsetting-item profile-chooser-container";
-  const autoRuleLabel = document.createElement("label");
 
   const autoRuleCb = createCheckbox(
     "profileChooserAutoOpenRequireQuickLogin",
@@ -48,13 +43,11 @@ export function createProfileChooserPanel(config, labels) {
     config.profileChooserAutoOpenRequireQuickLogin
   );
 
-  autoRuleLabel.prepend(autoRuleCb);
-  autoRuleRow.appendChild(autoRuleLabel);
+  autoRuleRow.appendChild(autoRuleCb);
   autoRuleWrap.appendChild(autoRuleRow);
 
   const rememberRow = document.createElement("div");
   rememberRow.className = "fsetting-item profile-chooser-container";
-  const rememberLabel = document.createElement("label");
 
   const rememberCb = createCheckbox(
     "profileChooserRememberTokens",
@@ -62,8 +55,7 @@ export function createProfileChooserPanel(config, labels) {
     config.profileChooserRememberTokens
   );
 
-  rememberLabel.prepend(rememberCb);
-  rememberRow.appendChild(rememberLabel);
+  rememberRow.appendChild(rememberCb);
 
   const desc = document.createElement("div");
   desc.className = "description-text";

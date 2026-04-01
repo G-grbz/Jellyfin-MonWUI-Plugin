@@ -1,6 +1,6 @@
 import { musicPlayerState } from "./state.js";
 import { togglePlayPause, playPrevious, playNext } from "../player/playback.js";
-import { getServerAddress } from "../../config.js";
+import { apiUrl, getAuthToken } from "./auth.js";
 import { makeCleanupBag, addEvent } from "../utils/cleanup.js";
 import { getRadioTrackArtistLine, getRadioTrackDisplayInfo, isRadioTrack, resolveRadioStationArtUrl } from "./radio.js";
 
@@ -14,6 +14,7 @@ export function initMediaSession() {
     return;
   }
 
+  musicPlayerState.mediaSession = navigator.mediaSession;
   cleanupMediaSession();
 
   mediaBag = makeCleanupBag(initMediaSession);
@@ -95,7 +96,10 @@ function handleStopAction() {
   if (!a) return;
   a.pause();
   a.currentTime = 0;
-  updatePlaybackUI(false);
+  if (musicPlayerState.playPauseBtn) {
+    musicPlayerState.playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
+  }
+  try { navigator.mediaSession.playbackState = "paused"; } catch {}
 }
 
 export function updatePositionState() {
@@ -118,7 +122,7 @@ export function updatePositionState() {
 }
 
 export async function updateMediaMetadata(track) {
-  if (!("mediaSession" in navigator)) return;
+  if (!("mediaSession" in navigator) || typeof MediaMetadata !== "function") return;
 
   try {
     const radioDisplay = isRadioTrack(track)
@@ -148,6 +152,18 @@ export async function updateMediaMetadata(track) {
 }
 
 async function getTrackArtwork(track) {
+  const currentArtwork = Array.isArray(musicPlayerState.currentArtwork)
+    ? musicPlayerState.currentArtwork.filter((item) => item?.src)
+    : null;
+
+  if (
+    track?.Id &&
+    musicPlayerState.currentArtworkTrackId === track.Id &&
+    currentArtwork?.length
+  ) {
+    return currentArtwork;
+  }
+
   const safeRadioArtwork = isRadioTrack(track)
     ? await resolveRadioStationArtUrl(track)
     : null;
@@ -164,10 +180,20 @@ async function getTrackArtwork(track) {
 
   if (track?.AlbumPrimaryImageTag || track?.PrimaryImageTag) {
     const imageId = track.AlbumId || track.Id;
-    const serverAddress = getServerAddress();
+    const imageTag = track.AlbumPrimaryImageTag || track.PrimaryImageTag;
+    const params = new URLSearchParams({
+      fillHeight: "512",
+      fillWidth: "512",
+      quality: "90"
+    });
+    if (imageTag) params.set("tag", imageTag);
+
+    const authToken = getAuthToken();
+    if (authToken) params.set("api_key", authToken);
+
     return [
       {
-        src: `${serverAddress}/Items/${imageId}/Images/Primary?quality=90&tag=${track.AlbumPrimaryImageTag || track.PrimaryImageTag}`,
+        src: apiUrl(`/Items/${encodeURIComponent(imageId)}/Images/Primary?${params.toString()}`),
         sizes: "512x512",
         type: "image/jpeg"
       }
@@ -175,7 +201,7 @@ async function getTrackArtwork(track) {
   }
   return [
     {
-      src: DEFAULT_ARTWORK_URL,
+      src: new URL(DEFAULT_ARTWORK_URL, window.location.href).href,
       sizes: "512x512",
       type: "image/png"
     }

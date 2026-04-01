@@ -1,4 +1,4 @@
-import { createCheckbox, createSection } from "../settings.js";
+import { bindCheckboxKontrol, createCheckbox, createSection } from "../settings.js";
 
 export function createWatchlistPanel(config, labels) {
     const panel = document.createElement("div");
@@ -22,6 +22,16 @@ export function createWatchlistPanel(config, labels) {
             config.watchlistAutoRemovePlayed
         )
     );
+
+    const autoRemoveFavoriteCheckbox = createCheckbox(
+        "watchlistAutoRemovePlayedFromFavorites",
+        labels.watchlistAutoRemovePlayedFromFavorites || "Otomatik kaldırırken Jellyfin favorilerinden de çıkar",
+        config.watchlistAutoRemovePlayedFromFavorites
+    );
+    autoRemoveFavoriteCheckbox.classList.add("watchlist-auto-remove-favorite-container");
+    section.appendChild(autoRemoveFavoriteCheckbox);
+
+    bindCheckboxKontrol("#watchlistAutoRemovePlayed", ".watchlist-auto-remove-favorite-container", 0.6);
 
     panel.appendChild(section);
     return panel;

@@ -163,10 +163,11 @@ function refreshLiveRadioTrackInfo(track) {
   updateMediaMetadata(track);
 }
 
- function handleCanPlay() {
+function handleCanPlay() {
   musicPlayerState.audio.play()
     .then(() => {
       updatePlaybackUI(true);
+      updatePositionState();
       const track = musicPlayerState.isUserModified
         ? musicPlayerState.combinedPlaylist[musicPlayerState.currentIndex]
         : musicPlayerState.playlist[musicPlayerState.currentIndex];
@@ -485,15 +486,17 @@ export async function updateModernTrackInfo(track) {
 
   setModernPlayerTitle(title);
   setModernPlayerArtist(artistLine);
+  updateMediaMetadata(track);
 
   await Promise.all([ loadAlbumArt(track), updateTrackMeta(track) ]);
+  if (musicPlayerState.currentTrack?.Id === track.Id) {
+    updateMediaMetadata(track);
+  }
   updatePlayerBackground();
 
   if (musicPlayerState.favoriteBtn) {
     updateFavoriteButtonState(track);
   }
-
-  updateMediaMetadata(track);
 }
 
 function resetTrackInfo() {
@@ -593,6 +596,7 @@ function setAlbumArt(imageUrl) {
       sizes: '300x300',
       type: 'image/png'
     }];
+    musicPlayerState.currentArtworkTrackId = musicPlayerState.currentTrack?.Id || null;
     return;
   }
 
@@ -603,6 +607,7 @@ function setAlbumArt(imageUrl) {
       sizes: '300x300',
       type: 'image/jpeg'
     }];
+    musicPlayerState.currentArtworkTrackId = musicPlayerState.currentTrack?.Id || null;
     return;
   }
 
@@ -612,6 +617,7 @@ function setAlbumArt(imageUrl) {
     sizes: '300x300',
     type: imageUrl.startsWith('data:') ? imageUrl.split(';')[0].split(':')[1] : 'image/jpeg'
   }];
+  musicPlayerState.currentArtworkTrackId = musicPlayerState.currentTrack?.Id || null;
 }
 
 function createMetaWrapper() {
@@ -737,7 +743,11 @@ export function playTrack(index) {
   musicPlayerState.currentIndex = index;
   musicPlayerState.currentTrack = track;
   musicPlayerState.isLiveStream = isRadioTrack(track);
-  musicPlayerState.currentTrackDuration = isRadioTrack(track) ? NaN : 0;
+  const runtimeTicks = Number(track?.RunTimeTicks);
+  const runtimeSeconds = Number.isFinite(runtimeTicks) && runtimeTicks > 0
+    ? runtimeTicks / 10_000_000
+    : 0;
+  musicPlayerState.currentTrackDuration = isRadioTrack(track) ? NaN : runtimeSeconds;
   musicPlayerState.currentTrackName = isRadioTrack(track)
     ? getRadioTrackDisplayInfo(track).title
     : (track.Name || config.languageLabels.unknownTrack);
@@ -745,6 +755,7 @@ export function playTrack(index) {
   musicPlayerState.radioNowPlayingSource = isRadioTrack(track)
     ? getRadioStationSubtitle(track)
     : null;
+  updatePositionState();
 
   showNotification(
     `${isRadioTrack(track) ? '<i class="fas fa-broadcast-tower" style="margin-right: 8px;"></i>' : '<i class="fas fa-music" style="margin-right: 8px;"></i>'}${config.languageLabels.simdioynat}: ${musicPlayerState.currentTrackName}`,
@@ -815,7 +826,11 @@ export function playTrack(index) {
     try {
       audio.crossOrigin = "anonymous";
     } catch {}
-    const audioUrl = apiUrl(`/Audio/${track.Id}/stream.mp3?Static=true`);
+    const audioUrl = getAudioUrl(track);
+    if (!audioUrl) {
+      handlePlaybackError(new Error("Audio URL resolve edilemedi"), 'url');
+      return;
+    }
     audio.src = audioUrl;
     audio.load();
   }
@@ -851,6 +866,10 @@ function getAudioUrl(track) {
 function getEffectiveDuration() {
   const audio = musicPlayerState.audio;
   if (audio && isFinite(audio.duration)) return audio.duration;
+  const runtimeTicks = Number(musicPlayerState.currentTrack?.RunTimeTicks);
+  if (Number.isFinite(runtimeTicks) && runtimeTicks > 0) {
+    return runtimeTicks / 10_000_000;
+  }
   if (isFinite(musicPlayerState.currentTrackDuration)) return musicPlayerState.currentTrackDuration;
   return 0;
 }

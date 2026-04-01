@@ -502,6 +502,25 @@ function withCacheBust(url) {
 
 const __rIC = window.requestIdleCallback || ((fn) => setTimeout(fn, 0));
 
+function requestHiResImage(img) {
+  if (!img || !img.isConnected) return;
+  const data = img.__data || {};
+  if (img.__disableRecovery === true || img.__disableHi === true || hasKnownMissingImage(data)) return;
+  if (img.__hiRequested) return;
+  if (!data.hqSrc) {
+    markImageSettled(img, data.lqSrc || img.currentSrc || img.src || data.fallback || PLACEHOLDER_URL, { disableRecovery: true });
+    return;
+  }
+
+  img.__pendingHi = false;
+  img.__hiRequested = true;
+  img.__phase = "hi";
+  img.src = data.hqSrc;
+  __rIC(() => {
+    if (img.__hiRequested && data.hqSrcset) img.srcset = data.hqSrcset;
+  });
+}
+
 function scheduleImgRetry(img, phase, delayMs) {
   if (!img || !img.isConnected) return false;
   const st = (img.__retryState ||= { lq: { tries: 0 }, hi: { tries: 0 } });
@@ -574,16 +593,11 @@ if (!__imgIO) {
       if (img.__disableRecovery === true || img.__disableHi === true || hasKnownMissingImage(data)) {
         continue;
       }
-      if (!img.__hiRequested) {
-        img.__hiRequested = true;
-        img.__phase = "hi";
-        if (data.hqSrc) {
-          img.src = data.hqSrc;
-          __rIC(() => {
-            if (img.__hiRequested && data.hqSrcset) img.srcset = data.hqSrcset;
-          });
-        }
+      if (data.lqSrc && img.__lqLoaded !== true) {
+        img.__pendingHi = true;
+        continue;
       }
+      requestHiResImage(img);
     }
   }, { rootMargin: IS_MOBILE ? "400px 0px" : "600px 0px", threshold: 0.1 });
   window.__JMS_RECENT_IMGIO = __imgIO;
@@ -617,6 +631,8 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
     img.__hiRequested = true;
     img.__disableHi = true;
     img.__hydrated = true;
+    img.__lqLoaded = true;
+    img.__pendingHi = false;
     return;
   }
 
@@ -632,6 +648,8 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
   img.__phase = "lq";
   img.__hiRequested = false;
   img.__fallbackState = { lqNoTagTried: false, hiNoTagTried: false };
+  img.__lqLoaded = false;
+  img.__pendingHi = false;
   delete img.__disableRecovery;
   delete img.__disableHi;
 
@@ -712,10 +730,34 @@ const onLoad = () => {
     img.__retryState.hi && (img.__retryState.hi.tries = 0);
   }
 
+  if (img.__phase === "lq" && !fallbackRecoveryActive) {
+    img.__lqLoaded = true;
+    img.classList.add("__hydrated");
+    img.classList.add("is-lqip");
+    img.__hydrated = true;
+
+    if (!data.hqSrc && !data.hqSrcset) {
+      img.classList.remove("is-lqip");
+      img.__phase = "settled";
+      return;
+    }
+
+    if (img.__pendingHi) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!img.isConnected || img.__phase !== "lq" || img.__pendingHi !== true) return;
+          requestHiResImage(img);
+        });
+      });
+    }
+    return;
+  }
+
   if (img.__phase === "hi" || img.__phase === "settled" || fallbackRecoveryActive) {
     img.classList.add("__hydrated");
     img.classList.remove("is-lqip");
     img.__hydrated = true;
+    img.__pendingHi = false;
   }
 
   const loadedSrc = img.currentSrc || img.src || "";
@@ -754,6 +796,8 @@ function unobserveImage(img) {
   delete img.__fallbackRecoveryActive;
   delete img.__disableRecovery;
   delete img.__disableHi;
+  delete img.__lqLoaded;
+  delete img.__pendingHi;
 }
 
 function retryRecoverableImages() {
@@ -2657,6 +2701,66 @@ async function initAndRender(wrap) {
     }
   }
 
+  if (ENABLE_RECENT_EPISODES) {
+    const split = (getConfig()?.recentRowsSplitTvLibs !== false);
+    const tvIds = resolveTvLibSelection("recentEpisodes");
+
+    if (!split) {
+      pushPlan(recentPlans, () => fillSectionWithItems({
+        wrap,
+        titleText: config.languageLabels.recentEpisodes || "Son eklenen bölümler",
+        badgeType: "new",
+        heroLabel: config.languageLabels.recentEpisodesHero || "Son eklenen bölüm",
+        cardCount: EFFECTIVE_RECENT_EP_CNT,
+        showProgress: false,
+        fetcher: Object.assign(
+          () => fetchRecentEpisodes(userId, EFFECTIVE_RECENT_EP_CNT + 1).then(async (items) => {
+            await writeCachedList("recent", "Episode", items.map(x=>x?.Id).filter(Boolean));
+            return items;
+          }),
+          {
+            cachedItems: async () => {
+              const { ids } = await readCachedList("recent", "Episode", TTL_RECENT_MS);
+              if (!ids.length) return [];
+              const eps = await fetchItemsByIds(ids.slice(0, EFFECTIVE_RECENT_EP_CNT + 1));
+              await attachSeriesPosterSourceToEpsAndSeasons(eps);
+              return eps.slice(0, EFFECTIVE_RECENT_EP_CNT + 1);
+            }
+          }
+        ),
+        onSeeAll: () => openLatestPage("Episode")
+      }));
+    } else {
+      for (const tvLibId of tvIds) {
+        const libName = (STATE.tvLibs || []).find(x => x.Id === tvLibId)?.Name || "";
+        pushPlan(recentPlans, () => fillSectionWithItems({
+          wrap,
+          titleText: (config.languageLabels.recentEpisodes || "Son eklenen bölümler") + (libName ? ` • ${libName}` : ""),
+          badgeType: "new",
+          heroLabel: (config.languageLabels.recentEpisodesHero || "Son eklenen bölüm") + (libName ? ` • ${libName}` : ""),
+          cardCount: EFFECTIVE_RECENT_EP_CNT,
+          showProgress: false,
+          fetcher: Object.assign(
+            () => fetchRecentEpisodes(userId, EFFECTIVE_RECENT_EP_CNT + 1, tvLibId).then(async (items) => {
+              await writeCachedList("recent", "Episode" + tvLibMetaSuffix(tvLibId), items.map(x=>x?.Id).filter(Boolean));
+              return items;
+            }),
+            {
+              cachedItems: async () => {
+                const { ids } = await readCachedList("recent", "Episode" + tvLibMetaSuffix(tvLibId), TTL_RECENT_MS);
+                if (!ids.length) return [];
+                const eps = await fetchItemsByIds(ids.slice(0, EFFECTIVE_RECENT_EP_CNT + 1));
+                await attachSeriesPosterSourceToEpsAndSeasons(eps);
+                return eps.slice(0, EFFECTIVE_RECENT_EP_CNT + 1);
+              }
+            }
+          ),
+          onSeeAll: () => gotoHash(`#/tv?topParentId=${encodeURIComponent(tvLibId)}&collectionType=tvshows&tab=1`)
+        }));
+      }
+    }
+  }
+
   if (ENABLE_RECENT_MUSIC) {
     pushPlan(recentPlans, () => fillSectionWithItems({
       wrap,
@@ -2710,66 +2814,6 @@ async function initAndRender(wrap) {
     randomHero: false
   }));
 }
-
-  if (ENABLE_RECENT_EPISODES) {
-    const split = (getConfig()?.recentRowsSplitTvLibs !== false);
-    const tvIds = resolveTvLibSelection("recentEpisodes");
-
-    if (!split) {
-      pushPlan(episodePlans, () => fillSectionWithItems({
-        wrap,
-        titleText: config.languageLabels.recentEpisodes || "Son eklenen bölümler",
-        badgeType: "new",
-        heroLabel: config.languageLabels.recentEpisodesHero || "Son eklenen bölüm",
-        cardCount: EFFECTIVE_RECENT_EP_CNT,
-        showProgress: false,
-        fetcher: Object.assign(
-          () => fetchRecentEpisodes(userId, EFFECTIVE_RECENT_EP_CNT + 1).then(async (items) => {
-            await writeCachedList("recent", "Episode", items.map(x=>x?.Id).filter(Boolean));
-            return items;
-          }),
-          {
-            cachedItems: async () => {
-              const { ids } = await readCachedList("recent", "Episode", TTL_RECENT_MS);
-              if (!ids.length) return [];
-              const eps = await fetchItemsByIds(ids.slice(0, EFFECTIVE_RECENT_EP_CNT + 1));
-              await attachSeriesPosterSourceToEpsAndSeasons(eps);
-              return eps.slice(0, EFFECTIVE_RECENT_EP_CNT + 1);
-            }
-          }
-        ),
-        onSeeAll: () => openLatestPage("Episode")
-      }));
-    } else {
-      for (const tvLibId of tvIds) {
-        const libName = (STATE.tvLibs || []).find(x => x.Id === tvLibId)?.Name || "";
-        pushPlan(episodePlans, () => fillSectionWithItems({
-          wrap,
-          titleText: (config.languageLabels.recentEpisodes || "Son eklenen bölümler") + (libName ? ` • ${libName}` : ""),
-          badgeType: "new",
-          heroLabel: (config.languageLabels.recentEpisodesHero || "Son eklenen bölüm") + (libName ? ` • ${libName}` : ""),
-          cardCount: EFFECTIVE_RECENT_EP_CNT,
-          showProgress: false,
-          fetcher: Object.assign(
-            () => fetchRecentEpisodes(userId, EFFECTIVE_RECENT_EP_CNT + 1, tvLibId).then(async (items) => {
-              await writeCachedList("recent", "Episode" + tvLibMetaSuffix(tvLibId), items.map(x=>x?.Id).filter(Boolean));
-              return items;
-            }),
-            {
-              cachedItems: async () => {
-                const { ids } = await readCachedList("recent", "Episode" + tvLibMetaSuffix(tvLibId), TTL_RECENT_MS);
-                if (!ids.length) return [];
-                const eps = await fetchItemsByIds(ids.slice(0, EFFECTIVE_RECENT_EP_CNT + 1));
-                await attachSeriesPosterSourceToEpsAndSeasons(eps);
-                return eps.slice(0, EFFECTIVE_RECENT_EP_CNT + 1);
-              }
-            }
-          ),
-          onSeeAll: () => gotoHash(`#/tv?topParentId=${encodeURIComponent(tvLibId)}&collectionType=tvshows&tab=1`)
-        }));
-      }
-    }
-  }
 
   if (ENABLE_CONTINUE_MOVIES) {
     pushPlan(continuePlans, () => fillSectionWithItems({
@@ -2950,7 +2994,7 @@ async function initAndRender(wrap) {
     }
   }
 
-  const runners = [...recentPlans, ...continuePlans, ...episodePlans];
+  const runners = [...recentPlans, ...episodePlans, ...continuePlans];
 
   async function runWithLimit(fns, limit) {
     const pool = new Set();

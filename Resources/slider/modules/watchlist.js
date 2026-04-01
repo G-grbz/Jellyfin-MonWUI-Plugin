@@ -2,6 +2,8 @@ import { fetchItemDetailsFull, fetchItemsBulk, getEmbyHeaders, getSessionInfo, m
 import { CollectionCacheDB } from "./collectionCacheDb.js";
 import { getConfig } from "./config.js";
 import { withServer } from "./jfUrl.js";
+import { ensureStudioHubLogoFromTmdb, ensureStudioHubManualEntry, JMS_STUDIO_HUB_MANUAL_ENTRY_ADDED_EVENT } from "./studioHubsShared.js";
+import { showNotification } from "./player/ui/notification.js";
 
 const WATCHLIST_ENDPOINT = "/Plugins/jmsFusion/watchlist";
 export const WATCHLIST_MODAL_ID = "monwui-watchlist-modal-root";
@@ -25,6 +27,10 @@ const TABS_SLIDER_OBSERVER_WINDOW_MS = 4_000;
 const collectionAutoRemovePending = new Set();
 const favoriteMirrorPending = new Set();
 const favoriteMirrorSuppressed = new Set();
+const autoAddStudioHubPendingIds = new Set();
+const autoAddedStudioHubIds = new Set();
+const autoStudioHubLogoPendingIds = new Set();
+const autoStudioHubLogoResolvedIds = new Set();
 let favoriteMirrorInstalled = false;
 const scheduleFavoriteMirrorTask = typeof queueMicrotask === "function"
   ? (cb) => queueMicrotask(cb)
@@ -76,6 +82,10 @@ function shouldAutoRemovePlayedFromWatchlist() {
   return cfg()?.watchlistAutoRemovePlayed === true;
 }
 
+function shouldAutoRemovePlayedFromFavorites() {
+  return shouldAutoRemovePlayedFromWatchlist() && cfg()?.watchlistAutoRemovePlayedFromFavorites === true;
+}
+
 function labels() {
   return cfg()?.languageLabels || {};
 }
@@ -89,6 +99,48 @@ function L(key, fallback) {
 function text(value, fallback = "") {
   const out = String(value ?? "").trim();
   return out || fallback;
+}
+
+function notifyStudioHubResult(message, type = "success", icon = "building", duration = 2600) {
+  const cleanMessage = text(message);
+  if (!cleanMessage) return;
+
+  showNotification(`<i class="fas fa-${icon}" style="margin-right:8px;"></i> ${cleanMessage}`, duration, type);
+  window.showMessage?.(cleanMessage, type === "error" ? "error" : "success");
+}
+
+function setStudioHubLoadingState(targetEl, isLoading) {
+  const el = targetEl?.closest?.("[data-monwuiwl-studio-id]") || targetEl;
+  if (!el) return false;
+
+  if (isLoading) {
+    if (el.__studioHubBusy) return false;
+    el.__studioHubBusy = true;
+    el.__studioHubOriginalHtml = el.innerHTML;
+    el.classList.add("is-loading");
+    el.setAttribute("aria-busy", "true");
+    el.style.pointerEvents = "none";
+    el.style.opacity = "0.82";
+    el.innerHTML = `<i class="fas fa-spinner fa-spin" aria-hidden="true" style="margin-right:6px;"></i>${el.__studioHubOriginalHtml || ""}`;
+    try {
+      if ("disabled" in el) el.disabled = true;
+    } catch {}
+    return true;
+  }
+
+  if (el.__studioHubOriginalHtml != null) {
+    el.innerHTML = el.__studioHubOriginalHtml;
+  }
+  el.__studioHubOriginalHtml = null;
+  el.__studioHubBusy = false;
+  el.classList.remove("is-loading");
+  el.removeAttribute("aria-busy");
+  el.style.pointerEvents = "";
+  el.style.opacity = "";
+  try {
+    if ("disabled" in el) el.disabled = false;
+  } catch {}
+  return true;
 }
 
 function getItemTypeName(itemLike) {
@@ -228,6 +280,154 @@ function escapeAttrSelector(value) {
     }
   } catch {}
   return raw.replace(/["\\]/g, "\\$&");
+}
+
+async function copyTextToClipboard(value) {
+  const raw = text(value);
+  if (!raw) return false;
+
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(raw);
+      return true;
+    }
+  } catch {}
+
+  try {
+    const input = document.createElement("textarea");
+    input.value = raw;
+    input.setAttribute("readonly", "");
+    input.style.position = "fixed";
+    input.style.top = "-9999px";
+    input.style.opacity = "0";
+    input.style.pointerEvents = "none";
+    document.body.appendChild(input);
+    input.focus();
+    input.select();
+    input.setSelectionRange(0, input.value.length);
+    const copied = document.execCommand("copy");
+    input.remove();
+    return !!copied;
+  } catch {}
+
+  return false;
+}
+
+function getCurrentServerIdSafe() {
+  try {
+    return text(
+      getSessionInfo?.()?.serverId ||
+      getSessionInfo?.()?.ServerId ||
+      window.ApiClient?._serverInfo?.Id ||
+      window.ApiClient?._serverId
+    );
+  } catch {
+    return text(
+      getSessionInfo?.()?.serverId ||
+      getSessionInfo?.()?.ServerId
+    );
+  }
+}
+
+async function maybeAutoEnsureStudioHub(studioId, studioName) {
+  const cleanStudioId = text(studioId);
+  const cleanStudioName = text(studioName);
+  if (!cleanStudioId || !cleanStudioName) {
+    return { attempted: false, added: false };
+  }
+
+  const config = cfg();
+  if (config?.currentUserIsAdmin !== true || config?.studioHubsAutoAddFromWatchlistCopy !== true) {
+    return { attempted: false, added: false };
+  }
+
+  if (autoAddStudioHubPendingIds.has(cleanStudioId)) {
+    return { attempted: false, added: false, skipped: true, pending: true };
+  }
+
+  if (autoAddedStudioHubIds.has(cleanStudioId)) {
+    return { attempted: false, added: false, skipped: true, existing: true };
+  }
+
+  autoAddStudioHubPendingIds.add(cleanStudioId);
+  try {
+    const result = await ensureStudioHubManualEntry({
+      studioId: cleanStudioId,
+      name: cleanStudioName
+    });
+    autoAddedStudioHubIds.add(cleanStudioId);
+
+    try {
+      window.dispatchEvent(new CustomEvent(JMS_STUDIO_HUB_MANUAL_ENTRY_ADDED_EVENT, {
+        detail: {
+          source: "watchlist-auto-add",
+          studioId: cleanStudioId,
+          studioName: cleanStudioName,
+          entry: result?.entry || null,
+          entries: Array.isArray(result?.entries) ? result.entries : []
+        }
+      }));
+    } catch {}
+
+    return {
+      attempted: true,
+      added: result?.created === true,
+      existing: result?.existing === true,
+      entry: result?.entry || null,
+      entries: Array.isArray(result?.entries) ? result.entries : []
+    };
+  } catch (error) {
+    return {
+      attempted: true,
+      added: false,
+      error
+    };
+  } finally {
+      autoAddStudioHubPendingIds.delete(cleanStudioId);
+  }
+}
+
+async function maybeAutoEnsureStudioHubTmdbLogo(studioId, studioName, { entries = null } = {}) {
+  const cleanStudioId = text(studioId);
+  const cleanStudioName = text(studioName);
+  if (!cleanStudioId || !cleanStudioName) {
+    return { attempted: false, uploaded: false };
+  }
+
+  const config = cfg();
+  if (config?.currentUserIsAdmin !== true || config?.studioHubsAutoAddFromWatchlistCopy !== true) {
+    return { attempted: false, uploaded: false };
+  }
+
+  if (autoStudioHubLogoResolvedIds.has(cleanStudioId) || autoStudioHubLogoPendingIds.has(cleanStudioId)) {
+    return { attempted: false, uploaded: false, skipped: true };
+  }
+
+  autoStudioHubLogoPendingIds.add(cleanStudioId);
+  try {
+    const result = await ensureStudioHubLogoFromTmdb({
+      studioId: cleanStudioId,
+      name: cleanStudioName,
+      manualEntries: Array.isArray(entries) ? entries : null
+    });
+    autoStudioHubLogoResolvedIds.add(cleanStudioId);
+    return {
+      attempted: result?.attempted !== false,
+      uploaded: result?.uploaded === true,
+      skipped: result?.skipped === true,
+      reason: text(result?.reason),
+      entry: result?.entry || null,
+      entries: Array.isArray(result?.entries) ? result.entries : []
+    };
+  } catch (error) {
+    return {
+      attempted: true,
+      uploaded: false,
+      error
+    };
+  } finally {
+    autoStudioHubLogoPendingIds.delete(cleanStudioId);
+  }
 }
 
 function getWatchlistTabsButtonMarkup(label) {
@@ -975,7 +1175,11 @@ async function processAutoRemovalTasks(tasks = []) {
           if (task.kind === "shared" && task.shareId) {
             await removeWatchlistShare(task.shareId);
           } else if (task.itemId) {
-            await removeFromWatchlist(task.itemId);
+            if (shouldAutoRemovePlayedFromFavorites()) {
+              await updateFavoriteStatus(task.itemId, false);
+            } else {
+              await removeFromWatchlist(task.itemId);
+            }
           }
         } catch {} finally {
           pendingAutoRemovalKeys.delete(dedupeKey);
@@ -1064,7 +1268,7 @@ function ensureStyles() {
     #${WATCHLIST_MODAL_ID} {
       inset: 0;
       position: fixed;
-      z-index: 2147483647;
+      z-index: 9998;
       display: none;
     }
     #${WATCHLIST_MODAL_ID}.visible {
@@ -1084,7 +1288,7 @@ function ensureStyles() {
     }
     #${WATCHLIST_MODAL_ID} .monwuiwl-card {
       width: min(1280px, calc(110vw - 24px));
-      height: min(90vh, 900px);
+      height: min(92vh, 900px);
       background:
         linear-gradient(180deg, rgba(21, 25, 36, 0.96), rgba(10, 12, 18, 0.98));
       border: 1px solid rgba(255, 255, 255, 0.08);
@@ -1510,6 +1714,7 @@ function ensureStyles() {
       gap: 8px;
     }
     #${WATCHLIST_MODAL_ID} .monwuiwl-preview-tag {
+      appearance: none;
       border-radius: 6px;
       background: rgba(255,255,255,0.08);
       border: 1px solid rgba(255,255,255,0.06);
@@ -1518,6 +1723,25 @@ function ensureStyles() {
       font-weight: 700;
       line-height: 1.3;
       padding: 7px 10px;
+    }
+    #${WATCHLIST_MODAL_ID} .monwuiwl-preview-tag-button {
+      cursor: pointer;
+      transition: background 140ms ease, border-color 140ms ease, color 140ms ease, transform 140ms ease;
+    }
+    #${WATCHLIST_MODAL_ID} .monwuiwl-preview-tag-button:hover {
+      background: rgba(255,183,3,0.16);
+      border-color: rgba(255,183,3,0.28);
+      color: #fff3d2;
+      transform: translateY(-1px);
+    }
+    #${WATCHLIST_MODAL_ID} .monwuiwl-preview-tag-button:focus-visible {
+      outline: 2px solid rgba(255,183,3,0.55);
+      outline-offset: 2px;
+    }
+    #${WATCHLIST_MODAL_ID} .monwuiwl-preview-tag-button.is-copied {
+      background: linear-gradient(135deg, rgba(255,183,3,0.24), rgba(251,133,0,0.18));
+      border-color: rgba(255,183,3,0.36);
+      color: #fff6dd;
     }
     #${WATCHLIST_MODAL_ID} .monwuiwl-preview-collection-head {
       display: flex;
@@ -2823,6 +3047,29 @@ function getStudioNames(item, limit = 6) {
   ).slice(0, limit);
 }
 
+function getStudioEntries(item, limit = 6) {
+  const out = [];
+  const seen = new Set();
+
+  for (const studio of (Array.isArray(item?.Studios) ? item.Studios : [])) {
+    const name = text(studio?.Name || studio);
+    if (!name) continue;
+
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    out.push({
+      name,
+      id: text(studio?.Id || studio?.StudioId || studio?.studioId)
+    });
+
+    if (out.length >= limit) break;
+  }
+
+  return out;
+}
+
 function getWatchlistTabViews(model, tabKey) {
   const currentTab = normalizeWatchlistTabKey(tabKey);
   return [
@@ -2934,6 +3181,40 @@ function renderPreviewTagSection(title, items = []) {
   `;
 }
 
+function renderPreviewStudioSection(title, studios = []) {
+  const visible = (Array.isArray(studios) ? studios : []).filter((studio) => text(studio?.name));
+  if (!visible.length) return "";
+
+  const openTitle = L("watchlistPreviewStudioAdd", "Stüdyo koleksiyonuna ekle");
+
+  return `
+    <section class="monwuiwl-preview-section">
+      <h4 class="monwuiwl-preview-section-title">${escapeHtml(title)}</h4>
+      <div class="monwuiwl-preview-tags">
+        ${visible.map((studio) => {
+          const name = text(studio?.name);
+          const studioId = text(studio?.id);
+
+          if (!studioId) {
+            return `<span class="monwuiwl-preview-tag">${escapeHtml(name)}</span>`;
+          }
+
+          return `
+            <button
+              type="button"
+              class="monwuiwl-preview-tag monwuiwl-preview-tag-button"
+              data-monwuiwl-studio-id="${escapeHtml(studioId)}"
+              data-monwuiwl-studio-name="${escapeHtml(name)}"
+              title="${escapeHtml(openTitle)}"
+              aria-label="${escapeHtml(`${name} - ${openTitle}`)}"
+            >${escapeHtml(name)}</button>
+          `;
+        }).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function clearPreviewHoverTimer(root) {
   if (!root) return;
   clearTimeout(root.__previewHoverTimer);
@@ -2996,7 +3277,8 @@ function renderPreviewPanel(view, details, { loading = false, collectionLoading 
   const officialRating = text(item?.OfficialRating || baseItem.officialRating);
   const productionYear = text(item?.ProductionYear || baseItem.productionYear);
   const genres = uniqTextList(item?.Genres || baseItem.genres || []).slice(0, 6);
-  const studios = getStudioNames(item);
+  const studioEntries = getStudioEntries(item);
+  const studios = studioEntries.map((studio) => studio.name);
   const directors = isCollection ? [] : getPeopleNames(item, "Director", 4);
   const writers = isCollection ? [] : getPeopleNames(item, "Writer", 4);
   const actors = isCollection ? [] : getActorNames(item, 8);
@@ -3113,7 +3395,7 @@ function renderPreviewPanel(view, details, { loading = false, collectionLoading 
         ${renderPreviewListSection(L("watchlistPreviewSubtitleTracks", "Altyazılar"), subtitleTracks)}
         ${renderPreviewFieldSection(L("watchlistPreviewCredits", "Künye"), creditFields)}
         ${renderPreviewTagSection(L("genre", "Tür"), genres)}
-        ${renderPreviewTagSection(L("watchlistPreviewStudios", "Stüdyolar"), studios)}
+        ${renderPreviewStudioSection(L("watchlistPreviewStudios", "Stüdyolar"), studioEntries)}
       </div>
     </div>
   `;
@@ -3868,6 +4150,98 @@ function bindModalInteractions(root) {
   });
 
   root.querySelector(".monwuiwl-preview")?.addEventListener("click", async (event) => {
+    const studioButton = event.target?.closest?.("[data-monwuiwl-studio-id]");
+    if (studioButton) {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (!setStudioHubLoadingState(studioButton, true)) return;
+
+      const studioId = text(studioButton.getAttribute("data-monwuiwl-studio-id"));
+      const studioName = text(studioButton.getAttribute("data-monwuiwl-studio-name"));
+      if (!studioId) {
+        setStudioHubLoadingState(studioButton, false);
+        return;
+      }
+
+      const copied = await copyTextToClipboard(studioId);
+      if (copied) {
+        studioButton.classList.add("is-copied");
+        clearTimeout(studioButton.__copiedTimer);
+        studioButton.__copiedTimer = setTimeout(() => {
+          studioButton.classList.remove("is-copied");
+          studioButton.__copiedTimer = 0;
+        }, 1400);
+      } else {
+        const message = studioName
+          ? `${studioName}: ${L("watchlistPreviewStudioCopyFailed", "Studio ID kopyalanamadı.")}`
+          : L("watchlistPreviewStudioCopyFailed", "Studio ID kopyalanamadı.");
+        notifyStudioHubResult(message, "error", "clipboard", 2400);
+      }
+
+      void (async () => {
+        try {
+          const autoAddResult = await maybeAutoEnsureStudioHub(studioId, studioName);
+          if (autoAddResult?.pending) return;
+
+          if (autoAddResult?.attempted && autoAddResult?.added === false && autoAddResult?.existing !== true) {
+            const message = studioName
+              ? `${studioName}: ${text(autoAddResult?.error?.message, L("watchlistPreviewStudioAutoAddFailed", "Koleksiyon otomatik eklenemedi."))}`
+              : text(autoAddResult?.error?.message, L("watchlistPreviewStudioAutoAddFailed", "Koleksiyon otomatik eklenemedi."));
+            notifyStudioHubResult(message, "error", "triangle-exclamation", 3200);
+            return;
+          }
+
+          const logoResult = await maybeAutoEnsureStudioHubTmdbLogo(studioId, studioName, {
+            entries: autoAddResult?.entries
+          });
+
+          if (autoAddResult?.added && logoResult?.uploaded) {
+            const message = studioName
+              ? `${studioName}: ${L("watchlistPreviewStudioAutoAdded", "Koleksiyon listesine otomatik kaydedildi.")} ${L("watchlistPreviewStudioTmdbLogoSaved", "TMDb logosu da otomatik kaydedildi.")}`
+              : `${L("watchlistPreviewStudioAutoAdded", "Koleksiyon listesine otomatik kaydedildi.")} ${L("watchlistPreviewStudioTmdbLogoSaved", "TMDb logosu da otomatik kaydedildi.")}`;
+            notifyStudioHubResult(message, "success", "building", 3000);
+            return;
+          }
+
+          if (autoAddResult?.existing && logoResult?.uploaded) {
+            const message = studioName
+              ? `${studioName}: ${L("manualCollectionDuplicate", "Bu koleksiyon zaten ekli.")} ${L("watchlistPreviewStudioTmdbLogoSavedSingle", "TMDb logosu otomatik kaydedildi.")}`
+              : `${L("manualCollectionDuplicate", "Bu koleksiyon zaten ekli.")} ${L("watchlistPreviewStudioTmdbLogoSavedSingle", "TMDb logosu otomatik kaydedildi.")}`;
+            notifyStudioHubResult(message, "success", "building", 3000);
+            return;
+          }
+
+          if (autoAddResult?.added) {
+            const message = studioName
+              ? `${studioName}: ${L("watchlistPreviewStudioAutoAdded", "Koleksiyon listesine otomatik kaydedildi.")}`
+              : L("watchlistPreviewStudioAutoAdded", "Koleksiyon listesine otomatik kaydedildi.");
+            notifyStudioHubResult(message, "success", "building", 2600);
+            return;
+          }
+
+          if (autoAddResult?.existing) {
+            const message = studioName
+              ? `${studioName}: ${L("manualCollectionDuplicate", "Bu koleksiyon zaten ekli.")}`
+              : L("manualCollectionDuplicate", "Bu koleksiyon zaten ekli.");
+            notifyStudioHubResult(message, "success", "building", 2600);
+            return;
+          }
+
+          if (logoResult?.uploaded) {
+            const message = studioName
+              ? `${studioName}: ${L("watchlistPreviewStudioTmdbLogoSavedSingle", "TMDb logosu otomatik kaydedildi.")}`
+              : L("watchlistPreviewStudioTmdbLogoSavedSingle", "TMDb logosu otomatik kaydedildi.");
+            notifyStudioHubResult(message, "success", "image", 2600);
+          }
+        } finally {
+          setStudioHubLoadingState(studioButton, false);
+        }
+      })();
+
+      return;
+    }
+
     const button = event.target?.closest?.("[data-monwuiwl-preview-play]");
     if (!button) return;
 

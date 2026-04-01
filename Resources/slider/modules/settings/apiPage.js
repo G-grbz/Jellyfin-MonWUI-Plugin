@@ -177,7 +177,7 @@ export function createQueryPanel(config, labels) {
     const queryStringLabel = document.createElement('label');
     queryStringLabel.className = 'customQueryStringInput query-string-label';
     queryStringLabel.textContent = labels.customQueryString || 'Api Sorgu Dizesi:';
-    queryStringLabel.htmlFor = 'queryStringLabel';
+    queryStringLabel.htmlFor = 'customQueryStringInput';
     section.appendChild(queryStringLabel);
 
     const queryStringDesc = document.createElement('div');
@@ -233,7 +233,7 @@ export function createQueryPanel(config, labels) {
 
     const sortingLabel = document.createElement('label');
     sortingLabel.textContent = labels.sortingKeywords || 'Anahtar Kelimeler (virgül ile ayırınız)';
-    sortingLabel.htmlFor = 'sortingLabel';
+    sortingLabel.htmlFor = 'sortingKeywordsInput';
     section.appendChild(sortingLabel);
 
     const sortingTextarea = document.createElement('textarea');
