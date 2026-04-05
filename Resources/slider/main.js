@@ -8,7 +8,7 @@ import { createSlide } from "./modules/slideCreator.js";
 import { changeSlide, createDotNavigation, enablePeakNeighborActivation, getPeakDisplayOptions, initSwipeEvents, primePeakFirstPaint, syncPeakStructureNow, updatePeakClasses } from "./modules/navigation.js";
 import { attachMouseEvents } from "./modules/events.js";
 import { fetchItemDetails as fetchItemDetailsNet, getSessionInfo, getAuthHeader, waitForAuthReadyStrict, isAuthReadyStrict } from "/Plugins/JMSFusion/runtime/api.js";
-import { cachedFetchJson, cachedFetchText, createCachedItemDetailsFetcher, startLibraryDeltaWatcher } from "./modules/sliderCache.js";
+import { cachedFetchJson, createCachedItemDetailsFetcher, startLibraryDeltaWatcher } from "./modules/sliderCache.js";
 import { forceHomeSectionsTop, forceSkinHeaderPointerEvents } from "./modules/positionOverrides.js";
 import { setupPauseScreen } from "./modules/pauseModul.js";
 import { initAvatarSystem } from "./modules/userAvatar.js";
@@ -209,6 +209,48 @@ function installMaterialIconsUtf8Guard() {
 }
 
 installMaterialIconsUtf8Guard();
+
+function isPlayerCssMobileDevice() {
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+}
+
+export function loadCSS() {
+  const { playerTheme: theme = "dark", playerStyle = "player" } = getConfig();
+  const expected = new Map([
+    ["base", `./slider/src/${playerStyle}-${theme}.css`],
+    ["settings", "./slider/src/settings.css"],
+  ]);
+
+  document.documentElement?.setAttribute?.("data-jellyfin-player-theme", theme);
+  document.documentElement?.setAttribute?.("data-jellyfin-player-style", playerStyle);
+  document.body?.setAttribute?.("data-jellyfin-player-theme", theme);
+  document.body?.setAttribute?.("data-jellyfin-player-style", playerStyle);
+
+  if (isPlayerCssMobileDevice()) {
+    expected.set("fullscreen", "./slider/src/fullscreen.css");
+  }
+
+  expected.forEach((href, key) => {
+    let link = document.querySelector(`link[data-jellyfin-player-css="${key}"]`);
+
+    if (!link) {
+      link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.setAttribute("data-jellyfin-player-css", key);
+      document.head.appendChild(link);
+    }
+
+    if (link.getAttribute("href") !== href) {
+      link.href = href;
+    }
+  });
+
+  document.querySelectorAll('link[data-jellyfin-player-css]').forEach((link) => {
+    if (!expected.has(link.getAttribute("data-jellyfin-player-css"))) {
+      link.remove();
+    }
+  });
+}
 
 function installHomeTabSliderOnlyGate() {
   if (window.__homeTabSliderOnlyGateInstalled) return;
@@ -571,7 +613,9 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
     const sliderCssEnabled = isSliderCssActive(cfg);
 
     syncCSS('/slider/src/fontawesome/all.min.css', 'jms-css-fontawesome', true);
-    syncCSS('/slider/src/notifications.css', 'jms-css-notifications', notificationsCssEnabled);
+    // Notification themes are owned by modules/notifications.js via #jfNotifCss.
+    // Keep cleaning the legacy synced link so it cannot pin theme 1 in the DOM.
+    D.getElementById('jms-css-notifications')?.remove();
     syncCSS('/slider/src/pauseModul.css', 'jms-css-pause', true);
     syncCSS('/slider/src/personalRecommendations.css', 'jms-css-recs', recommendationCssEnabled);
     syncCSS('/slider/src/studioHubs.css', 'jms-css-studiohubs', studioHubsCssEnabled);
@@ -1135,7 +1179,6 @@ function fullSliderReset() {
   window.__cycleStartAt = 0;
   window.__cycleExpired = false;
   window.mySlider = {};
-  window.cachedListContent = "";
   try { delete window.__recsWiresBooted; } catch {}
   try { schedulePersonalRecsReinit(5000); } catch {}
 }
@@ -1378,11 +1421,6 @@ async function fetchJsonViaSafeFetch(url, opts){
   const res = await safeFetch(url, opts);
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
   return await res.json();
-}
-async function fetchTextViaSafeFetch(url, opts){
-  const res = await safeFetch(url, opts);
-  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-  return await res.text();
 }
 
 function looksLikeUrl(v) {
@@ -1903,7 +1941,6 @@ export async function slidesInit() {
       ? cfgLimit
       : parseInt(localStorage.getItem("limit") || "20", 10);
     window.myUserId = userId;
-    window.myListUrl = `/slider/list/list_${userId}.txt`;
 
     let items = [];
 
@@ -1912,30 +1949,6 @@ export async function slidesInit() {
 
       if (config.useManualList && config.manualListIds) {
         listItems = config.manualListIds.split(",").map((id) => id.trim()).filter(Boolean);
-      } else if (config.useListFile) {
-        let text = null;
-        try {
-          text = await cachedFetchText({
-            keyParts: ["listfile", userId, window.myListUrl],
-            url: window.myListUrl,
-            fetchText: fetchTextViaSafeFetch,
-            ttlMs: Number(config?.listFileCacheTtlMs) || 60_000,
-            allowStaleOnError: true,
-          });
-        } catch (e) {
-          console.warn("list.txt alınamadı, fallback API devrede.", e);
-        }
-
-        if (text) {
-          window.cachedListContent = text;
-          if (text.length >= 10) {
-            listItems = text.split("\n").map(l => l.trim()).filter(Boolean);
-          } else {
-            console.warn("list.txt çok küçük, fallback API devrede.");
-          }
-        } else {
-          console.warn("list.txt alınamadı, fallback API devrede.");
-        }
       }
 
       if (Array.isArray(listItems) && listItems.length) {
@@ -1953,8 +1966,11 @@ export async function slidesInit() {
         const shouldBalanceTypes =
           config.balanceItemTypes &&
           (hasAllTypes(includeItemTypes, ["Movie", "Series"]) || hasAllTypes(includeItemTypes, ["Movie", "Series", "BoxSet"]));
-        const shouldShuffle = !config.sortingKeywords?.some(
-          (k) => queryString.includes(k) || queryString.includes("SortBy=") || queryString.includes("SortOrder=")
+        const hasExplicitSort =
+          /(?:^|[?&])sortby=/i.test(queryString) ||
+          /(?:^|[?&])sortorder=/i.test(queryString);
+        const shouldShuffle = !hasExplicitSort && !config.sortingKeywords?.some(
+          (keyword) => queryString.toLowerCase().includes(String(keyword || "").toLowerCase())
         );
 
         let playingItems = [];
