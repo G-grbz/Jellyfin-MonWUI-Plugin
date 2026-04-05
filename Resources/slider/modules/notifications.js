@@ -8,6 +8,18 @@ import { openDetailsModal } from "./detailsModal.js";
 
 const config = getConfig();
 
+function getLiveConfig() {
+  try {
+    return (typeof getConfig === "function" ? getConfig() : config) || config || {};
+  } catch {
+    return config || {};
+  }
+}
+
+function getLiveLabels() {
+  return getLiveConfig()?.languageLabels || config?.languageLabels || {};
+}
+
 function jfUrl(pathOrUrl) {
   return pathOrUrl ? withServer(pathOrUrl) : "";
 }
@@ -601,7 +613,8 @@ function getCreatedTs(item) {
 }
 
 function ensureUI() {
-  if (!config.enableNotifications) return;
+  const liveConfig = getLiveConfig();
+  if (liveConfig.enableNotifications === false) return;
   injectCriticalNotifCSS();
   const header = findHeaderContainer();
   if (header) ensureNotifButtonIn(header);
@@ -621,34 +634,34 @@ function ensureUI() {
       <div class="jf-notif-backdrop" data-close></div>
       <div class="jf-notif-panel">
         <div class="jf-notif-head">
-          <div class="jf-notif-title">${config.languageLabels.recentNotifications}</div>
+          <div class="jf-notif-title">${liveConfig.languageLabels.recentNotifications}</div>
           <div class="jf-notif-actions">
-            <button id="jfNotifModeToggle" class="jf-notif-theme-toggle" title="${(config.languageLabels?.switchToDark)||'Koyu temaya geç'}">
+            <button id="jfNotifModeToggle" class="jf-notif-theme-toggle" title="${(liveConfig.languageLabels?.switchToDark)||'Koyu temaya geç'}">
               ${faIconHtml("moon", "jf-notif-icon")}
             </button>
-            <button id="jfNotifMarkAllRead" class="jf-notif-markallread" title="${config.languageLabels.markAllRead || 'Tümünü okundu say'}">
+            <button id="jfNotifMarkAllRead" class="jf-notif-markallread" title="${liveConfig.languageLabels.markAllRead || 'Tümünü okundu say'}">
               <i class="fa-solid fa-eye"></i>
             </button>
-            <button id="jfNotifThemeToggle" class="jf-notif-theme-toggle" title="${config.languageLabels.themeToggleTooltip}">
+            <button id="jfNotifThemeToggle" class="jf-notif-theme-toggle" title="${liveConfig.languageLabels.themeToggleTooltip}">
               <i class="fa-solid fa-paintbrush"></i>
             </button>
-            <button id="jfNotifClearAll" class="jf-notif-clearall">${config.languageLabels.clearAll}</button>
+            <button id="jfNotifClearAll" class="jf-notif-clearall">${liveConfig.languageLabels.clearAll}</button>
             <button class="jf-notif-close" data-close>×</button>
           </div>
         </div>
         <div class="jf-notif-tabs">
-          <button class="jf-notif-tab active" data-tab="new">${config.languageLabels.newAddedTab || "Yeni Eklenenler"}</button>
-          ${notifState._systemAllowed ? `<button class="jf-notif-tab" data-tab="system">${config.languageLabels.systemNotifications || "Sistem Bildirimleri"}</button>` : ""}
+          <button class="jf-notif-tab active" data-tab="new">${liveConfig.languageLabels.newAddedTab || "Yeni Eklenenler"}</button>
+          ${notifState._systemAllowed ? `<button class="jf-notif-tab" data-tab="system">${liveConfig.languageLabels.systemNotifications || "Sistem Bildirimleri"}</button>` : ""}
         </div>
         <div class="jf-notif-content">
           <div class="jf-notif-tab-content" data-tab="new">
             <div class="jf-notif-section">
-              <div class="jf-notif-subtitle">${config.languageLabels.latestNotifications}</div>
+              <div class="jf-notif-subtitle">${liveConfig.languageLabels.latestNotifications}</div>
               <ul class="jf-notif-list" id="jfNotifList"></ul>
             </div>
-            ${config.enableRenderResume ? `
+            ${liveConfig.enableRenderResume ? `
               <div class="jf-notif-section watching">
-                <div class="jf-notif-subtitle">${config.languageLabels.unfinishedWatching}</div>
+                <div class="jf-notif-subtitle">${liveConfig.languageLabels.unfinishedWatching}</div>
                 <div class="jf-resume-list" id="jfResumeList"></div>
               </div>
             ` : ''}
@@ -712,6 +725,7 @@ ensureSystemTabPresence();
  }
 
 function ensureSystemTabPresence() {
+  const liveConfig = getLiveConfig();
   const tabs = document.querySelector(".jf-notif-tabs");
   const contentHost = document.querySelector(".jf-notif-content");
   if (!tabs || !contentHost) return;
@@ -721,7 +735,7 @@ function ensureSystemTabPresence() {
     const btn = document.createElement("button");
     btn.className = "jf-notif-tab";
     btn.setAttribute("data-tab", "system");
-    btn.textContent = config.languageLabels.systemNotifications || "Sistem Bildirimleri";
+    btn.textContent = liveConfig.languageLabels.systemNotifications || "Sistem Bildirimleri";
     tabs.appendChild(btn);
     const pane = document.createElement("div");
     pane.className = "jf-notif-tab-content";
@@ -735,6 +749,33 @@ function ensureSystemTabPresence() {
         c.style.display = (c.getAttribute("data-tab") === "system") ? "" : "none";
       });
     });
+  }
+}
+
+function syncResumeSectionVisibility() {
+  const liveConfig = getLiveConfig();
+  const newTab = document.querySelector('#jfNotifModal .jf-notif-tab-content[data-tab="new"]');
+  if (!newTab) return;
+
+  let section = newTab.querySelector('.jf-notif-section.watching');
+  if (liveConfig.enableRenderResume === false) {
+    section?.remove();
+    return;
+  }
+
+  if (!section) {
+    section = document.createElement("div");
+    section.className = "jf-notif-section watching";
+    section.innerHTML = `
+      <div class="jf-notif-subtitle"></div>
+      <div class="jf-resume-list" id="jfResumeList"></div>
+    `;
+    newTab.appendChild(section);
+  }
+
+  const titleEl = section.querySelector(".jf-notif-subtitle");
+  if (titleEl) {
+    titleEl.textContent = liveConfig.languageLabels.unfinishedWatching || "İzlemeye Devam Et";
   }
 }
 
@@ -807,16 +848,18 @@ export function forcejfNotifBtnPointerEvents() {
 }
 
 function openModal() {
+  const liveConfig = getLiveConfig();
   clearHoverTimers();
   const m = document.querySelector("#jfNotifModal");
   if (!m) return;
+  syncResumeSectionVisibility();
   m.hidden = false;
   m.removeAttribute("aria-hidden");
   m.style.pointerEvents = "";
   requestAnimationFrame(() => m.classList.add("open"));
   notifState.isModalOpen = true;
   renderNotifications();
-  if (config.enableRenderResume) renderResume();
+  if (liveConfig.enableRenderResume !== false) renderResume();
   if (notifState._systemAllowed) {
     pollActivities();
   }
@@ -1072,67 +1115,85 @@ function scrollToLastItem() {
 }
 
 function formatTimeLeft(sec) {
+  const labels = getLiveLabels();
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   const s = Math.floor(sec % 60);
   const parts = [];
-  if (h > 0) parts.push(`${h}${config.languageLabels.sa}`);
-  if (m > 0) parts.push(`${m}${config.languageLabels.dk}`);
-  if (s > 0) parts.push(`${s}${config.languageLabels.sn}`);
+  if (h > 0) parts.push(`${h}${labels.sa || "sa"}`);
+  if (m > 0) parts.push(`${m}${labels.dk || "dk"}`);
+  if (s > 0) parts.push(`${s}${labels.sn || "sn"}`);
   return parts.join(" ");
 }
 
 async function renderResume() {
-  if (!config.enableRenderResume) return;
+  const liveConfig = getLiveConfig();
+  const labels = liveConfig.languageLabels || {};
+  if (liveConfig.enableRenderResume === false) return;
 
   const container = document.querySelector("#jfResumeList");
   if (!container) return;
-  container.innerHTML = `<div class="jf-loading">${config.languageLabels.loadingText}</div>`;
+  container.innerHTML = `<div class="jf-loading">${labels.loadingText || "Yukleniyor..."}</div>`;
   try {
+    const authReady = await waitForAuthReady(5000);
+    if (!authReady) {
+      setTimeout(() => { renderResume().catch(() => {}); }, AUTH_RETRY_INTERVAL_MS);
+      return;
+    }
+
     const { userId } = getSessionInfo();
-    const data = await makeApiRequest(`/Users/${userId}/Items/Resume?Limit=${config.renderResume || 10}&MediaTypes=Video`);
-    const items = Array.isArray(data?.Items) ? data.Items : [];
-if (!items.length) {
-  container.innerHTML = `<div class="jf-empty">${config.languageLabels.noUnfinishedContent}</div>`;
-  return;
-}
+    if (!userId) {
+      setTimeout(() => { renderResume().catch(() => {}); }, AUTH_RETRY_INTERVAL_MS);
+      return;
+    }
 
-const details = await Promise.all(
-  items.map(it => fetchItemDetails(it.Id).catch(() => null))
-);
+    const data = await makeApiRequest(
+      `/Users/${encodeURIComponent(userId)}/Items?Filters=IsResumable&MediaTypes=Video&Recursive=true&EnableUserData=true&Fields=${encodeURIComponent("UserData,RunTimeTicks,ImageTags,PrimaryImageAspectRatio,BackdropImageTags,ParentBackdropItemId,ParentBackdropImageTags,SeriesId,SeriesName")}&SortBy=DatePlayed,DateCreated&SortOrder=Descending&Limit=${Math.max(10, Number(liveConfig.renderResume || 10) * 3)}`
+    );
+    const items = (Array.isArray(data?.Items) ? data.Items : [])
+      .filter((it) => Number(it?.UserData?.PlaybackPositionTicks || 0) > 0)
+      .slice(0, liveConfig.renderResume || 10);
+    if (!items.length) {
+      container.innerHTML = `<div class="jf-empty">${labels.noUnfinishedContent || "Yarim kalan icerik yok."}</div>`;
+      return;
+    }
 
-container.innerHTML = "";
-items.forEach((it, idx) => {
-  const card = document.createElement("div");
-  card.className = "jf-resume-card";
+    const details = await Promise.all(
+      items.map(it => fetchItemDetails(it.Id).catch(() => null))
+    );
 
-  const pct = Math.round(((it?.UserData?.PlaybackPositionTicks || 0) / (it?.RunTimeTicks || 1)) * 100);
-  const totalSec = (it.RunTimeTicks || 0) / 10_000_000;
-  const playedSec = (it?.UserData?.PlaybackPositionTicks || 0) / 10_000_000;
-  const remainingSec = Math.max(totalSec - playedSec, 0);
-  const d = details[idx];
-  const vStream = d && Array.isArray(d.MediaStreams) ? d.MediaStreams.find(s => s.Type === "Video") : null;
-  const qualityHtml = vStream ? getVideoQualityText(vStream) : "";
+    container.innerHTML = "";
+    items.forEach((it, idx) => {
+      const card = document.createElement("div");
+      card.className = "jf-resume-card";
 
-  card.innerHTML = `
-    ${hasPrimaryImage(it) ? `<img class="poster" src="${escapeHtml(jfUrl(safePosterImageSrc(it, 160, 80)))}" alt="">` : ""}
-    <div class="resume-meta">
-      <div class="name">${escapeHtml(it.Name || config.languageLabels.newContentDefault)}</div>
-      ${qualityHtml ? `<div class="quality">${qualityHtml}</div>` : ""}
-      <div class="progress"><div class="bar" style="width:${Math.min(pct,100)}%"></div></div>
-      <div class="time-left">${formatTimeLeft(remainingSec)} ${config.languageLabels.kaldi}</div>
-      <button class="resume-btn">${config.languageLabels.devamet}</button>
-    </div>
-  `;
-  card.querySelector(".resume-btn").addEventListener("click", () => {
-  playNow(it.Id);
-  closeModal();
-});
-  container.appendChild(card);
-});
+      const pct = Math.round(((it?.UserData?.PlaybackPositionTicks || 0) / (it?.RunTimeTicks || 1)) * 100);
+      const totalSec = (it.RunTimeTicks || 0) / 10_000_000;
+      const playedSec = (it?.UserData?.PlaybackPositionTicks || 0) / 10_000_000;
+      const remainingSec = Math.max(totalSec - playedSec, 0);
+      const d = details[idx];
+      const vStream = d && Array.isArray(d.MediaStreams) ? d.MediaStreams.find(s => s.Type === "Video") : null;
+      const qualityHtml = vStream ? getVideoQualityText(vStream) : "";
+
+      card.innerHTML = `
+        ${hasPrimaryImage(it) ? `<img class="poster" src="${escapeHtml(jfUrl(safePosterImageSrc(it, 160, 80)))}" alt="">` : ""}
+        <div class="resume-meta">
+          <div class="name">${escapeHtml(it.Name || labels.newContentDefault || "Yeni Icerik")}</div>
+          ${qualityHtml ? `<div class="quality">${qualityHtml}</div>` : ""}
+          <div class="progress"><div class="bar" style="width:${Math.min(pct,100)}%"></div></div>
+          <div class="time-left">${formatTimeLeft(remainingSec)} ${labels.kaldi || "kaldi"}</div>
+          <button class="resume-btn">${labels.devamet || "Devam Et"}</button>
+        </div>
+      `;
+      card.querySelector(".resume-btn").addEventListener("click", () => {
+        playNow(it.Id);
+        closeModal();
+      });
+      container.appendChild(card);
+    });
   } catch (e) {
     console.error("Resume listesi alınamadı:", e);
-    container.innerHTML = `<div class="jf-error">${config.languageLabels.listError}</div>`;
+    container.innerHTML = `<div class="jf-error">${labels.listError || "Liste yuklenemedi."}</div>`;
   }
 }
 
