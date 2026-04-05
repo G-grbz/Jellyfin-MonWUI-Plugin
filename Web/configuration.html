@@ -4,313 +4,692 @@
      translate="no" data-jf-no-translate="1">
 
   <div class="content-primary">
-    <div class="verticalSection">
-      <h2 data-jf-no-translate="1">JMSFusion</h2>
-      <p data-jf-no-translate="1">
-        Serves files under <code>/slider</code> and injects <code>&lt;script type="module"&gt;</code> tags into <code>index.html</code> (response rewrite).<br>
-        If no external directory is configured, embedded assets under <code>/Resources/slider</code> are served.
-      </p>
-    </div>
+    <section class="jms-hero-card">
+      <div class="jms-hero-copy">
+        <div class="jms-eyebrow" id="heroEyebrow">Plugin Configuration</div>
+        <h2 id="pageTitle">JMSFusion Control Center</h2>
+        <p id="pageIntro">
+          Manage the <code>/slider</code> asset source, publish global settings, inspect runtime status,
+          and review HTML snippet and web permission details from a cleaner interface.
+        </p>
+      </div>
 
-    <form id="configForm" onsubmit="return false;">
-    <div class="inputContainer">
-        <label class="inputLabel" style="display:flex; align-items:center; gap:8px;">
-          <input id="forceGlobal" type="checkbox">
-          Force Global User Settings (override all users)
-        </label>
-        <div class="fieldDescription">
-          Enabled: all users receive admin snapshot automatically. Disabled: users use their own local settings.
+      <div class="jms-hero-meta">
+        <div class="jms-hero-pill">
+          <span class="jms-hero-pill__label" id="heroLangLabel">Selected Language</span>
+          <strong id="heroLangValue">...</strong>
+        </div>
+        <div class="jms-hero-pill">
+          <span class="jms-hero-pill__label" id="heroRootLabel">Web UI Root</span>
+          <strong id="heroRootValue">/web</strong>
         </div>
       </div>
-      <div class="inputContainer">
-        <label class="inputLabel" for="scriptDir">Script Directory</label>
-        <input id="scriptDir" type="text" class="emby-input" placeholder="/home/gkhng/slider">
-        <div class="fieldDescription">Leave empty to use embedded <code>/Resources/slider</code></div>
-      </div>
+    </section>
 
-      <div class="inputContainer">
-        <label class="inputLabel" for="playerSub">Player Subdirectory</label>
-        <input id="playerSub" type="text" class="emby-input" placeholder="modules/player">
-      </div>
-
-      <div class="buttonContainer" data-jf-no-translate="1" style="margin-top:16px; display:flex; gap:8px; flex-wrap:wrap;">
-        <button id="saveBtn" type="button" class="raised button-submit">Save</button>
-        <button id="publishGlobalBtn" type="button" class="raised"> Publish Admin Settings Globally </button>
-        <button id="refreshEnvBtn" type="button" class="raised">Refresh Web Path & Permissions</button>
-        <button id="copyAclBtn" type="button" class="raised">Copy Permission Commands</button>
-        <button id="patchBtn" type="button" class="raised">Patch (Inject into index.html)</button>
-        <button id="unpatchBtn" type="button" class="raised">Unpatch (Remove from index.html)</button>
-      </div>
-    </form>
-
-    <div id="msg" class="fieldDescription" data-jf-no-translate="1" style="min-height:24px; margin-top:12px;"></div>
-
-    <div class="verticalSection" style="margin-top:20px;">
-      <h3 data-jf-no-translate="1">Status</h3>
-      <pre id="status" class="preformatted" style="margin-top:12px;" data-jf-no-translate="1">Status hasn’t been loaded yet…</pre>
+    <div class="jms-tabbar" role="tablist" aria-label="Configuration sections">
+      <button id="tabJmsfusion"
+              type="button"
+              class="jms-tab is-active"
+              role="tab"
+              aria-selected="true"
+              aria-controls="panelJmsfusion"
+              data-tab="jmsfusion">JMSFusion</button>
+      <button id="tabStatus"
+              type="button"
+              class="jms-tab"
+              role="tab"
+              aria-selected="false"
+              aria-controls="panelStatus"
+              data-tab="status">Status</button>
+      <button id="tabSnippet"
+              type="button"
+              class="jms-tab"
+              role="tab"
+              aria-selected="false"
+              aria-controls="panelSnippet"
+              data-tab="snippet">HTML Snippet &amp; Web Path &amp; Permissions</button>
     </div>
 
-    <div class="verticalSection" style="margin-top:20px;">
-      <h3 data-jf-no-translate="1">In-Memory Injection</h3>
-      <div id="inmem" class="fieldDescription" style="margin-top:12px;" data-jf-no-translate="1">
-        Checking in-memory status…
-      </div>
-    </div>
+    <div id="msg" class="fieldDescription" style="min-height:24px;"></div>
 
-    <div class="verticalSection" style="margin-top:20px;">
-      <h3 data-jf-no-translate="1">HTML Snippet</h3>
-      <div id="snippet" style="margin-top:12px; border:1px solid #ddd; padding:10px;" data-jf-no-translate="1">
-        Snippet hasn’t been loaded yet…
-      </div>
-    </div>
+    <section id="panelJmsfusion"
+             class="jms-panel is-active"
+             data-panel="jmsfusion"
+             role="tabpanel"
+             aria-labelledby="tabJmsfusion">
+      <div class="jms-grid jms-grid--split">
+        <div class="jms-card">
+          <div class="jms-card-head">
+            <h3 id="configCardTitle">Core Settings</h3>
+            <p id="configCardBody">Choose where JMSFusion serves slider assets from and how the player module path is resolved.</p>
+          </div>
 
-    <div class="verticalSection" style="margin-top:20px;">
-      <h3 data-jf-no-translate="1">Web Path & Permissions</h3>
-      <div id="envBox" style="margin-top:12px; border:1px solid #ddd; padding:10px;">
-        <div><b>Running user:</b> <code id="envUser">?</code></div>
-        <div style="margin-top:6px;"><b>Detected web root:</b> <code id="envWebRoot">?</code></div>
-        <div style="margin-top:6px;"><b>Files:</b>
-          <ul style="margin:6px 0 0 16px;">
-            <li><code>index.html</code>: <span id="envIdx">?</span></li>
-            <li><code>index.html.gz</code>: <span id="envGz">?</span></li>
-            <li><code>index.html.br</code>: <span id="envBr">?</span></li>
-          </ul>
+          <form id="configForm" onsubmit="return false;">
+            <div class="inputContainer inputContainer--toggle">
+              <label class="inputLabel inputLabel--checkbox" for="forceGlobal">
+                <input id="forceGlobal" type="checkbox">
+                <span id="forceGlobalLabel">Force global user settings</span>
+              </label>
+              <div class="fieldDescription" id="forceGlobalHint">
+                Enabled: all users receive the admin snapshot automatically. Disabled: users keep their own local settings.
+              </div>
+            </div>
+
+            <div class="inputContainer">
+              <label class="inputLabel" id="scriptDirLabel" for="scriptDir">Script Directory</label>
+              <input id="scriptDir" type="text" class="emby-input" placeholder="/home/gkhng/slider">
+              <div class="fieldDescription" id="scriptDirHint">Leave empty to use embedded <code>/Resources/slider</code> assets.</div>
+            </div>
+
+            <div class="inputContainer">
+              <label class="inputLabel" id="playerSubLabel" for="playerSub">Player Subdirectory</label>
+              <input id="playerSub" type="text" class="emby-input" placeholder="modules/player">
+            </div>
+          </form>
         </div>
-        <div style="margin-top:10px;"><b>Suggested ACL commands:</b></div>
-        <pre id="envAcl" class="preformatted" style="margin-top:6px; white-space:pre-wrap;">(not computed yet)</pre>
+
+        <div class="jms-card">
+          <div class="jms-card-head">
+            <h3 id="actionsCardTitle">Admin Actions</h3>
+            <p id="actionsCardBody">Save plugin settings or publish the current admin snapshot globally for every user profile.</p>
+          </div>
+
+          <div class="buttonContainer">
+            <button id="saveBtn" type="button" class="raised button-submit">Save</button>
+            <button id="publishGlobalBtn" type="button" class="raised">Publish Admin Settings Globally</button>
+          </div>
+        </div>
       </div>
-    </div>
+    </section>
+
+    <section id="panelStatus"
+             class="jms-panel"
+             data-panel="status"
+             role="tabpanel"
+             aria-labelledby="tabStatus"
+             hidden>
+      <div class="jms-grid jms-grid--split">
+        <div class="jms-card">
+          <div class="jms-card-head">
+            <h3 id="statusCardTitle">Runtime Status</h3>
+            <p id="statusCardBody">Quick verification for configuration state, player path resolution, and embedded asset fallback.</p>
+          </div>
+          <div id="status" class="jms-status-list">
+            <div class="jms-empty" id="statusPlaceholder">Status has not been loaded yet.</div>
+          </div>
+        </div>
+
+        <div class="jms-card">
+          <div class="jms-card-head">
+            <h3 id="inmemCardTitle">In-Memory Injection</h3>
+            <p id="inmemCardBody">Checks whether index.html is being rewritten at response time without touching files on disk.</p>
+          </div>
+          <div id="inmem" class="jms-inline-state">
+            Checking in-memory injection...
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="panelSnippet"
+             class="jms-panel"
+             data-panel="snippet"
+             role="tabpanel"
+             aria-labelledby="tabSnippet"
+             hidden>
+      <div class="jms-grid jms-grid--split">
+        <div class="jms-card">
+          <div class="jms-card-head">
+            <h3 id="snippetCardTitle">HTML Snippet</h3>
+            <p id="snippetCardBody">The exact snippet JMSFusion injects into Jellyfin web.</p>
+          </div>
+          <div id="snippet" class="jms-code-shell">
+            <div class="jms-empty" id="snippetPlaceholder">Snippet has not been loaded yet.</div>
+          </div>
+        </div>
+
+        <div class="jms-card">
+          <div class="jms-card-head">
+            <h3 id="envCardTitle">Web Path &amp; Permissions</h3>
+            <p id="envCardBody">Detected web root, file write permissions, and suggested ACL commands for patching.</p>
+          </div>
+
+          <div class="buttonContainer buttonContainer--tight">
+            <button id="refreshEnvBtn" type="button" class="raised">Refresh Web Path &amp; Permissions</button>
+            <button id="copyAclBtn" type="button" class="raised">Copy Permission Commands</button>
+            <button id="patchBtn" type="button" class="raised">Patch index.html</button>
+            <button id="unpatchBtn" type="button" class="raised">Unpatch index.html</button>
+          </div>
+
+          <div id="envBox" class="jms-env-box">
+            <div class="jms-env-item">
+              <span class="jms-env-label" id="envUserLabel">Running user</span>
+              <code id="envUser">?</code>
+            </div>
+
+            <div class="jms-env-item">
+              <span class="jms-env-label" id="envWebRootLabel">Detected web root</span>
+              <code id="envWebRoot">?</code>
+            </div>
+
+            <div class="jms-env-files">
+              <div class="jms-env-label" id="envFilesLabel">Files</div>
+              <div class="jms-env-file-row">
+                <code>index.html</code>
+                <span id="envIdx">?</span>
+              </div>
+              <div class="jms-env-file-row">
+                <code>index.html.gz</code>
+                <span id="envGz">?</span>
+              </div>
+              <div class="jms-env-file-row">
+                <code>index.html.br</code>
+                <span id="envBr">?</span>
+              </div>
+            </div>
+
+            <div class="jms-env-acl">
+              <div class="jms-env-label" id="envAclLabel">Suggested ACL commands</div>
+              <pre id="envAcl" class="preformatted">(not computed yet)</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
   </div>
 
   <style>
 #JMSFusionConfigPage {
-  --jf-primary: #00a4dc;
-  --jf-primary-hover: #0088bf;
-  --jf-success: #00b893;
-  --jf-warning: #ff9a14;
-  --jf-error: #e53935;
-  --jf-bg-light: #f5f5f5;
-  --jf-border-light: #e0e0e0;
-  --jf-text-dark: #212121;
-  --jf-text-light: #f5f5f5;
-  --jf-card-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  --jf-card-radius: 8px;
+  --jms-accent: #00a6a6;
+  --jms-accent-strong: #0d7c86;
+  --jms-accent-soft: rgba(0, 166, 166, 0.14);
+  --jms-gold: #f0b429;
+  --jms-gold-soft: rgba(240, 180, 41, 0.15);
+  --jms-danger: #d64550;
+  --jms-danger-soft: rgba(214, 69, 80, 0.14);
+  --jms-success: #1f9d68;
+  --jms-success-soft: rgba(31, 157, 104, 0.14);
+  --jms-border: rgba(127, 140, 141, 0.24);
+  --jms-shadow: 0 24px 48px rgba(7, 14, 24, 0.12);
+  --jms-radius-xl: 24px;
+  --jms-radius-lg: 18px;
+  --jms-radius-md: 14px;
 }
 
 .theme-dark #JMSFusionConfigPage {
-  --jf-bg-light: #2b2b2b;
-  --jf-border-light: #404040;
-  --jf-text-dark: #eaeaea;
-  --jf-card-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --jms-border: rgba(235, 245, 246, 0.12);
+  --jms-shadow: 0 24px 48px rgba(0, 0, 0, 0.32);
 }
 
 #JMSFusionConfigPage .content-primary {
-  padding: 20px;
-  max-width: 1000px;
+  max-width: 1180px;
   margin: 0 auto;
+  padding: 24px;
 }
 
-#JMSFusionConfigPage .verticalSection {
-  margin-bottom: 24px;
-  padding: 16px;
-  background-color: var(--cardBackgroundColor);
-  border-radius: var(--jf-card-radius);
-  box-shadow: var(--jf-card-shadow);
+#JMSFusionConfigPage .jms-hero-card,
+#JMSFusionConfigPage .jms-card {
+  background: var(--cardBackgroundColor);
+  border: 1px solid var(--jms-border);
+  border-radius: var(--jms-radius-xl);
+  box-shadow: var(--jms-shadow);
 }
 
-#JMSFusionConfigPage h2 {
-  color: var(--primaryAccentColor);
-  margin-bottom: 16px;
-  font-size: 24px;
-  font-weight: 600;
+#JMSFusionConfigPage .jms-hero-card {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(240px, 1fr);
+  gap: 24px;
+  padding: 28px;
+  background-image:
+    radial-gradient(circle at top right, rgba(240, 180, 41, 0.16), transparent 32%),
+    radial-gradient(circle at left center, rgba(0, 166, 166, 0.15), transparent 38%);
 }
 
-#JMSFusionConfigPage h3 {
+#JMSFusionConfigPage .jms-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--jms-accent-strong);
+}
+
+#JMSFusionConfigPage .jms-eyebrow::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--jms-gold), var(--jms-accent));
+  box-shadow: 0 0 0 6px var(--jms-accent-soft);
+}
+
+#JMSFusionConfigPage #pageTitle {
+  margin: 14px 0 10px;
+  font-size: clamp(28px, 3vw, 42px);
+  line-height: 1.04;
   color: var(--textColor);
-  margin-bottom: 12px;
-  font-size: 18px;
-  font-weight: 600;
 }
 
-#JMSFusionConfigPage p {
+#JMSFusionConfigPage #pageIntro {
+  margin: 0;
+  max-width: 760px;
+  color: var(--labelTextColor);
+  line-height: 1.7;
+  font-size: 15px;
+}
+
+#JMSFusionConfigPage #pageIntro code {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--jms-accent-soft);
   color: var(--textColor);
-  line-height: 1.5;
-  margin-bottom: 16px;
+}
+
+#JMSFusionConfigPage .jms-hero-meta {
+  display: grid;
+  gap: 14px;
+  align-content: center;
+}
+
+#JMSFusionConfigPage .jms-hero-pill {
+  padding: 16px 18px;
+  border-radius: var(--jms-radius-lg);
+  border: 1px solid var(--jms-border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent);
+}
+
+#JMSFusionConfigPage .jms-hero-pill__label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--labelTextColor);
+}
+
+#JMSFusionConfigPage .jms-hero-pill strong {
+  display: block;
+  font-size: 16px;
+  color: var(--textColor);
+  word-break: break-word;
+}
+
+#JMSFusionConfigPage .jms-tabbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 20px 0 14px;
+}
+
+#JMSFusionConfigPage .jms-tab {
+  appearance: none;
+  border: 1px solid var(--jms-border);
+  border-radius: 999px;
+  background: var(--cardBackgroundColor);
+  color: var(--textColor);
+  padding: 12px 18px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+
+#JMSFusionConfigPage .jms-tab:hover {
+  transform: translateY(-1px);
+  border-color: rgba(0, 166, 166, 0.35);
+}
+
+#JMSFusionConfigPage .jms-tab.is-active {
+  color: #ffffff;
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--jms-accent-strong), var(--jms-accent));
+  box-shadow: 0 14px 30px rgba(13, 124, 134, 0.28);
+}
+
+#JMSFusionConfigPage .jms-panel {
+  margin-top: 10px;
+}
+
+#JMSFusionConfigPage .jms-panel[hidden] {
+  display: none !important;
+}
+
+#JMSFusionConfigPage .jms-grid {
+  display: grid;
+  gap: 18px;
+}
+
+#JMSFusionConfigPage .jms-grid--split {
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+}
+
+#JMSFusionConfigPage .jms-card {
+  padding: 22px;
+}
+
+#JMSFusionConfigPage .jms-card-head {
+  margin-bottom: 18px;
+}
+
+#JMSFusionConfigPage .jms-card-head h3 {
+  margin: 0 0 8px;
+  font-size: 20px;
+  color: var(--textColor);
+}
+
+#JMSFusionConfigPage .jms-card-head p {
+  margin: 0;
+  color: var(--labelTextColor);
+  line-height: 1.6;
 }
 
 #JMSFusionConfigPage .inputContainer {
-  margin-bottom: 20px;
-  padding: 16px;
-  background-color: var(--cardBackgroundColor);
-  border-radius: var(--jf-card-radius);
-  box-shadow: var(--jf-card-shadow);
+  margin-bottom: 16px;
+  padding: 18px;
+  border-radius: var(--jms-radius-lg);
+  border: 1px solid var(--jms-border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent);
+}
+
+#JMSFusionConfigPage .inputContainer:last-child {
+  margin-bottom: 0;
 }
 
 #JMSFusionConfigPage .inputLabel {
   display: block;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
   color: var(--textColor);
-  font-weight: 500;
+  font-weight: 700;
+}
+
+#JMSFusionConfigPage .inputLabel--checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 0;
+}
+
+#JMSFusionConfigPage .inputLabel--checkbox input {
+  margin-top: 2px;
 }
 
 #JMSFusionConfigPage .emby-input {
   width: 100%;
-  padding: 10px 12px;
-  border: 1px solid var(--jf-border-light);
-  border-radius: 4px;
-  background-color: var(--inputBackgroundColor);
+  min-height: 46px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--jms-border);
+  background: var(--inputBackgroundColor);
   color: var(--textColor);
-  font-size: 14px;
-  transition: border-color 0.2s ease;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
 #JMSFusionConfigPage .emby-input:focus {
-  border-color: var(--jf-primary);
   outline: none;
-  box-shadow: 0 0 0 2px rgba(0, 164, 220, 0.2);
+  border-color: rgba(0, 166, 166, 0.45);
+  box-shadow: 0 0 0 4px rgba(0, 166, 166, 0.14);
 }
 
 #JMSFusionConfigPage .fieldDescription {
-  margin-top: 8px;
-  font-size: 13px;
+  margin-top: 10px;
   color: var(--labelTextColor);
-  line-height: 1.4;
+  line-height: 1.55;
+  font-size: 13px;
 }
 
-#JMSFusionConfigPage .fieldDescription.ok {
-  color: var(--jf-success);
+#JMSFusionConfigPage #msg {
+  padding: 12px 16px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  background: var(--cardBackgroundColor);
 }
 
-#JMSFusionConfigPage .fieldDescription.warn {
-  color: var(--jf-warning);
+#JMSFusionConfigPage #msg.ok {
+  color: var(--jms-success);
+  background: var(--jms-success-soft);
+  border-color: rgba(31, 157, 104, 0.22);
 }
 
-#JMSFusionConfigPage .fieldDescription.err {
-  color: var(--jf-error);
+#JMSFusionConfigPage #msg.warn {
+  color: var(--jms-gold);
+  background: var(--jms-gold-soft);
+  border-color: rgba(240, 180, 41, 0.22);
+}
+
+#JMSFusionConfigPage #msg.err {
+  color: var(--jms-danger);
+  background: var(--jms-danger-soft);
+  border-color: rgba(214, 69, 80, 0.22);
 }
 
 #JMSFusionConfigPage .buttonContainer {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  margin: 20px 0;
+}
+
+#JMSFusionConfigPage .buttonContainer--tight {
+  margin-bottom: 18px;
 }
 
 #JMSFusionConfigPage .raised {
-  padding: 10px 16px;
-  border: none;
-  border-radius: 4px;
-  font-weight: 500;
+  appearance: none;
+  border: 1px solid var(--jms-border);
+  border-radius: 14px;
+  min-height: 46px;
+  padding: 11px 16px;
   cursor: pointer;
-  transition: all 0.2s ease;
-  background-color: var(--buttonBackgroundColor);
+  font-weight: 700;
+  background: var(--buttonBackgroundColor);
   color: var(--buttonTextColor);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
 }
 
 #JMSFusionConfigPage .raised:hover {
-  background-color: var(--buttonHoverBackgroundColor);
   transform: translateY(-1px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.12);
+  border-color: rgba(0, 166, 166, 0.3);
 }
 
 #JMSFusionConfigPage .button-submit {
-  background-color: var(--jf-primary);
-  color: white;
+  color: #ffffff;
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--jms-accent-strong), var(--jms-accent));
 }
 
-#JMSFusionConfigPage .button-submit:hover {
-  background-color: var(--jf-primary-hover);
+#JMSFusionConfigPage .jms-status-list {
+  display: grid;
+  gap: 12px;
 }
 
-#JMSFusionConfigPage #msg {
-  padding: 12px 16px;
-  border-radius: 4px;
-  margin: 16px 0;
-  background-color: var(--cardBackgroundColor);
-  border-left: 4px solid transparent;
+#JMSFusionConfigPage .jms-status-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--jms-border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent);
 }
 
-#JMSFusionConfigPage #msg.ok {
-  border-left-color: var(--jf-success);
-  background-color: rgba(0, 184, 147, 0.1);
+#JMSFusionConfigPage .jms-status-label {
+  color: var(--textColor);
+  font-weight: 600;
 }
 
-#JMSFusionConfigPage #msg.warn {
-  border-left-color: var(--jf-warning);
-  background-color: rgba(255, 154, 20, 0.1);
+#JMSFusionConfigPage .jms-status-value {
+  color: var(--labelTextColor);
+  text-align: right;
 }
 
-#JMSFusionConfigPage #msg.err {
-  border-left-color: var(--jf-error);
-  background-color: rgba(229, 57, 53, 0.1);
+#JMSFusionConfigPage .jms-status-value code {
+  word-break: break-all;
 }
 
+#JMSFusionConfigPage .jms-inline-state,
+#JMSFusionConfigPage .jms-empty {
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px dashed var(--jms-border);
+  color: var(--labelTextColor);
+  line-height: 1.6;
+}
+
+#JMSFusionConfigPage .jms-inline-state.ok {
+  border-style: solid;
+  color: var(--jms-success);
+  background: var(--jms-success-soft);
+}
+
+#JMSFusionConfigPage .jms-inline-state.warn {
+  border-style: solid;
+  color: var(--jms-gold);
+  background: var(--jms-gold-soft);
+}
+
+#JMSFusionConfigPage .jms-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+#JMSFusionConfigPage .jms-badge.is-good {
+  color: var(--jms-success);
+  background: var(--jms-success-soft);
+}
+
+#JMSFusionConfigPage .jms-badge.is-bad {
+  color: var(--jms-danger);
+  background: var(--jms-danger-soft);
+}
+
+#JMSFusionConfigPage .jms-badge.is-warn {
+  color: var(--jms-gold);
+  background: var(--jms-gold-soft);
+}
+
+#JMSFusionConfigPage .jms-code-shell,
+#JMSFusionConfigPage .jms-env-box,
 #JMSFusionConfigPage pre.preformatted {
+  border-radius: 16px;
+  border: 1px solid var(--jms-border);
+  background: var(--inputBackgroundColor);
+}
+
+#JMSFusionConfigPage .jms-code-shell {
+  overflow: hidden;
+}
+
+#JMSFusionConfigPage .jms-code-shell pre,
+#JMSFusionConfigPage .jms-code-shell code,
+#JMSFusionConfigPage pre.preformatted {
+  margin: 0;
   padding: 16px;
-  background-color: var(--inputBackgroundColor);
-  border-radius: 4px;
-  border: 1px solid var(--jf-border-light);
-  overflow: auto;
-  font-family: 'Consolas', 'Monaco', monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: Consolas, Monaco, monospace;
   font-size: 13px;
-  line-height: 1.4;
+  line-height: 1.55;
   color: var(--textColor);
 }
 
-#JMSFusionConfigPage #snippet,
-#JMSFusionConfigPage #envBox {
-  padding: 16px;
-  background-color: var(--inputBackgroundColor);
-  border-radius: 4px;
-  border: 1px solid var(--jf-border-light);
-  font-size: 14px;
-  line-height: 1.5;
+#JMSFusionConfigPage .jms-env-box {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+}
+
+#JMSFusionConfigPage .jms-env-item {
+  display: grid;
+  gap: 8px;
+}
+
+#JMSFusionConfigPage .jms-env-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--labelTextColor);
+  font-weight: 700;
+}
+
+#JMSFusionConfigPage .jms-env-item code,
+#JMSFusionConfigPage .jms-env-file-row code {
+  padding: 3px 6px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
   color: var(--textColor);
+  font-family: Consolas, Monaco, monospace;
 }
 
-#JMSFusionConfigPage #snippet code,
-#JMSFusionConfigPage #envBox code {
-  background-color: rgba(0, 0, 0, 0.05);
-  padding: 2px 4px;
-  border-radius: 3px;
-  font-family: 'Consolas', 'Monaco', monospace;
+#JMSFusionConfigPage .jms-env-files {
+  display: grid;
+  gap: 12px;
 }
 
-.theme-dark #JMSFusionConfigPage #snippet code,
-.theme-dark #JMSFusionConfigPage #envBox code {
-  background-color: rgba(255, 255, 255, 0.1);
+#JMSFusionConfigPage .jms-env-file-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+
+#JMSFusionConfigPage .jms-env-file-row span {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 #JMSFusionConfigPage .ok {
-  color: var(--jf-success);
-  font-weight: 500;
+  color: var(--jms-success);
 }
 
 #JMSFusionConfigPage .warn {
-  color: var(--jf-warning);
-  font-weight: 500;
+  color: var(--jms-gold);
 }
 
-#JMSFusionConfigPage ul {
-  margin: 8px 0;
-  padding-left: 24px;
+@media (max-width: 900px) {
+  #JMSFusionConfigPage .jms-hero-card,
+  #JMSFusionConfigPage .jms-grid--split {
+    grid-template-columns: 1fr;
+  }
 }
 
-#JMSFusionConfigPage li {
-  margin-bottom: 4px;
-  color: var(--textColor);
-}
+@media (max-width: 720px) {
+  #JMSFusionConfigPage .content-primary {
+    padding: 14px;
+  }
 
-@media (max-width: 768px) {
+  #JMSFusionConfigPage .jms-hero-card,
+  #JMSFusionConfigPage .jms-card {
+    padding: 18px;
+    border-radius: 18px;
+  }
+
   #JMSFusionConfigPage .buttonContainer {
     flex-direction: column;
   }
 
-  #JMSFusionConfigPage .raised {
+  #JMSFusionConfigPage .raised,
+  #JMSFusionConfigPage .jms-tab {
     width: 100%;
   }
 
-  #JMSFusionConfigPage .content-primary {
-    padding: 12px;
+  #JMSFusionConfigPage .jms-status-row,
+  #JMSFusionConfigPage .jms-env-file-row {
+    grid-template-columns: 1fr;
+  }
+
+  #JMSFusionConfigPage .jms-status-value {
+    text-align: left;
   }
 }
 </style>

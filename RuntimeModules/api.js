@@ -1,6 +1,7 @@
 import { getConfig, getServerAddress } from "/slider/modules/config.js";
 import { clearCredentials, getWebClientHints, getStoredServerBase } from "/Plugins/JMSFusion/runtime/auth.js";
 import { withServer, withServerSrcset, invalidateServerBaseCache, resolveServerBase } from "/slider/modules/jfUrl.js";
+import { ensureParentalPinBeforePlayback } from "/slider/modules/parentalPinRuntime.js";
 
 const config = getConfig();
 const SERVER_ADDR_KEY = "jf_serverAddress";
@@ -15,6 +16,20 @@ const MAX_ITEM_CACHE = 600;
 const MAX_DOT_GENRE_CACHE = 1200;
 const MAX_PREVIEW_CACHE = 200;
 const MAX_TOMBSTONES = 2000;
+
+function setLastPlayNowBlockReason(reason = "") {
+  try {
+    window.__jmsLastPlayNowBlockReason = String(reason || "");
+  } catch {}
+}
+
+export function getLastPlayNowBlockReason() {
+  try {
+    return String(window.__jmsLastPlayNowBlockReason || "");
+  } catch {
+    return "";
+  }
+}
 
 function getPlayNowSuccessMessage() {
   try {
@@ -1711,6 +1726,7 @@ async function getBestEpisodeIdForSeason(seasonId, seriesId, userId) {
 
 export async function playNow(itemId) {
   try {
+    setLastPlayNowBlockReason("");
     const self = getSessionInfo();
     const userAgent = String((typeof navigator !== "undefined" && navigator.userAgent) || "");
     const isAndroid = /android/i.test(userAgent);
@@ -1824,6 +1840,24 @@ export async function playNow(itemId) {
       item = await fetchItemDetails(itemId);
     }
     const normalizedItemId = String(itemId);
+    let parentalGateItem = item;
+    if (!parentalGateItem?.OfficialRating && parentalGateItem?.SeriesId) {
+      const parentSeries = await fetchItemDetails(parentalGateItem.SeriesId).catch(() => null);
+      if (parentSeries?.OfficialRating) {
+        parentalGateItem = {
+          ...parentalGateItem,
+          OfficialRating: parentSeries.OfficialRating
+        };
+      }
+    }
+    const isPlaybackAllowed = await ensureParentalPinBeforePlayback(parentalGateItem, {
+      bypassItemId: normalizedItemId
+    });
+    if (!isPlaybackAllowed) {
+      setLastPlayNowBlockReason("parental-pin");
+      return false;
+    }
+
     const resumeTicks = Math.max(0, Math.floor(Number(item?.UserData?.PlaybackPositionTicks) || 0));
 
     await __destroyGmmpBeforeVideoPlayNow().catch(() => false);
@@ -1835,6 +1869,7 @@ export async function playNow(itemId) {
 
     if (localKick?.started) {
       window.currentPlayingItemId = itemId;
+      setLastPlayNowBlockReason("");
       persistDebug({
         at: Date.now(),
         stage: "success",
@@ -1862,6 +1897,7 @@ export async function playNow(itemId) {
     }
     throw new Error("Yerel oynatıcı bulunamadı. Sayfayı yenileyip tekrar deneyin.");
   } catch (err) {
+    setLastPlayNowBlockReason("");
     console.error("Oynatma hatası:", err);
     let next = null;
     try {

@@ -1,217 +1,580 @@
-(function(){
+(function () {
   const path = window.location.pathname || "/";
   const split = path.split("/web/");
   const jfRoot = split.length > 1 ? split[0] : "";
+  const langModuleUrl = `${window.location.origin}${jfRoot}/slider/language/index.js`;
+  const TAB_STORAGE_KEY = "jmsfusion-config-active-tab";
 
-  const api = p => `${jfRoot}/Plugins/JMSFusion/${p}`;
-  const esc = s => (s ?? "").toString().replace(/[&<>]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m]));
-  const cls = v => v ? 'ok' : 'warn';
+  const api = (p) => `${jfRoot}/Plugins/JMSFusion/${p}`;
+  const esc = (s) => (s ?? "").toString().replace(/[&<>]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[m]));
 
-  function showMessage(view, text, kind = '') {
-    const el = view.querySelector('#msg');
+  const fallbackLabels = {
+    webConfig: {
+      heroEyebrow: "Plugin Configuration",
+      heroTitle: "JMSFusion Control Center",
+      heroBody: "Manage the <code>/slider</code> asset source, publish global settings, inspect runtime status, and review HTML snippet and web permission details from one screen.",
+      heroLangLabel: "Selected Language",
+      heroRootLabel: "Web UI Root",
+      tabs: {
+        jmsfusion: "JMSFusion",
+        status: "Status",
+        snippet: "HTML Snippet & Web Path & Permissions"
+      },
+      sections: {
+        configTitle: "Core Settings",
+        configBody: "Choose where JMSFusion serves slider assets from and how the player module path is resolved.",
+        adminTitle: "Admin Actions",
+        adminBody: "Save plugin settings or publish the current admin snapshot globally for every user profile.",
+        statusTitle: "Runtime Status",
+        statusBody: "Quick verification for configuration state, player path resolution, and embedded asset fallback.",
+        inMemoryTitle: "In-Memory Injection",
+        inMemoryBody: "Checks whether index.html is being rewritten at response time without touching files on disk.",
+        snippetTitle: "HTML Snippet",
+        snippetBody: "The exact snippet JMSFusion injects into Jellyfin web.",
+        envTitle: "Web Path & Permissions",
+        envBody: "Detected web root, file write permissions, and suggested ACL commands for patching."
+      },
+      fields: {
+        forceGlobalLabel: "Force global user settings",
+        forceGlobalHint: "Enabled: all users receive the admin snapshot automatically. Disabled: users keep their own local settings.",
+        scriptDirLabel: "Script directory",
+        scriptDirPlaceholder: "/home/gkhng/slider",
+        scriptDirHint: "Leave empty to use embedded <code>/Resources/slider</code> assets.",
+        playerSubLabel: "Player subdirectory",
+        playerSubPlaceholder: "modules/player"
+      },
+      actions: {
+        save: "Save",
+        publishGlobal: "Publish admin settings globally",
+        refreshEnv: "Refresh Web Path & Permissions",
+        copyAcl: "Copy permission commands",
+        patch: "Patch index.html",
+        unpatch: "Unpatch index.html"
+      },
+      messages: {
+        settingsSaved: "Settings saved.",
+        configLoadFailed: "Configuration could not be loaded.",
+        webPathUpdated: "Web path and permissions updated.",
+        nothingToCopy: "There is nothing to copy.",
+        commandsCopied: "Permission commands copied.",
+        patchDone: "Patch completed.",
+        unpatchDone: "Patch removed.",
+        publishDone: "Global settings published successfully.",
+        statusPending: "Status has not been loaded yet.",
+        snippetPending: "Snippet has not been loaded yet.",
+        inMemoryChecking: "Checking in-memory injection...",
+        envPending: "(not computed yet)"
+      },
+      status: {
+        configured: "Configured",
+        directoryExists: "Directory exists",
+        mainJsExists: "Main JS exists",
+        playerJsExists: "Player JS exists",
+        usingEmbedded: "Using embedded assets",
+        playerPath: "Resolved player path",
+        yes: "Yes",
+        no: "No"
+      },
+      inMemory: {
+        activeTitle: "In-memory injection is active.",
+        activeHint: "Physical patching is not required while runtime injection is working.",
+        inactiveTitle: "In-memory injection was not detected.",
+        inactiveHint: "Use Patch if you want to persist the snippet into index.html."
+      },
+      env: {
+        runningUser: "Running user",
+        detectedWebRoot: "Detected web root",
+        files: "Files",
+        found: "Found",
+        notFound: "Not found",
+        writable: "Writable",
+        notWritable: "Not writable",
+        suggestedAcl: "Suggested ACL commands",
+        alternativeAcl: "Alternative"
+      }
+    }
+  };
+
+  const state = {
+    labels: fallbackLabels,
+    lang: "eng"
+  };
+
+  function getByPath(obj, pathExpr) {
+    return String(pathExpr || "")
+      .split(".")
+      .reduce((acc, key) => (acc && acc[key] != null ? acc[key] : null), obj);
+  }
+
+  function t(pathExpr, fallback = "") {
+    const value = getByPath(state.labels, pathExpr);
+    return value == null ? fallback : value;
+  }
+
+  function setText(view, selector, text) {
+    const el = view.querySelector(selector);
+    if (el) el.textContent = text;
+  }
+
+  function setHtml(view, selector, html) {
+    const el = view.querySelector(selector);
+    if (el) el.innerHTML = html;
+  }
+
+  function setPlaceholder(view, selector, text) {
+    const el = view.querySelector(selector);
+    if (el) el.setAttribute("placeholder", text);
+  }
+
+  function getLanguageDisplayName(code) {
+    const map = {
+      tur: "Turkce",
+      eng: "English",
+      deu: "Deutsch",
+      fre: "Francais",
+      rus: "Русский",
+      spa: "Espanol"
+    };
+    return map[code] || String(code || "").toUpperCase() || "Auto";
+  }
+
+  function webRootLabel() {
+    return `${jfRoot || ""}/web` || "/web";
+  }
+
+  async function loadLanguagePack() {
+    try {
+      const mod = await import(langModuleUrl);
+      const lang = typeof mod.getEffectiveLanguage === "function"
+        ? mod.getEffectiveLanguage()
+        : (typeof mod.detectBrowserLanguage === "function" ? mod.detectBrowserLanguage() : "eng");
+      const labels = typeof mod.getLanguageLabels === "function"
+        ? mod.getLanguageLabels(lang)
+        : null;
+
+      if (labels) {
+        state.labels = labels;
+        state.lang = lang || "eng";
+        return;
+      }
+    } catch {}
+
+    state.labels = fallbackLabels;
+    state.lang = "eng";
+  }
+
+  function showMessage(view, text, kind = "") {
+    const el = view.querySelector("#msg");
     if (!el) return;
-    el.className = 'fieldDescription ' + kind;
+    el.className = `fieldDescription ${kind}`.trim();
     el.textContent = text;
     clearTimeout(el.__t);
-    el.__t = setTimeout(() => { el.textContent = ''; el.className = 'fieldDescription'; }, 2500);
+    el.__t = setTimeout(() => {
+      el.textContent = "";
+      el.className = "fieldDescription";
+    }, 3200);
+  }
+
+  function activateTab(view, tabName) {
+    view.querySelectorAll(".jms-tab").forEach((tab) => {
+      const active = tab.dataset.tab === tabName;
+      tab.classList.toggle("is-active", active);
+      tab.setAttribute("aria-selected", active ? "true" : "false");
+    });
+
+    view.querySelectorAll(".jms-panel").forEach((panel) => {
+      const active = panel.dataset.panel === tabName;
+      panel.classList.toggle("is-active", active);
+      panel.hidden = !active;
+    });
+
+    try {
+      localStorage.setItem(TAB_STORAGE_KEY, tabName);
+    } catch {}
+  }
+
+  function initTabs(view) {
+    if (view.__jms_tabs_bound) return;
+    view.__jms_tabs_bound = true;
+
+    view.querySelectorAll(".jms-tab").forEach((tab) => {
+      tab.addEventListener("click", () => activateTab(view, tab.dataset.tab || "jmsfusion"));
+    });
+
+    let active = "jmsfusion";
+    try {
+      const stored = localStorage.getItem(TAB_STORAGE_KEY);
+      if (stored && ["jmsfusion", "status", "snippet"].includes(stored)) {
+        active = stored;
+      }
+    } catch {}
+    activateTab(view, active);
+  }
+
+  function applyTranslations(view) {
+    setText(view, "#heroEyebrow", t("webConfig.heroEyebrow", "Plugin Configuration"));
+    setText(view, "#pageTitle", t("webConfig.heroTitle", "JMSFusion Control Center"));
+    setHtml(view, "#pageIntro", t("webConfig.heroBody", fallbackLabels.webConfig.heroBody));
+    setText(view, "#heroLangLabel", t("webConfig.heroLangLabel", "Selected Language"));
+    setText(view, "#heroLangValue", getLanguageDisplayName(state.lang));
+    setText(view, "#heroRootLabel", t("webConfig.heroRootLabel", "Web UI Root"));
+    setText(view, "#heroRootValue", webRootLabel());
+
+    setText(view, "#tabJmsfusion", t("webConfig.tabs.jmsfusion", "JMSFusion"));
+    setText(view, "#tabStatus", t("webConfig.tabs.status", "Status"));
+    setText(view, "#tabSnippet", t("webConfig.tabs.snippet", "HTML Snippet & Web Path & Permissions"));
+
+    setText(view, "#configCardTitle", t("webConfig.sections.configTitle", "Core Settings"));
+    setText(view, "#configCardBody", t("webConfig.sections.configBody", "Choose where JMSFusion serves slider assets from and how the player module path is resolved."));
+    setText(view, "#actionsCardTitle", t("webConfig.sections.adminTitle", "Admin Actions"));
+    setText(view, "#actionsCardBody", t("webConfig.sections.adminBody", "Save plugin settings or publish the current admin snapshot globally for every user profile."));
+    setText(view, "#statusCardTitle", t("webConfig.sections.statusTitle", "Runtime Status"));
+    setText(view, "#statusCardBody", t("webConfig.sections.statusBody", "Quick verification for configuration state, player path resolution, and embedded asset fallback."));
+    setText(view, "#inmemCardTitle", t("webConfig.sections.inMemoryTitle", "In-Memory Injection"));
+    setText(view, "#inmemCardBody", t("webConfig.sections.inMemoryBody", "Checks whether index.html is being rewritten at response time without touching files on disk."));
+    setText(view, "#snippetCardTitle", t("webConfig.sections.snippetTitle", "HTML Snippet"));
+    setText(view, "#snippetCardBody", t("webConfig.sections.snippetBody", "The exact snippet JMSFusion injects into Jellyfin web."));
+    setText(view, "#envCardTitle", t("webConfig.sections.envTitle", "Web Path & Permissions"));
+    setText(view, "#envCardBody", t("webConfig.sections.envBody", "Detected web root, file write permissions, and suggested ACL commands for patching."));
+
+    setText(view, "#forceGlobalLabel", t("webConfig.fields.forceGlobalLabel", "Force global user settings"));
+    setText(view, "#forceGlobalHint", t("webConfig.fields.forceGlobalHint", "Enabled: all users receive the admin snapshot automatically. Disabled: users keep their own local settings."));
+    setText(view, "#scriptDirLabel", t("webConfig.fields.scriptDirLabel", "Script directory"));
+    setPlaceholder(view, "#scriptDir", t("webConfig.fields.scriptDirPlaceholder", "/home/gkhng/slider"));
+    setHtml(view, "#scriptDirHint", t("webConfig.fields.scriptDirHint", "Leave empty to use embedded <code>/Resources/slider</code> assets."));
+    setText(view, "#playerSubLabel", t("webConfig.fields.playerSubLabel", "Player subdirectory"));
+    setPlaceholder(view, "#playerSub", t("webConfig.fields.playerSubPlaceholder", "modules/player"));
+
+    setText(view, "#saveBtn", t("webConfig.actions.save", "Save"));
+    setText(view, "#publishGlobalBtn", t("webConfig.actions.publishGlobal", "Publish admin settings globally"));
+    setText(view, "#refreshEnvBtn", t("webConfig.actions.refreshEnv", "Refresh Web Path & Permissions"));
+    setText(view, "#copyAclBtn", t("webConfig.actions.copyAcl", "Copy permission commands"));
+    setText(view, "#patchBtn", t("webConfig.actions.patch", "Patch index.html"));
+    setText(view, "#unpatchBtn", t("webConfig.actions.unpatch", "Unpatch index.html"));
+
+    setText(view, "#envUserLabel", t("webConfig.env.runningUser", "Running user"));
+    setText(view, "#envWebRootLabel", t("webConfig.env.detectedWebRoot", "Detected web root"));
+    setText(view, "#envFilesLabel", t("webConfig.env.files", "Files"));
+    setText(view, "#envAclLabel", t("webConfig.env.suggestedAcl", "Suggested ACL commands"));
+
+    if (!view.__statusData) {
+      setText(view, "#statusPlaceholder", t("webConfig.messages.statusPending", "Status has not been loaded yet."));
+    }
+    if (!view.__snippetLoaded) {
+      setText(view, "#snippetPlaceholder", t("webConfig.messages.snippetPending", "Snippet has not been loaded yet."));
+    }
+    if (typeof view.__inmemOk !== "boolean") {
+      setText(view, "#inmem", t("webConfig.messages.inMemoryChecking", "Checking in-memory injection..."));
+    }
+    if (!view.__envData) {
+      setText(view, "#envAcl", t("webConfig.messages.envPending", "(not computed yet)"));
+    }
+
+    if (view.__statusData) renderStatus(view, view.__statusData);
+    if (view.__envData) renderEnv(view, view.__envData);
+    if (typeof view.__inmemOk === "boolean") renderInMem(view, view.__inmemOk);
   }
 
   async function loadConfig(view) {
-    const r = await fetch(api('Configuration'));
-    if (!r.ok) throw new Error('Failed to load config: ' + r.status);
+    const r = await fetch(api("Configuration"));
+    if (!r.ok) throw new Error("Failed to load config: " + r.status);
     const cfg = await r.json();
-    view.querySelector('#scriptDir').value = cfg.scriptDirectory || '';
-    view.querySelector('#playerSub').value = cfg.playerSubdir || 'modules/player';
-    const fg = view.querySelector('#forceGlobal');
+    view.querySelector("#scriptDir").value = cfg.scriptDirectory || "";
+    view.querySelector("#playerSub").value = cfg.playerSubdir || "modules/player";
+    const fg = view.querySelector("#forceGlobal");
     if (fg) fg.checked = !!cfg.forceGlobalUserSettings;
     return cfg;
   }
 
   async function saveConfig(view) {
     const body = {
-      scriptDirectory: view.querySelector('#scriptDir').value.trim(),
-      playerSubdir: view.querySelector('#playerSub').value.trim(),
-      forceGlobalUserSettings: !!view.querySelector('#forceGlobal')?.checked
+      scriptDirectory: view.querySelector("#scriptDir").value.trim(),
+      playerSubdir: view.querySelector("#playerSub").value.trim(),
+      forceGlobalUserSettings: !!view.querySelector("#forceGlobal")?.checked
     };
-    const r = await fetch(api('Configuration'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+
+    const r = await fetch(api("Configuration"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(body)
     });
-    if (!r.ok) throw new Error('Save failed: ' + r.status + ' - ' + await r.text());
+
+    if (!r.ok) throw new Error("Save failed: " + r.status + " - " + await r.text());
   }
 
   async function getStatus() {
-    const r = await fetch(api('Status'));
-    if (!r.ok) throw new Error('Failed to get status: ' + r.status);
+    const r = await fetch(api("Status"));
+    if (!r.ok) throw new Error("Failed to get status: " + r.status);
     return await r.json();
+  }
+
+  function statusBadge(text, tone = "is-good") {
+    return `<span class="jms-badge ${tone}">${esc(text)}</span>`;
+  }
+
+  function yesNo(value) {
+    return value
+      ? t("webConfig.status.yes", "Yes")
+      : t("webConfig.status.no", "No");
   }
 
   function renderStatus(view, s) {
-    const el = view.querySelector('#status');
+    view.__statusData = s;
+    const el = view.querySelector("#status");
     if (!el) return;
-    el.innerHTML = `
-      <div><b>Configured:</b> <span class="${cls(s.configured)}">${s.configured}</span></div>
-      <div><b>DirectoryExists:</b> <span class="${cls(s.directoryExists)}">${s.directoryExists}</span></div>
-      <div><b>MainJsExists:</b> <span class="${cls(s.mainJsExists)}">${s.mainJsExists}</span></div>
-      <div><b>PlayerJsExists:</b> <span class="${cls(s.playerJsExists)}">${s.playerJsExists}</span></div>
-      <div><b>UsingEmbedded:</b> <span class="${cls(s.usingEmbedded)}">${s.usingEmbedded}</span></div>
-      <div><b>PlayerPath:</b> <small>${esc(s.playerPath)}</small></div>
-    `;
+
+    const rows = [
+      {
+        label: t("webConfig.status.configured", "Configured"),
+        value: statusBadge(yesNo(s.configured), s.configured ? "is-good" : "is-bad")
+      },
+      {
+        label: t("webConfig.status.directoryExists", "Directory exists"),
+        value: statusBadge(yesNo(s.directoryExists), s.directoryExists ? "is-good" : "is-bad")
+      },
+      {
+        label: t("webConfig.status.mainJsExists", "Main JS exists"),
+        value: statusBadge(yesNo(s.mainJsExists), s.mainJsExists ? "is-good" : "is-bad")
+      },
+      {
+        label: t("webConfig.status.playerJsExists", "Player JS exists"),
+        value: statusBadge(yesNo(s.playerJsExists), s.playerJsExists ? "is-good" : "is-bad")
+      },
+      {
+        label: t("webConfig.status.usingEmbedded", "Using embedded assets"),
+        value: statusBadge(yesNo(s.usingEmbedded), s.usingEmbedded ? "is-warn" : "is-good")
+      },
+      {
+        label: t("webConfig.status.playerPath", "Resolved player path"),
+        value: `<code>${esc(s.playerPath || "-")}</code>`
+      }
+    ];
+
+    el.innerHTML = rows.map((row) => `
+      <div class="jms-status-row">
+        <div class="jms-status-label">${esc(row.label)}</div>
+        <div class="jms-status-value">${row.value}</div>
+      </div>
+    `).join("");
   }
 
-  async function showStatus(view) { renderStatus(view, await getStatus()); }
+  async function showStatus(view) {
+    renderStatus(view, await getStatus());
+  }
 
   async function showSnippet(view) {
-    const r = await fetch(api('Snippet'));
-    if (!r.ok) throw new Error('Failed to get snippet: ' + r.status);
+    const r = await fetch(api("Snippet"));
+    if (!r.ok) throw new Error("Failed to get snippet: " + r.status);
     const html = await r.text();
-    const box = view.querySelector('#snippet');
-    if (box) box.innerHTML = html;
+    const box = view.querySelector("#snippet");
+    if (!box) return;
+
+    const parsed = new DOMParser().parseFromString(html, "text/html");
+    box.innerHTML = parsed?.body?.innerHTML || html;
+    view.__snippetLoaded = true;
   }
 
   async function getEnv() {
-    const r = await fetch(api('Env'));
-    if (!r.ok) throw new Error('Failed to get env: ' + r.status);
+    const r = await fetch(api("Env"));
+    if (!r.ok) throw new Error("Failed to get env: " + r.status);
     return await r.json();
   }
 
-  function boolBadge(v) { return `<span class="${cls(!!v)}">${v ? 'writable' : 'not writable'}</span>`; }
+  function fileState(exists, writable) {
+    const parts = [
+      statusBadge(
+        exists ? t("webConfig.env.found", "Found") : t("webConfig.env.notFound", "Not found"),
+        exists ? "is-good" : "is-bad"
+      )
+    ];
+
+    if (exists) {
+      parts.push(
+        statusBadge(
+          writable ? t("webConfig.env.writable", "Writable") : t("webConfig.env.notWritable", "Not writable"),
+          writable ? "is-good" : "is-warn"
+        )
+      );
+    }
+
+    return parts.join("");
+  }
 
   function renderEnv(view, env) {
-    view.querySelector('#envUser').textContent = env.user || '?';
-    view.querySelector('#envWebRoot').textContent = env.webRoot || '(not found)';
-    view.querySelector('#envIdx').innerHTML = (env.files?.indexHtml?.exists ? 'found' : 'not found') + ` / ${boolBadge(env.files?.indexHtml?.writable)}`;
-    view.querySelector('#envGz').innerHTML  = (env.files?.indexGz?.exists ? 'found' : 'not found') + ` / ${boolBadge(env.files?.indexGz?.writable)}`;
-    view.querySelector('#envBr').innerHTML  = (env.files?.indexBr?.exists ? 'found' : 'not found') + ` / ${boolBadge(env.files?.indexBr?.writable)}`;
+    view.__envData = env;
+    setText(view, "#envUser", env.user || "?");
+    setText(view, "#envWebRoot", env.webRoot || "(not found)");
 
-    const aclEl = view.querySelector('#envAcl');
-    if (aclEl) aclEl.textContent = (env.acl?.primary || '(not computed)') +
-                                   (env.acl?.alternative ? `\n\n# Alternative:\n${env.acl.alternative}` : '');
+    const idx = view.querySelector("#envIdx");
+    const gz = view.querySelector("#envGz");
+    const br = view.querySelector("#envBr");
+    if (idx) idx.innerHTML = fileState(env.files?.indexHtml?.exists, env.files?.indexHtml?.writable);
+    if (gz) gz.innerHTML = fileState(env.files?.indexGz?.exists, env.files?.indexGz?.writable);
+    if (br) br.innerHTML = fileState(env.files?.indexBr?.exists, env.files?.indexBr?.writable);
+
+    const aclEl = view.querySelector("#envAcl");
+    if (aclEl) {
+      const primary = env.acl?.primary || t("webConfig.messages.envPending", "(not computed yet)");
+      const alternative = env.acl?.alternative
+        ? `\n\n# ${t("webConfig.env.alternativeAcl", "Alternative")}:\n${env.acl.alternative}`
+        : "";
+      aclEl.textContent = `${primary}${alternative}`;
+    }
   }
 
   async function refreshEnv(view) {
     renderEnv(view, await getEnv());
-    showMessage(view, 'Web path & permissions updated', 'ok');
+    showMessage(view, t("webConfig.messages.webPathUpdated", "Web path and permissions updated."), "ok");
   }
 
   function renderInMem(view, ok) {
-    const el = view.querySelector('#inmem');
+    view.__inmemOk = !!ok;
+    const el = view.querySelector("#inmem");
     if (!el) return;
+
     if (ok) {
-      el.innerHTML = `✅ <b>In-memory injection is active.</b><br>
-                      <span class="ok">You don’t need to patch; physical write is not required.</span>`;
-      el.className = 'fieldDescription ok';
-    } else {
-      el.innerHTML = `ℹ️ <b>In-memory injection not detected.</b><br>
-                      <span class="warn">You can use <b>Patch</b> to persist the snippet into <code>index.html</code>.</span>`;
-      el.className = 'fieldDescription warn';
+      el.className = "jms-inline-state ok";
+      el.innerHTML = `
+        <strong>${esc(t("webConfig.inMemory.activeTitle", "In-memory injection is active."))}</strong><br>
+        <span>${esc(t("webConfig.inMemory.activeHint", "Physical patching is not required while runtime injection is working."))}</span>
+      `;
+      return;
     }
+
+    el.className = "jms-inline-state warn";
+    el.innerHTML = `
+      <strong>${esc(t("webConfig.inMemory.inactiveTitle", "In-memory injection was not detected."))}</strong><br>
+      <span>${esc(t("webConfig.inMemory.inactiveHint", "Use Patch if you want to persist the snippet into index.html."))}</span>
+    `;
   }
 
   async function checkInMemory(view) {
     try {
       const url = `${jfRoot}/web/?_jms_check=${Date.now()}`;
-      const r = await fetch(url, { cache: 'no-store', headers: { 'X-JMS-Check': '1' } });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const r = await fetch(url, { cache: "no-store", headers: { "X-JMS-Check": "1" } });
+      if (!r.ok) throw new Error("HTTP " + r.status);
       const txt = await r.text();
       const ok = /<!--\s*SL-INJECT BEGIN\s*-->/.test(txt);
       renderInMem(view, ok);
       return ok;
-    } catch (e) {
+    } catch {
       renderInMem(view, false);
       return false;
     }
   }
 
   async function doPatch(view, kind) {
-    const ep = kind === 'patch' ? 'Patch' : 'Unpatch';
-    const r = await fetch(api(ep), { method: 'POST' });
+    const ep = kind === "patch" ? "Patch" : "Unpatch";
+    const r = await fetch(api(ep), { method: "POST" });
     if (!r.ok) throw new Error(`${ep} failed: ` + r.status);
-    showMessage(view, (kind === 'patch' ? 'Patched.' : 'Unpatched.'), 'ok');
+
+    showMessage(
+      view,
+      kind === "patch"
+        ? t("webConfig.messages.patchDone", "Patch completed.")
+        : t("webConfig.messages.unpatchDone", "Patch removed."),
+      "ok"
+    );
+
     await checkInMemory(view);
     await showStatus(view);
   }
 
   function authHeaders() {
-  try {
-    const token = window.ApiClient?.accessToken?.() || window.ApiClient?._accessToken;
-    if (token) return { 'X-Emby-Token': token };
-  } catch {}
-  return {};
-}
+    try {
+      const token =
+        window.ApiClient?.accessToken?.() ||
+        window.ApiClient?._accessToken ||
+        window.ApiClient?._authToken;
+      if (token) return { "X-Emby-Token": token };
+    } catch {}
+    return {};
+  }
 
   async function initView(view) {
     if (view.__jms_initialized) return;
     view.__jms_initialized = true;
 
-    view.querySelector('#saveBtn')?.addEventListener('click', async () => {
+    initTabs(view);
+    await loadLanguagePack();
+    applyTranslations(view);
+
+    view.querySelector("#saveBtn")?.addEventListener("click", async () => {
       try {
         await saveConfig(view);
-        showMessage(view, 'Settings saved', 'ok');
+        showMessage(view, t("webConfig.messages.settingsSaved", "Settings saved."), "ok");
         await Promise.all([showStatus(view), showSnippet(view), refreshEnv(view)]);
         await checkInMemory(view);
       } catch (e) {
         console.error(e);
-        showMessage(view, e.message || String(e), 'err');
+        showMessage(view, e.message || String(e), "err");
       }
     });
 
-    view.querySelector('#publishGlobalBtn')?.addEventListener('click', async () => {
-  try {
-    const snapshot = {};
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      snapshot[key] = localStorage.getItem(key);
-    }
+    view.querySelector("#publishGlobalBtn")?.addEventListener("click", async () => {
+      try {
+        const snapshot = {};
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          snapshot[key] = localStorage.getItem(key);
+        }
 
-    const r = await fetch(api('UserSettings/Publish'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ global: snapshot })
+        const r = await fetch(api("UserSettings/Publish"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify({ global: snapshot })
+        });
+
+        if (!r.ok) throw new Error("Publish failed");
+        await fetch(`${jfRoot}/Plugins/JMSFusion/UserSettings`, { cache: "no-store" }).catch(() => null);
+        showMessage(view, t("webConfig.messages.publishDone", "Global settings published successfully."), "ok");
+      } catch (e) {
+        showMessage(view, e.message || String(e), "err");
+      }
     });
 
-    if (!r.ok) throw new Error('Publish failed');
-
-    const chk = await fetch('/Plugins/JMSFusion/UserSettings', { cache: 'no-store' });
-const j = await chk.json();
-console.log('[JMSFusion] UserSettings after publish:', j);
-
-    showMessage(view, 'Global settings published successfully', 'ok');
-  } catch (e) {
-    showMessage(view, e.message || String(e), 'err');
-  }
-});
-
-    view.querySelector('#refreshEnvBtn')?.addEventListener('click', async () => {
-      try { await refreshEnv(view); }
-      catch (e) { showMessage(view, e.message || String(e), 'err'); }
+    view.querySelector("#refreshEnvBtn")?.addEventListener("click", async () => {
+      try {
+        await refreshEnv(view);
+      } catch (e) {
+        showMessage(view, e.message || String(e), "err");
+      }
     });
 
-    view.querySelector('#copyAclBtn')?.addEventListener('click', () => {
-      const box = document.querySelector('#envAcl');
-      const toCopy = box?.textContent || '';
+    view.querySelector("#copyAclBtn")?.addEventListener("click", () => {
+      const box = view.querySelector("#envAcl");
+      const toCopy = box?.textContent || "";
       if (!toCopy.trim()) {
-        showMessage(view, 'Nothing to copy', 'warn');
+        showMessage(view, t("webConfig.messages.nothingToCopy", "There is nothing to copy."), "warn");
         return;
       }
+
       navigator.clipboard.writeText(toCopy)
-        .then(() => showMessage(view, 'Commands copied', 'ok'))
-        .catch(err => showMessage(view, 'Copy failed: ' + err, 'err'));
+        .then(() => showMessage(view, t("webConfig.messages.commandsCopied", "Permission commands copied."), "ok"))
+        .catch((err) => showMessage(view, "Copy failed: " + err, "err"));
     });
 
-    view.querySelector('#patchBtn')?.addEventListener('click', async () => {
-      try { await doPatch(view, 'patch'); }
-      catch (e) { showMessage(view, e.message || String(e), 'err'); }
+    view.querySelector("#patchBtn")?.addEventListener("click", async () => {
+      try {
+        await doPatch(view, "patch");
+      } catch (e) {
+        showMessage(view, e.message || String(e), "err");
+      }
     });
 
-    view.querySelector('#unpatchBtn')?.addEventListener('click', async () => {
-      try { await doPatch(view, 'unpatch'); }
-      catch (e) { showMessage(view, e.message || String(e), 'err'); }
+    view.querySelector("#unpatchBtn")?.addEventListener("click", async () => {
+      try {
+        await doPatch(view, "unpatch");
+      } catch (e) {
+        showMessage(view, e.message || String(e), "err");
+      }
     });
 
-    try { await loadConfig(view); }
-    catch (e) { showMessage(view, 'Config load failed: ' + (e.message || String(e)), 'err'); }
+    try {
+      await loadConfig(view);
+    } catch (e) {
+      showMessage(view, `${t("webConfig.messages.configLoadFailed", "Configuration could not be loaded.")} ${e.message || String(e)}`, "err");
+    }
 
     try {
       await Promise.all([showStatus(view), showSnippet(view), refreshEnv(view)]);
@@ -221,21 +584,34 @@ console.log('[JMSFusion] UserSettings after publish:', j);
     }
   }
 
+  async function refreshLanguageIfNeeded() {
+    const view = document.getElementById("JMSFusionConfigPage");
+    if (!view) return;
+    await loadLanguagePack();
+    applyTranslations(view);
+  }
+
   function handlePageEvents(e) {
-    let view = e.detail?.view || e.target || null;
-    if (view && (view.id === 'JMSFusionConfigPage' || view.querySelector?.('#JMSFusionConfigPage'))) {
-      const page = view.id === 'JMSFusionConfigPage' ? view : view.querySelector('#JMSFusionConfigPage');
+    const view = e.detail?.view || e.target || null;
+    if (view && (view.id === "JMSFusionConfigPage" || view.querySelector?.("#JMSFusionConfigPage"))) {
+      const page = view.id === "JMSFusionConfigPage" ? view : view.querySelector("#JMSFusionConfigPage");
       if (page) setTimeout(() => initView(page), 50);
     }
   }
 
-  document.addEventListener('viewshow', handlePageEvents);
-  document.addEventListener('pageshow', handlePageEvents);
-  document.addEventListener('DOMContentLoaded', function() {
-    const existingView = document.getElementById('JMSFusionConfigPage');
+  window.addEventListener("storage", (e) => {
+    if (e.key === "defaultLanguage") {
+      refreshLanguageIfNeeded().catch(() => {});
+    }
+  });
+
+  document.addEventListener("viewshow", handlePageEvents);
+  document.addEventListener("pageshow", handlePageEvents);
+  document.addEventListener("DOMContentLoaded", function () {
+    const existingView = document.getElementById("JMSFusionConfigPage");
     if (existingView) setTimeout(() => initView(existingView), 50);
   });
 
-  const immediateCheck = document.getElementById('JMSFusionConfigPage');
+  const immediateCheck = document.getElementById("JMSFusionConfigPage");
   if (immediateCheck) setTimeout(() => initView(immediateCheck), 50);
 })();

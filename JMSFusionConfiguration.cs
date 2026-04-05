@@ -112,6 +112,27 @@ namespace Jellyfin.Plugin.JMSFusion
 
         [JsonPropertyName("studioHubVisibilityEntries")]
         public List<StudioHubVisibilityEntry> StudioHubVisibilityEntries { get; set; } = new();
+
+        [JsonPropertyName("parentalPinRules")]
+        public List<ParentalPinRuleEntry> ParentalPinRules { get; set; } = new();
+
+        [JsonPropertyName("parentalPinHash")]
+        public string? ParentalPinHash { get; set; }
+
+        [JsonPropertyName("parentalPinSalt")]
+        public string? ParentalPinSalt { get; set; }
+
+        [JsonPropertyName("parentalPinRevision")]
+        public long ParentalPinRevision { get; set; } = 0;
+
+        [JsonPropertyName("parentalPinMaxAttempts")]
+        public int ParentalPinMaxAttempts { get; set; } = 5;
+
+        [JsonPropertyName("parentalPinLockoutMinutes")]
+        public int ParentalPinLockoutMinutes { get; set; } = 15;
+
+        [JsonPropertyName("parentalPinTrustMinutes")]
+        public int ParentalPinTrustMinutes { get; set; } = 60;
     }
 
     public class SharedRadioStationEntry
@@ -233,6 +254,24 @@ namespace Jellyfin.Plugin.JMSFusion
 
         [JsonPropertyName("orderNames")]
         public List<string> OrderNames { get; set; } = new();
+
+        [JsonPropertyName("updatedAtUtc")]
+        public long UpdatedAtUtc { get; set; } = 0;
+    }
+
+    public class ParentalPinRuleEntry
+    {
+        [JsonPropertyName("userId")]
+        public string UserId { get; set; } = string.Empty;
+
+        [JsonPropertyName("userName")]
+        public string? UserName { get; set; }
+
+        [JsonPropertyName("ratingThreshold")]
+        public int RatingThreshold { get; set; } = 0;
+
+        [JsonPropertyName("requireUnratedPin")]
+        public bool RequireUnratedPin { get; set; } = false;
 
         [JsonPropertyName("updatedAtUtc")]
         public long UpdatedAtUtc { get; set; } = 0;
