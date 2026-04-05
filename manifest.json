@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/G-grbz/Jellyfin-MonWUI-Plugin/main/img/icon.png",
     "versions": [
       {
+        "version": "2.4.1.0",
+        "changelog": "Fix: resolved display issue with `Continue Watching` items",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v2.4.0/JMSFusion-2.4.1.0-server.zip",
+        "checksum": "96234205bb50bbbbbb7c6bcfdedc430a",
+        "timestamp": "2026-04-05T13:38:58.8993511Z"
+      },
+      {
         "version": "2.4.0.0",
         "changelog": "Improve parental PIN & UI; optimize GMMP",
         "targetAbi": "10.11.0.0",
