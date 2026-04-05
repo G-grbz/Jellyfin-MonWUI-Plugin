@@ -996,30 +996,6 @@ export function goToDetailsPage(itemId) {
   window.location.href = url;
 }
 
- export async function fetchItemDetails(itemId, { signal } = {}) {
-   if (!itemId) return null;
-   if (isTombstoned(itemId)) return null;
-   try {
-     if (!hasCredentials()) return null;
-     const { userId } = getSessionInfo();
-     const data = await safeFetch(
-       `/Users/${userId}/Items/${encodeURIComponent(String(itemId).trim())}`,
-       { signal }
-     );
-     if (data === null) markTombstone(String(itemId));
-
-     __qbTryPrimeQualityFromItem(data);
-     await hydrateWatchlistPayload(data);
-
-     return data || null;
-   } catch (e) {
-     if (e?.status === 400) return null;
-     if (e?.status === 404) { markTombstone(String(itemId)); return null; }
-     if (!isAbortError(e)) console.warn('fetchItemDetails error:', e);
-     return null;
-   }
- }
-
 const ITEM_FULL_FIELDS = [
   "Type","Name","SeriesId","SeriesName","ParentId","ParentIndexNumber","IndexNumber",
   "Overview","Genres","RunTimeTicks","OfficialRating","ProductionYear",
@@ -1030,6 +1006,30 @@ const ITEM_FULL_FIELDS = [
   "AlbumId", "Album", "AlbumArtist", "AlbumArtistId", "Artists", "ArtistId", "ArtistIds", "ArtistItems",
   "AlbumPrimaryImageTag", "PrimaryImageTag",
 ];
+
+ export async function fetchItemDetails(itemId, { signal } = {}) {
+   if (!itemId) return null;
+   if (isTombstoned(itemId)) return null;
+   try {
+     if (!hasCredentials()) return null;
+     const { userId } = getSessionInfo();
+     const url =
+       `/Users/${userId}/Items/${encodeURIComponent(String(itemId).trim())}` +
+       `?Fields=${ITEM_FULL_FIELDS.join(',')}`;
+     const data = await makeApiRequest(url, { signal });
+     if (data === null) markTombstone(String(itemId));
+
+     __qbTryPrimeQualityFromItem(data);
+     await hydrateWatchlistPayload(data);
+
+     return data || null;
+   } catch (e) {
+     if (e?.status === 400) return null;
+     if (e?.status === 404) { markTombstone(String(itemId)); return null; }
+     if (!isAbortError(e, signal)) console.warn('fetchItemDetails error:', e);
+     return null;
+   }
+ }
 
 export async function fetchItemDetailsFull(itemId, { signal } = {}) {
   if (!itemId) return null;
@@ -2285,10 +2285,10 @@ export async function getUserTopGenres(limit = 5, itemType = null) {
   try {
     const { userId } = getSessionInfo();
     const recentlyPlayed = await makeApiRequest(
-      `/Users/${userId}/Items/Resume?Limit=50&MediaTypes=Video`
+      `/Users/${userId}/Items?Filters=IsResumable&MediaTypes=Video&Recursive=true&EnableUserData=true&Fields=${encodeURIComponent("UserData,Genres")}&SortBy=DatePlayed,DateCreated&SortOrder=Descending&Limit=50`
     );
 
-    const items = recentlyPlayed.Items || [];
+    const items = (recentlyPlayed.Items || []).filter((item) => Number(item?.UserData?.PlaybackPositionTicks || 0) > 0);
     if (items.length === 0) {
       return ['Action', 'Drama', 'Comedy', 'Sci-Fi', 'Adventure'].slice(0, limit);
     }
