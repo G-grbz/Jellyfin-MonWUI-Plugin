@@ -1,4 +1,4 @@
-import { getSessionInfo, makeApiRequest, playNow } from "/Plugins/JMSFusion/runtime/api.js";
+import { getSessionInfo, makeApiRequest, playNow, waitForAuthReadyStrict } from "/Plugins/JMSFusion/runtime/api.js";
 import { getConfig } from "./config.js";
 import { getLanguageLabels } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";
@@ -72,6 +72,49 @@ const HOVER_MODE = (config.recentRowsHoverPreviewMode === "studioMini" || config
   : "inherit";
 const RECENT_ROW_RENDER_CONCURRENCY = 2;
 const IMAGE_RETRY_LIMITS = { lq: 2, hi: 2 };
+
+function getLiveConfig() {
+  try {
+    return (typeof getConfig === "function" ? getConfig() : config) || config || {};
+  } catch {
+    return config || {};
+  }
+}
+
+function clampPositiveCount(value, fallback) {
+  return Number.isFinite(value) ? Math.max(1, value | 0) : fallback;
+}
+
+function getEffectiveRowCount(value) {
+  return IS_MOBILE ? Math.min(value, 8) : Math.min(value, 12);
+}
+
+function getRecentRowsRuntimeConfig(source = getLiveConfig()) {
+  const cfg = source || {};
+  const enableRecentMaster = cfg.enableRecentRows !== false;
+
+  return {
+    showHeroCards: cfg.showRecentRowsHeroCards !== false,
+    enableRecentMovies: enableRecentMaster && (cfg.enableRecentMoviesRow !== false),
+    enableRecentSeries: enableRecentMaster && (cfg.enableRecentSeriesRow !== false),
+    enableRecentEpisodes: enableRecentMaster && (cfg.enableRecentEpisodesRow !== false),
+    enableRecentMusic: enableRecentMaster && (cfg.enableRecentMusicRow !== false),
+    enableRecentTracks: enableRecentMaster && (cfg.enableRecentMusicTracksRow !== false),
+    enableContinueMovies: cfg.enableContinueMovies !== false,
+    enableContinueSeries: cfg.enableContinueSeries !== false,
+    enableOtherLibRows: !!cfg.enableOtherLibRows,
+    effectiveRecentMoviesCount: getEffectiveRowCount(clampPositiveCount(cfg.recentMoviesCardCount, DEFAULT_RECENT_ROWS_COUNT)),
+    effectiveRecentSeriesCount: getEffectiveRowCount(clampPositiveCount(cfg.recentSeriesCardCount, DEFAULT_RECENT_ROWS_COUNT)),
+    effectiveRecentEpisodesCount: getEffectiveRowCount(clampPositiveCount(cfg.recentEpisodesCardCount, 10)),
+    effectiveRecentMusicCount: getEffectiveRowCount(clampPositiveCount(cfg.recentMusicCardCount, DEFAULT_RECENT_ROWS_COUNT)),
+    effectiveRecentTracksCount: getEffectiveRowCount(clampPositiveCount(cfg.recentTracksCardCount, DEFAULT_RECENT_ROWS_COUNT)),
+    effectiveContinueMoviesCount: getEffectiveRowCount(clampPositiveCount(cfg.continueMoviesCardCount, 10)),
+    effectiveContinueSeriesCount: getEffectiveRowCount(clampPositiveCount(cfg.continueSeriesCardCount, 10)),
+    effectiveOtherRecentCount: getEffectiveRowCount(clampPositiveCount(cfg.otherLibrariesRecentCardCount, 10)),
+    effectiveOtherContinueCount: getEffectiveRowCount(clampPositiveCount(cfg.otherLibrariesContinueCardCount, 10)),
+    effectiveOtherEpisodesCount: getEffectiveRowCount(clampPositiveCount(cfg.otherLibrariesEpisodesCardCount, 10)),
+  };
+}
 
 const STATE = {
     started: false,
@@ -1833,16 +1876,20 @@ async function fetchRecent(userId, type, limit, parentId) {
 
 async function fetchContinue(userId, type, limit, parentId) {
   const url =
-    `/Users/${userId}/Items/Resume?` +
-    `IncludeItemTypes=${encodeURIComponent(type)}&Recursive=true&Fields=${encodeURIComponent(COMMON_FIELDS)}&` +
+    `/Users/${userId}/Items?` +
+    `Filters=IsResumable&MediaTypes=Video&IncludeItemTypes=${encodeURIComponent(type)}&Recursive=true&Fields=${encodeURIComponent(COMMON_FIELDS)}&` +
     `EnableUserData=true&` +
     (parentId ? `ParentId=${encodeURIComponent(parentId)}&` : ``) +
-    `SortBy=DatePlayed,DateCreated&SortOrder=Descending&Limit=${Math.max(10, limit * 2)}&` +
+    `SortBy=DatePlayed,DateCreated&SortOrder=Descending&Limit=${Math.max(10, limit * 3)}&` +
     `ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop,Logo`;
   try {
     const data = await makeApiRequest(url);
     const items = Array.isArray(data?.Items) ? data.Items : [];
-    const out = uniqById(items).slice(0, limit);
+    const out = uniqById(
+      items
+        .filter((it) => Number(it?.UserData?.PlaybackPositionTicks || 0) > 0)
+        .sort((a, b) => getLastPlayedTs(b) - getLastPlayedTs(a))
+    ).slice(0, limit);
     try {
       if (STATE.db && STATE.scope) {
         upsertItemsBatchIdle(STATE.db, STATE.scope, out, { timeout: 1500 });
@@ -2007,18 +2054,22 @@ async function fetchRecentEpisodes(userId, limit, parentId) {
 
 async function fetchContinueEpisodes(userId, limit, parentId) {
   const url =
-    `/Users/${userId}/Items/Resume?` +
-    `IncludeItemTypes=Episode&Recursive=true&Fields=${encodeURIComponent(COMMON_FIELDS)}&` +
+    `/Users/${userId}/Items?` +
+    `Filters=IsResumable&MediaTypes=Video&IncludeItemTypes=Episode&Recursive=true&Fields=${encodeURIComponent(COMMON_FIELDS)}&` +
     `EnableUserData=true&` +
     (parentId ? `ParentId=${encodeURIComponent(parentId)}&` : ``) +
     `ExcludeItemTypes=Playlist&` +
-    `SortBy=DatePlayed,DateCreated&SortOrder=Descending&Limit=${Math.max(20, limit * 3)}&` +
+    `SortBy=DatePlayed,DateCreated&SortOrder=Descending&Limit=${Math.max(20, limit * 4)}&` +
     `ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop,Logo`;
 
   try {
     const data = await makeApiRequest(url);
     const eps = Array.isArray(data?.Items) ? data.Items : [];
-    const uniqEps = uniqById(eps).filter(isRealTvEpisode);
+    const uniqEps = uniqById(
+      eps
+        .filter((it) => Number(it?.UserData?.PlaybackPositionTicks || 0) > 0)
+        .sort((a, b) => getLastPlayedTs(b) - getLastPlayedTs(a))
+    ).filter(isRealTvEpisode);
 
     await attachSeriesPosterSourceToEpsAndSeasons(uniqEps);
 
@@ -2106,16 +2157,20 @@ async function fetchRecentGeneric(userId, limit, parentId) {
 
 async function fetchContinueGeneric(userId, limit, parentId) {
   const url =
-    `/Users/${userId}/Items/Resume?` +
-    `Recursive=true&Fields=${encodeURIComponent(COMMON_FIELDS)}&` +
+    `/Users/${userId}/Items?` +
+    `Filters=IsResumable&MediaTypes=Video&Recursive=true&Fields=${encodeURIComponent(COMMON_FIELDS)}&` +
     `EnableUserData=true&` +
     (parentId ? `ParentId=${encodeURIComponent(parentId)}&` : ``) +
-    `SortBy=DatePlayed,DateCreated&SortOrder=Descending&Limit=${Math.max(10, limit * 2)}&` +
+    `SortBy=DatePlayed,DateCreated&SortOrder=Descending&Limit=${Math.max(10, limit * 3)}&` +
     `ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop,Logo`;
   try {
     const data = await makeApiRequest(url);
     const items = Array.isArray(data?.Items) ? data.Items : [];
-    const out = uniqById(items).slice(0, limit);
+    const out = uniqById(
+      items
+        .filter((it) => Number(it?.UserData?.PlaybackPositionTicks || 0) > 0)
+        .sort((a, b) => getLastPlayedTs(b) - getLastPlayedTs(a))
+    ).slice(0, limit);
     await attachSeriesPosterSourceToEpsAndSeasons(out);
     try {
       if (STATE.db && STATE.scope) {
@@ -2174,7 +2229,7 @@ function buildSectionSkeleton({ titleText, badgeType, onSeeAll }) {
 
   const heroHost = document.createElement("div");
   heroHost.className = "dir-row-hero-host";
-  heroHost.style.display = SHOW_RECENT_ROWS_HERO_CARDS ? "" : "none";
+  heroHost.style.display = getRecentRowsRuntimeConfig().showHeroCards ? "" : "none";
 
   const scrollWrap = document.createElement("div");
   scrollWrap.className = "personal-recs-scroll-wrap";
@@ -2245,6 +2300,7 @@ async function fillSectionWithItems({
     badgeType,
     onSeeAll
   });
+  const runtimeCfg = getRecentRowsRuntimeConfig();
 
   appendSection(wrap, section);
   renderSkeletonRow(row, cardCount);
@@ -2268,7 +2324,7 @@ async function fillSectionWithItems({
         const remaining = best ? pool.filter(x => x?.Id && x.Id !== best.Id) : pool.slice();
 
         heroHost.innerHTML = "";
-        if (SHOW_RECENT_ROWS_HERO_CARDS && best) {
+        if (runtimeCfg.showHeroCards && best) {
           heroHost.appendChild(await createRowHeroCard(best, STATE.serverId, heroLabel, { showProgress }));
         }
 
@@ -2338,7 +2394,7 @@ async function fillSectionWithItems({
   const remaining = best ? pool.filter(x => x?.Id && x.Id !== best.Id) : pool.slice();
 
   heroHost.innerHTML = "";
-  if (SHOW_RECENT_ROWS_HERO_CARDS && best) {
+  if (runtimeCfg.showHeroCards && best) {
     heroHost.appendChild(await createRowHeroCard(best, STATE.serverId, heroLabel, { showProgress }));
   }
 
@@ -2497,18 +2553,18 @@ export function mountRecentRowsLazy() {
     return;
   }
   const cfg = getConfig();
-  const recentMaster = (cfg.enableRecentRows !== false);
+  const runtimeCfg = getRecentRowsRuntimeConfig(cfg);
   const anyRecent =
-    (recentMaster && (cfg.enableRecentMoviesRow !== false)) ||
-    (recentMaster && (cfg.enableRecentSeriesRow !== false)) ||
-    (recentMaster && (cfg.enableRecentEpisodesRow !== false)) ||
-    (recentMaster && (cfg.enableRecentMusicRow !== false)) ||
-    (recentMaster && (cfg.enableRecentMusicRow !== false) && (cfg.enableRecentMusicTracksRow !== false));
+    runtimeCfg.enableRecentMovies ||
+    runtimeCfg.enableRecentSeries ||
+    runtimeCfg.enableRecentEpisodes ||
+    runtimeCfg.enableRecentMusic ||
+    runtimeCfg.enableRecentTracks;
 
   const anyEnabled =
     anyRecent ||
-    (cfg.enableContinueMovies !== false) ||
-    (cfg.enableContinueSeries !== false);
+    runtimeCfg.enableContinueMovies ||
+    runtimeCfg.enableContinueSeries;
 
   if (!anyEnabled) return;
 
@@ -2601,8 +2657,16 @@ async function initAndRender(wrap) {
     STATE.defaultTvHash = null;
     STATE.defaultMoviesHash = null;
   }
+  try {
+    if (typeof waitForAuthReadyStrict === "function") {
+      await waitForAuthReadyStrict(5000);
+    }
+  } catch {}
   const { userId, serverId } = getSessionInfo();
-  if (!userId) return;
+  if (!userId) {
+    scheduleRecentRowsRetry(600);
+    return;
+  }
 
   STATE.started = true;
   STATE.wrapEl = wrap;
@@ -2611,22 +2675,23 @@ async function initAndRender(wrap) {
 
   await ensureRecentDb();
   await resolveDefaultPages(userId);
+  const runtimeCfg = getRecentRowsRuntimeConfig();
 
   const recentPlans   = [];
   const continuePlans = [];
   const episodePlans  = [];
   const pushPlan = (bucket, fn) => { if (typeof fn === "function") bucket.push(fn); };
 
-  if (ENABLE_RECENT_MOVIES) {
+  if (runtimeCfg.enableRecentMovies) {
     pushPlan(recentPlans, () => fillSectionWithItems({
       wrap,
       titleText: config.languageLabels.recentMovies || "Son eklenen filmler",
       badgeType: "new",
       heroLabel: config.languageLabels.recentMoviesHero || "Son eklenen film",
-      cardCount: EFFECTIVE_RECENT_MOVIES_COUNT,
+      cardCount: runtimeCfg.effectiveRecentMoviesCount,
       showProgress: false,
       fetcher: Object.assign(
-        () => fetchRecent(userId, "Movie", EFFECTIVE_RECENT_MOVIES_COUNT + 1).then(async (items) => {
+        () => fetchRecent(userId, "Movie", runtimeCfg.effectiveRecentMoviesCount + 1).then(async (items) => {
           await writeCachedList("recent", "Movie", items.map(x=>x?.Id).filter(Boolean));
           return items;
         }),
@@ -2634,8 +2699,8 @@ async function initAndRender(wrap) {
           cachedItems: async () => {
             const { ids } = await readCachedList("recent", "Movie", TTL_RECENT_MS);
             if (!ids.length) return [];
-            const items = await fetchItemsByIds(ids.slice(0, EFFECTIVE_RECENT_MOVIES_COUNT + 1));
-            return items.slice(0, EFFECTIVE_RECENT_MOVIES_COUNT + 1);
+            const items = await fetchItemsByIds(ids.slice(0, runtimeCfg.effectiveRecentMoviesCount + 1));
+            return items.slice(0, runtimeCfg.effectiveRecentMoviesCount + 1);
           }
         }
       ),
@@ -2643,7 +2708,7 @@ async function initAndRender(wrap) {
     }));
   }
 
-  if (ENABLE_RECENT_SERIES) {
+  if (runtimeCfg.enableRecentSeries) {
     const split = (getConfig()?.recentRowsSplitTvLibs !== false);
     const tvIds = resolveTvLibSelection("recentSeries");
 
@@ -2653,10 +2718,10 @@ async function initAndRender(wrap) {
         titleText: config.languageLabels.recentSeries || "Son eklenen diziler",
         badgeType: "new",
         heroLabel: config.languageLabels.recentSeriesHero || "Son eklenen dizi",
-        cardCount: EFFECTIVE_RECENT_SERIES_COUNT,
+        cardCount: runtimeCfg.effectiveRecentSeriesCount,
         showProgress: false,
         fetcher: Object.assign(
-          () => fetchRecent(userId, "Series", EFFECTIVE_RECENT_SERIES_COUNT + 1).then(async (items) => {
+          () => fetchRecent(userId, "Series", runtimeCfg.effectiveRecentSeriesCount + 1).then(async (items) => {
             await writeCachedList("recent", "Series", items.map(x=>x?.Id).filter(Boolean));
             return items;
           }),
@@ -2664,8 +2729,8 @@ async function initAndRender(wrap) {
             cachedItems: async () => {
               const { ids } = await readCachedList("recent", "Series", TTL_RECENT_MS);
               if (!ids.length) return [];
-              const items = await fetchItemsByIds(ids.slice(0, EFFECTIVE_RECENT_SERIES_COUNT + 1));
-              return items.slice(0, EFFECTIVE_RECENT_SERIES_COUNT + 1);
+              const items = await fetchItemsByIds(ids.slice(0, runtimeCfg.effectiveRecentSeriesCount + 1));
+              return items.slice(0, runtimeCfg.effectiveRecentSeriesCount + 1);
             }
           }
         ),
@@ -2679,10 +2744,10 @@ async function initAndRender(wrap) {
           titleText: (config.languageLabels.recentSeries || "Son eklenen diziler") + (libName ? ` • ${libName}` : ""),
           badgeType: "new",
           heroLabel: (config.languageLabels.recentSeriesHero || "Son eklenen dizi") + (libName ? ` • ${libName}` : ""),
-          cardCount: EFFECTIVE_RECENT_SERIES_COUNT,
+          cardCount: runtimeCfg.effectiveRecentSeriesCount,
           showProgress: false,
           fetcher: Object.assign(
-            () => fetchRecent(userId, "Series", EFFECTIVE_RECENT_SERIES_COUNT + 1, tvLibId).then(async (items) => {
+            () => fetchRecent(userId, "Series", runtimeCfg.effectiveRecentSeriesCount + 1, tvLibId).then(async (items) => {
               await writeCachedList("recent", "Series" + tvLibMetaSuffix(tvLibId), items.map(x=>x?.Id).filter(Boolean));
               return items;
             }),
@@ -2690,8 +2755,8 @@ async function initAndRender(wrap) {
               cachedItems: async () => {
                 const { ids } = await readCachedList("recent", "Series" + tvLibMetaSuffix(tvLibId), TTL_RECENT_MS);
                 if (!ids.length) return [];
-                const items = await fetchItemsByIds(ids.slice(0, EFFECTIVE_RECENT_SERIES_COUNT + 1));
-                return items.slice(0, EFFECTIVE_RECENT_SERIES_COUNT + 1);
+                const items = await fetchItemsByIds(ids.slice(0, runtimeCfg.effectiveRecentSeriesCount + 1));
+                return items.slice(0, runtimeCfg.effectiveRecentSeriesCount + 1);
               }
             }
           ),
@@ -2701,7 +2766,7 @@ async function initAndRender(wrap) {
     }
   }
 
-  if (ENABLE_RECENT_EPISODES) {
+  if (runtimeCfg.enableRecentEpisodes) {
     const split = (getConfig()?.recentRowsSplitTvLibs !== false);
     const tvIds = resolveTvLibSelection("recentEpisodes");
 
@@ -2711,10 +2776,10 @@ async function initAndRender(wrap) {
         titleText: config.languageLabels.recentEpisodes || "Son eklenen bölümler",
         badgeType: "new",
         heroLabel: config.languageLabels.recentEpisodesHero || "Son eklenen bölüm",
-        cardCount: EFFECTIVE_RECENT_EP_CNT,
+        cardCount: runtimeCfg.effectiveRecentEpisodesCount,
         showProgress: false,
         fetcher: Object.assign(
-          () => fetchRecentEpisodes(userId, EFFECTIVE_RECENT_EP_CNT + 1).then(async (items) => {
+          () => fetchRecentEpisodes(userId, runtimeCfg.effectiveRecentEpisodesCount + 1).then(async (items) => {
             await writeCachedList("recent", "Episode", items.map(x=>x?.Id).filter(Boolean));
             return items;
           }),
@@ -2722,9 +2787,9 @@ async function initAndRender(wrap) {
             cachedItems: async () => {
               const { ids } = await readCachedList("recent", "Episode", TTL_RECENT_MS);
               if (!ids.length) return [];
-              const eps = await fetchItemsByIds(ids.slice(0, EFFECTIVE_RECENT_EP_CNT + 1));
+              const eps = await fetchItemsByIds(ids.slice(0, runtimeCfg.effectiveRecentEpisodesCount + 1));
               await attachSeriesPosterSourceToEpsAndSeasons(eps);
-              return eps.slice(0, EFFECTIVE_RECENT_EP_CNT + 1);
+              return eps.slice(0, runtimeCfg.effectiveRecentEpisodesCount + 1);
             }
           }
         ),
@@ -2738,10 +2803,10 @@ async function initAndRender(wrap) {
           titleText: (config.languageLabels.recentEpisodes || "Son eklenen bölümler") + (libName ? ` • ${libName}` : ""),
           badgeType: "new",
           heroLabel: (config.languageLabels.recentEpisodesHero || "Son eklenen bölüm") + (libName ? ` • ${libName}` : ""),
-          cardCount: EFFECTIVE_RECENT_EP_CNT,
+          cardCount: runtimeCfg.effectiveRecentEpisodesCount,
           showProgress: false,
           fetcher: Object.assign(
-            () => fetchRecentEpisodes(userId, EFFECTIVE_RECENT_EP_CNT + 1, tvLibId).then(async (items) => {
+            () => fetchRecentEpisodes(userId, runtimeCfg.effectiveRecentEpisodesCount + 1, tvLibId).then(async (items) => {
               await writeCachedList("recent", "Episode" + tvLibMetaSuffix(tvLibId), items.map(x=>x?.Id).filter(Boolean));
               return items;
             }),
@@ -2749,9 +2814,9 @@ async function initAndRender(wrap) {
               cachedItems: async () => {
                 const { ids } = await readCachedList("recent", "Episode" + tvLibMetaSuffix(tvLibId), TTL_RECENT_MS);
                 if (!ids.length) return [];
-                const eps = await fetchItemsByIds(ids.slice(0, EFFECTIVE_RECENT_EP_CNT + 1));
+                const eps = await fetchItemsByIds(ids.slice(0, runtimeCfg.effectiveRecentEpisodesCount + 1));
                 await attachSeriesPosterSourceToEpsAndSeasons(eps);
-                return eps.slice(0, EFFECTIVE_RECENT_EP_CNT + 1);
+                return eps.slice(0, runtimeCfg.effectiveRecentEpisodesCount + 1);
               }
             }
           ),
@@ -2761,16 +2826,16 @@ async function initAndRender(wrap) {
     }
   }
 
-  if (ENABLE_RECENT_MUSIC) {
+  if (runtimeCfg.enableRecentMusic) {
     pushPlan(recentPlans, () => fillSectionWithItems({
       wrap,
       titleText: config.languageLabels.recentMusic || "Son eklenen Albüm",
       badgeType: "new",
       heroLabel: config.languageLabels.recentMusicHero || "Son eklenen albüm",
-      cardCount: EFFECTIVE_RECENT_MUSIC_COUNT,
+      cardCount: runtimeCfg.effectiveRecentMusicCount,
       showProgress: false,
       fetcher: Object.assign(
-        () => fetchRecent(userId, "MusicAlbum", EFFECTIVE_RECENT_MUSIC_COUNT + 1).then(async (items) => {
+        () => fetchRecent(userId, "MusicAlbum", runtimeCfg.effectiveRecentMusicCount + 1).then(async (items) => {
           await writeCachedList("recent", "MusicAlbum", items.map(x=>x?.Id).filter(Boolean));
           return items;
         }),
@@ -2778,8 +2843,8 @@ async function initAndRender(wrap) {
           cachedItems: async () => {
             const { ids } = await readCachedList("recent", "MusicAlbum", TTL_RECENT_MS);
             if (!ids.length) return [];
-            const items = await fetchItemsByIds(ids.slice(0, EFFECTIVE_RECENT_MUSIC_COUNT + 1));
-            return items.slice(0, EFFECTIVE_RECENT_MUSIC_COUNT + 1);
+            const items = await fetchItemsByIds(ids.slice(0, runtimeCfg.effectiveRecentMusicCount + 1));
+            return items.slice(0, runtimeCfg.effectiveRecentMusicCount + 1);
           }
         }
       ),
@@ -2788,16 +2853,16 @@ async function initAndRender(wrap) {
     }));
   }
 
-  if (ENABLE_RECENT_TRACKS) {
+  if (runtimeCfg.enableRecentTracks) {
   pushPlan(continuePlans, () => fillSectionWithItems({
     wrap,
     titleText: (config.languageLabels.recentlyPlayedTracks || config.languageLabels.recRecentTracks) || "Son dinlenen parçalar",
     badgeType: "continue",
     heroLabel: (config.languageLabels.recentlyPlayedTracksHero || config.languageLabels.recentTracksHero) || "Son dinlenen parça",
-    cardCount: EFFECTIVE_RECENT_TRACKS_COUNT,
+    cardCount: runtimeCfg.effectiveRecentTracksCount,
     showProgress: false,
     fetcher: Object.assign(
-      () => fetchRecentlyPlayedTracks(userId, EFFECTIVE_RECENT_TRACKS_COUNT + 1).then(async (items) => {
+      () => fetchRecentlyPlayedTracks(userId, runtimeCfg.effectiveRecentTracksCount + 1).then(async (items) => {
         await writeCachedList("played", "Audio", items.map(x=>x?.Id).filter(Boolean));
         return items;
       }),
@@ -2805,8 +2870,8 @@ async function initAndRender(wrap) {
         cachedItems: async () => {
           const { ids } = await readCachedList("played", "Audio", TTL_CONTINUE_MS);
           if (!ids.length) return [];
-          const items = await fetchItemsByIds(ids.slice(0, EFFECTIVE_RECENT_TRACKS_COUNT + 1));
-          return items.slice(0, EFFECTIVE_RECENT_TRACKS_COUNT + 1);
+          const items = await fetchItemsByIds(ids.slice(0, runtimeCfg.effectiveRecentTracksCount + 1));
+          return items.slice(0, runtimeCfg.effectiveRecentTracksCount + 1);
         }
       }
     ),
@@ -2815,16 +2880,16 @@ async function initAndRender(wrap) {
   }));
 }
 
-  if (ENABLE_CONTINUE_MOVIES) {
+  if (runtimeCfg.enableContinueMovies) {
     pushPlan(continuePlans, () => fillSectionWithItems({
       wrap,
       titleText: config.languageLabels.continueMovies || "Film izlemeye devam et",
       badgeType: "continue",
       heroLabel: config.languageLabels.continueMoviesHero || "İzlemeye devam (Film)",
-      cardCount: EFFECTIVE_CONT_MOV_CNT,
+      cardCount: runtimeCfg.effectiveContinueMoviesCount,
       showProgress: true,
       fetcher: Object.assign(
-        () => fetchContinue(userId, "Movie", EFFECTIVE_CONT_MOV_CNT + 1).then(async (items) => {
+        () => fetchContinue(userId, "Movie", runtimeCfg.effectiveContinueMoviesCount + 1).then(async (items) => {
           await writeCachedList("resume", "Movie", items.map(x=>x?.Id).filter(Boolean));
           return items;
         }),
@@ -2832,8 +2897,8 @@ async function initAndRender(wrap) {
           cachedItems: async () => {
             const { ids } = await readCachedList("resume", "Movie", TTL_CONTINUE_MS);
             if (!ids.length) return [];
-            const items = await fetchItemsByIds(ids.slice(0, EFFECTIVE_CONT_MOV_CNT + 1));
-            return items.slice(0, EFFECTIVE_CONT_MOV_CNT + 1);
+            const items = await fetchItemsByIds(ids.slice(0, runtimeCfg.effectiveContinueMoviesCount + 1));
+            return items.slice(0, runtimeCfg.effectiveContinueMoviesCount + 1);
           }
         }
       ),
@@ -2842,7 +2907,7 @@ async function initAndRender(wrap) {
     }));
   }
 
-  if (ENABLE_CONTINUE_SERIES) {
+  if (runtimeCfg.enableContinueSeries) {
     const split = (getConfig()?.recentRowsSplitTvLibs !== false);
     const tvIds = resolveTvLibSelection("continueSeries");
 
@@ -2852,10 +2917,10 @@ async function initAndRender(wrap) {
         titleText: config.languageLabels.continueSeries || "Dizi izlemeye devam et",
         badgeType: "continue",
         heroLabel: config.languageLabels.continueSeriesHero || "İzlemeye devam (Dizi)",
-        cardCount: EFFECTIVE_CONT_SER_CNT,
+        cardCount: runtimeCfg.effectiveContinueSeriesCount,
         showProgress: true,
         fetcher: Object.assign(
-          () => fetchContinueEpisodes(userId, EFFECTIVE_CONT_SER_CNT + 1).then(async (items) => {
+          () => fetchContinueEpisodes(userId, runtimeCfg.effectiveContinueSeriesCount + 1).then(async (items) => {
             await writeCachedList("resume", "Episode", items.map(x=>x?.Id).filter(Boolean));
             return items;
           }),
@@ -2863,9 +2928,9 @@ async function initAndRender(wrap) {
             cachedItems: async () => {
               const { ids } = await readCachedList("resume", "Episode", TTL_CONTINUE_MS);
               if (!ids.length) return [];
-              const eps = await fetchItemsByIds(ids.slice(0, EFFECTIVE_CONT_SER_CNT + 1));
+              const eps = await fetchItemsByIds(ids.slice(0, runtimeCfg.effectiveContinueSeriesCount + 1));
               await attachSeriesPosterSourceToEpsAndSeasons(eps);
-              return eps.slice(0, EFFECTIVE_CONT_SER_CNT + 1);
+              return eps.slice(0, runtimeCfg.effectiveContinueSeriesCount + 1);
             }
           }
         ),
@@ -2880,10 +2945,10 @@ async function initAndRender(wrap) {
           titleText: (config.languageLabels.continueSeries || "Dizi izlemeye devam et") + (libName ? ` • ${libName}` : ""),
           badgeType: "continue",
           heroLabel: (config.languageLabels.continueSeriesHero || "İzlemeye devam (Dizi)") + (libName ? ` • ${libName}` : ""),
-          cardCount: EFFECTIVE_CONT_SER_CNT,
+          cardCount: runtimeCfg.effectiveContinueSeriesCount,
           showProgress: true,
           fetcher: Object.assign(
-            () => fetchContinueEpisodes(userId, EFFECTIVE_CONT_SER_CNT + 1, tvLibId).then(async (items) => {
+            () => fetchContinueEpisodes(userId, runtimeCfg.effectiveContinueSeriesCount + 1, tvLibId).then(async (items) => {
               await writeCachedList("resume", "Episode" + tvLibMetaSuffix(tvLibId), items.map(x=>x?.Id).filter(Boolean));
               return items;
             }),
@@ -2891,9 +2956,9 @@ async function initAndRender(wrap) {
               cachedItems: async () => {
                 const { ids } = await readCachedList("resume", "Episode" + tvLibMetaSuffix(tvLibId), TTL_CONTINUE_MS);
                 if (!ids.length) return [];
-                const eps = await fetchItemsByIds(ids.slice(0, EFFECTIVE_CONT_SER_CNT + 1));
+                const eps = await fetchItemsByIds(ids.slice(0, runtimeCfg.effectiveContinueSeriesCount + 1));
                 await attachSeriesPosterSourceToEpsAndSeasons(eps);
-                return eps.slice(0, EFFECTIVE_CONT_SER_CNT + 1);
+                return eps.slice(0, runtimeCfg.effectiveContinueSeriesCount + 1);
               }
             }
           ),
@@ -2904,7 +2969,7 @@ async function initAndRender(wrap) {
     }
   }
 
-  if (ENABLE_OTHER_LIB_ROWS) {
+  if (runtimeCfg.enableOtherLibRows) {
     const otherIds = resolveOtherLibSelection();
     const otherDefs = otherIds.map((libId) => {
       const lib = (STATE.otherLibs || []).find(x => x.Id === libId) || null;
@@ -2917,10 +2982,10 @@ async function initAndRender(wrap) {
         titleText: `${config.languageLabels.otherLibRecent || "Son eklenenler"} • ${libName}`,
         badgeType: "new",
         heroLabel: `${config.languageLabels.otherLibRecentHero || "Son eklenen"} • ${libName}`,
-        cardCount: EFFECTIVE_OTHER_RECENT_CNT,
+        cardCount: runtimeCfg.effectiveOtherRecentCount,
         showProgress: false,
         fetcher: Object.assign(
-          () => fetchRecentGeneric(userId, EFFECTIVE_OTHER_RECENT_CNT + 1, libId).then(async (items) => {
+          () => fetchRecentGeneric(userId, runtimeCfg.effectiveOtherRecentCount + 1, libId).then(async (items) => {
             await writeCachedList("other_recent", `lib:${libId}`, items.map(x=>x?.Id).filter(Boolean));
             return items;
           }),
@@ -2928,9 +2993,9 @@ async function initAndRender(wrap) {
             cachedItems: async () => {
               const { ids } = await readCachedList("other_recent", `lib:${libId}`, TTL_RECENT_MS);
               if (!ids.length) return [];
-              const items = await fetchItemsByIds(ids.slice(0, EFFECTIVE_OTHER_RECENT_CNT + 1));
+              const items = await fetchItemsByIds(ids.slice(0, runtimeCfg.effectiveOtherRecentCount + 1));
               await attachSeriesPosterSourceToEpsAndSeasons(items);
-              return items.slice(0, EFFECTIVE_OTHER_RECENT_CNT + 1);
+              return items.slice(0, runtimeCfg.effectiveOtherRecentCount + 1);
             }
           }
         ),
@@ -2944,10 +3009,10 @@ async function initAndRender(wrap) {
         titleText: `${config.languageLabels.otherLibContinue || "İzlemeye devam et"} • ${libName}`,
         badgeType: "continue",
         heroLabel: `${config.languageLabels.otherLibContinueHero || "Devam"} • ${libName}`,
-        cardCount: EFFECTIVE_OTHER_CONTINUE_CNT,
+        cardCount: runtimeCfg.effectiveOtherContinueCount,
         showProgress: true,
         fetcher: Object.assign(
-          () => fetchContinueGeneric(userId, EFFECTIVE_OTHER_CONTINUE_CNT + 1, libId).then(async (items) => {
+          () => fetchContinueGeneric(userId, runtimeCfg.effectiveOtherContinueCount + 1, libId).then(async (items) => {
             await writeCachedList("other_resume", `lib:${libId}`, items.map(x=>x?.Id).filter(Boolean));
             return items;
           }),
@@ -2955,9 +3020,9 @@ async function initAndRender(wrap) {
             cachedItems: async () => {
               const { ids } = await readCachedList("other_resume", `lib:${libId}`, TTL_CONTINUE_MS);
               if (!ids.length) return [];
-              const items = await fetchItemsByIds(ids.slice(0, EFFECTIVE_OTHER_CONTINUE_CNT + 1));
+              const items = await fetchItemsByIds(ids.slice(0, runtimeCfg.effectiveOtherContinueCount + 1));
               await attachSeriesPosterSourceToEpsAndSeasons(items);
-              return items.slice(0, EFFECTIVE_OTHER_CONTINUE_CNT + 1);
+              return items.slice(0, runtimeCfg.effectiveOtherContinueCount + 1);
             }
           }
         ),
@@ -2972,10 +3037,10 @@ async function initAndRender(wrap) {
         titleText: `${config.languageLabels.recentEpisodes || "Son eklenen bölümler"} • ${libName}`,
         badgeType: "episode",
         heroLabel: `${config.languageLabels.recentEpisodesHero || "Bölüm"} • ${libName}`,
-        cardCount: EFFECTIVE_OTHER_EP_CNT,
+        cardCount: runtimeCfg.effectiveOtherEpisodesCount,
         showProgress: false,
         fetcher: Object.assign(
-          () => fetchRecentEpisodes(userId, EFFECTIVE_OTHER_EP_CNT + 1, libId).then(async (items) => {
+          () => fetchRecentEpisodes(userId, runtimeCfg.effectiveOtherEpisodesCount + 1, libId).then(async (items) => {
             await writeCachedList("other_recent", `ep:${libId}`, items.map(x=>x?.Id).filter(Boolean));
             return items;
           }),
@@ -2983,9 +3048,9 @@ async function initAndRender(wrap) {
             cachedItems: async () => {
               const { ids } = await readCachedList("other_recent", `ep:${libId}`, TTL_RECENT_MS);
               if (!ids.length) return [];
-              const eps = await fetchItemsByIds(ids.slice(0, EFFECTIVE_OTHER_EP_CNT + 1));
+              const eps = await fetchItemsByIds(ids.slice(0, runtimeCfg.effectiveOtherEpisodesCount + 1));
               await attachSeriesPosterSourceToEpsAndSeasons(eps);
-              return eps.slice(0, EFFECTIVE_OTHER_EP_CNT + 1);
+              return eps.slice(0, runtimeCfg.effectiveOtherEpisodesCount + 1);
             }
           }
         ),
