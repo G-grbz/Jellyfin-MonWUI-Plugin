@@ -1347,9 +1347,12 @@ async function getResumeTicksForContainer(containerId, { signal } = {}) {
     qp.set("ParentId", String(containerId));
     qp.set("Limit", "1");
     qp.set("Fields", "UserData");
+    qp.set("Filters", "IsResumable");
+    qp.set("Recursive", "true");
+    qp.set("EnableUserData", "true");
 
     const r = await makeApiRequest(
-      `/Users/${encodeURIComponent(userId)}/Items/Resume?${qp.toString()}`,
+      `/Users/${encodeURIComponent(userId)}/Items?${qp.toString()}`,
       { signal }
     );
 
