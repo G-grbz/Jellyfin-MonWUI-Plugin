@@ -9,6 +9,7 @@ import { showGenreFilterModal } from "./genreFilterModal.js";
 import { withServer, withParams } from "../../jfUrl.js";
 import { getAuthToken } from "../core/auth.js";
 import { isRadioTrack, resolveRadioStationArtUrl } from "../core/radio.js";
+import { enhanceFormAccessibility } from "../../accessibility.js";
 
 const config = getConfig();
 
@@ -164,7 +165,8 @@ async function showSaveModal() {
   const nameInput = document.createElement("input");
   nameInput.type = "text";
   nameInput.placeholder = config.languageLabels.enterPlaylistName;
-  nameInput.id = "playlist-name-input";
+  nameInput.id = "playlist-save-name-input";
+  nameInput.name = "playlist-save-name-input";
   nameInput.value = `GMMP Oynatma Listesi ${new Date().toLocaleString(config.dateLocale || 'tr-TR', {
     day: '2-digit',
     month: '2-digit',
@@ -178,11 +180,11 @@ async function showSaveModal() {
 
   const publicLabel = document.createElement("label");
   publicLabel.className = "public-checkbox-label";
-  publicLabel.htmlFor = "playlist-public";
+  publicLabel.htmlFor = "playlist-save-public";
   const publicCheckbox = document.createElement("input");
   publicCheckbox.type = "checkbox";
-  publicCheckbox.id = "playlist-public";
-  publicCheckbox.name = "playlist-public";
+  publicCheckbox.id = "playlist-save-public";
+  publicCheckbox.name = "playlist-save-public";
   publicLabel.appendChild(publicCheckbox);
   publicLabel.appendChild(document.createTextNode(config.languageLabels.makePlaylistPublic));
 
@@ -194,12 +196,12 @@ async function showSaveModal() {
   const newPlaylistRadio = document.createElement("input");
   newPlaylistRadio.type = "radio";
   newPlaylistRadio.name = "saveAction";
-  newPlaylistRadio.id = "new-playlist";
+  newPlaylistRadio.id = "playlist-save-new-playlist";
   newPlaylistRadio.value = "new";
   newPlaylistRadio.checked = true;
   newPlaylistRadio.onchange = togglePlaylistSelection;
   const newPlaylistLabel = document.createElement("label");
-  newPlaylistLabel.htmlFor = "new-playlist";
+  newPlaylistLabel.htmlFor = "playlist-save-new-playlist";
   newPlaylistLabel.textContent = config.languageLabels.newPlaylist || "Yeni liste oluştur";
   newPlaylistOption.appendChild(newPlaylistRadio);
   newPlaylistOption.appendChild(newPlaylistLabel);
@@ -209,11 +211,11 @@ async function showSaveModal() {
   const existingPlaylistRadio = document.createElement("input");
   existingPlaylistRadio.type = "radio";
   existingPlaylistRadio.name = "saveAction";
-  existingPlaylistRadio.id = "existing-playlist";
+  existingPlaylistRadio.id = "playlist-save-existing-playlist";
   existingPlaylistRadio.value = "existing";
   existingPlaylistRadio.onchange = togglePlaylistSelection;
   const existingPlaylistLabel = document.createElement("label");
-  existingPlaylistLabel.htmlFor = "existing-playlist";
+  existingPlaylistLabel.htmlFor = "playlist-save-existing-playlist";
   existingPlaylistLabel.textContent = config.languageLabels.addToExisting || "Mevcut listeye ekle";
   existingPlaylistOption.appendChild(existingPlaylistRadio);
   existingPlaylistOption.appendChild(existingPlaylistLabel);
@@ -227,12 +229,12 @@ async function showSaveModal() {
 
   const playlistSelectLabel = document.createElement("label");
   playlistSelectLabel.textContent = config.languageLabels.selectPlaylist || "Liste seçin:";
-  playlistSelectLabel.htmlFor = "existing-playlist-select";
+  playlistSelectLabel.htmlFor = "playlist-save-existing-playlist-select";
 
   const playlistSelect = document.createElement("select");
   playlistSelect.className = "playlist-select";
-  playlistSelect.id = "existing-playlist-select";
-  playlistSelect.name = "existing-playlist-select";
+  playlistSelect.id = "playlist-save-existing-playlist-select";
+  playlistSelect.name = "playlist-save-existing-playlist-select";
   playlistSelect.disabled = true;
 
   const loadingOption = document.createElement("option");
@@ -247,12 +249,12 @@ async function showSaveModal() {
   selectedOnlyContainer.className = "selected-only-container";
   const selectedOnlyCheckbox = document.createElement("input");
   selectedOnlyCheckbox.type = "checkbox";
-  selectedOnlyCheckbox.id = "selected-only";
-  selectedOnlyCheckbox.name = "selected-only";
+  selectedOnlyCheckbox.id = "playlist-save-selected-only";
+  selectedOnlyCheckbox.name = "playlist-save-selected-only";
   selectedOnlyCheckbox.checked = saveSelected;
   selectedOnlyCheckbox.disabled = (selectedCount === 0);
   const selectedOnlyLabel = document.createElement("label");
-  selectedOnlyLabel.htmlFor = "selected-only";
+  selectedOnlyLabel.htmlFor = "playlist-save-selected-only";
   selectedOnlyLabel.textContent = saveSelected
     ? `${config.languageLabels.saveSelected || "Seçilenleri kaydet"} (${selectedCount})`
     : config.languageLabels.noSelection || "Hiç parça seçilmediii";
@@ -311,6 +313,7 @@ async function showSaveModal() {
   modalContent.appendChild(modalHeader);
   modalContent.appendChild(modalBody);
   modalContent.appendChild(modalFooter);
+  enhanceFormAccessibility(modalContent, { prefix: "playlist-save" });
   modal.appendChild(modalContent);
   document.body.appendChild(modal);
 

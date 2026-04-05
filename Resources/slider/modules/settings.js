@@ -1,5 +1,5 @@
 import { getConfig, publishAdminSnapshotIfForced, getAdminTargetProfile, getDeviceProfileAuto } from "./config.js";
-import { loadCSS } from "./player/main.js";
+import { loadCSS } from "../main.js";
 import { getLanguageLabels, getDefaultLanguage } from '../language/index.js';
 import { showNotification } from "./player/ui/notification.js";
 import { createPositionEditor } from './settings/positionPage.js';
@@ -20,6 +20,8 @@ import { createHoverTrailerPanel } from './settings/hoverTrailerPage.js';
 import { createTrailersPanel } from './settings/trailersPage.js';
 import { createProfileChooserPanel } from './settings/profileChooserPage.js';
 import { createWatchlistPanel } from './settings/watchlistPage.js';
+import { createParentalPinPanel } from './settings/parentalPinPage.js';
+import { enhanceFormAccessibility } from './accessibility.js';
 
 let settingsModal = null;
 
@@ -155,6 +157,9 @@ export function createSettingsModal() {
     const avatarTab = createTab('avatar', 'fa-user', labels.avatarCreateInput || 'Avatar Ayarları', true);
     const notificationsTab = createTab('notifications', 'fa-bell', labels.notificationsSettings || 'Bildirim Ayarları', true);
     const watchlistSettingsTab = createTab('watchlist-settings', 'fa-bookmark', labels.watchlistSettingsTab || 'İzleme Listesi Ayarları', true);
+    const parentalPinTab = config?.currentUserIsAdmin
+      ? createTab('parental-pin', 'fa-key', labels.parentalPinTab || 'PIN Kontrolü', true)
+      : null;
     const logoTitleTab = createTab('logo-title', 'fa-image', labels.logoOrTitleHeader || 'Logo/Başlık', true);
     const statusRatingTab = createTab('status-rating', 'fa-star', labels.statusRatingInfo || 'Durum ve Puan Bilgileri', true);
     const actorTab = createTab('actor', 'fa-users', labels.actorInfo || 'Artist Bilgileri', true);
@@ -167,12 +172,13 @@ export function createSettingsModal() {
     const exporterTab = createTab('exporter', 'fa-download', labels.backupRestore || 'Yedekle - Geri Yükle', true);
     const aboutTab = createTab('about', 'fa-circle-info', labels.aboutHeader || 'Hakkında', true);
 
-    tabContainer.append(
+    const tabs = [
         sliderTab, animationTab, profileChooserTab, musicTab, pauseTab, positionTab,
         queryTab, studioTab, hoverTab, trailersTab, avatarTab, notificationsTab, statusRatingTab, actorTab, directorTab,
-        languageTab, watchlistSettingsTab, logoTitleTab, descriptionTab, providerTab,
+        languageTab, watchlistSettingsTab, parentalPinTab, logoTitleTab, descriptionTab, providerTab,
         buttonsTab, infoTab, exporterTab, aboutTab
-    );
+    ].filter(Boolean);
+    tabContainer.append(...tabs);
 
     const sliderPanel = createSliderPanel(config, labels);
     const animationPanel = createAnimationPanel(config, labels);
@@ -198,47 +204,46 @@ export function createSettingsModal() {
     const aboutPanel = createAboutPanel(labels);
     const notificationsPanel = createNotificationsPanel(config, labels);
     const watchlistSettingsPanel = createWatchlistPanel(config, labels);
+    const parentalPinPanel = config?.currentUserIsAdmin
+      ? createParentalPinPanel(config, labels)
+      : null;
     [
         sliderPanel, animationPanel, musicPanel, positionPanel, queryPanel,
          hoverPanel, trailersPanel, studioPanel, avatarPanel, notificationsPanel, statusRatingPanel,
-        actorPanel, directorPanel, languagePanel, watchlistSettingsPanel, logoTitlePanel,
+        actorPanel, directorPanel, languagePanel, watchlistSettingsPanel, parentalPinPanel, logoTitlePanel,
         descriptionPanel, providerPanel, buttonsPanel, infoPanel,
         pausePanel, exporterPanel, aboutPanel, profileChooserPanel
-    ].forEach(panel => {
+    ].filter(Boolean).forEach(panel => {
         panel.style.display = 'none';
     });
     sliderPanel.style.display = 'block';
 
-    tabContent.append(
+    const panels = [
         sliderPanel, animationPanel, profileChooserPanel, musicPanel, statusRatingPanel, actorPanel,
-        directorPanel, queryPanel, hoverPanel, trailersPanel, studioPanel, avatarPanel, languagePanel, watchlistSettingsPanel, logoTitlePanel,
+        directorPanel, queryPanel, hoverPanel, trailersPanel, studioPanel, avatarPanel, languagePanel, watchlistSettingsPanel, parentalPinPanel, logoTitlePanel,
         descriptionPanel, providerPanel, buttonsPanel, infoPanel,
         pausePanel, positionPanel, aboutPanel, exporterPanel, notificationsPanel
-    );
+    ].filter(Boolean);
+    tabContent.append(...panels);
 
-    [
+    const interactiveTabs = [
         sliderTab, animationTab, profileChooserTab, musicTab, queryTab, hoverTab,
         trailersTab, studioTab, avatarTab, notificationsTab, statusRatingTab,
-        actorTab, directorTab, languageTab, watchlistSettingsTab, logoTitleTab,
+        actorTab, directorTab, languageTab, watchlistSettingsTab, parentalPinTab, logoTitleTab,
         descriptionTab, providerTab, buttonsTab, infoTab,
         positionTab, pauseTab, aboutTab, exporterTab
-    ].forEach(tab => {
+    ].filter(Boolean);
+    interactiveTabs.forEach(tab => {
         tab.addEventListener('click', () => {
-            [
-                sliderTab, animationTab, profileChooserTab, musicTab, queryTab, hoverTab,
-                trailersTab, studioTab, avatarTab, notificationsTab, statusRatingTab,
-                actorTab, directorTab, languageTab, watchlistSettingsTab, logoTitleTab,
-                descriptionTab, providerTab, buttonsTab, infoTab,
-                positionTab, pauseTab, aboutTab, exporterTab
-            ].forEach(t => {
+            interactiveTabs.forEach(t => {
                 t.classList.remove('active');
             });
             [
                 sliderPanel, animationPanel, profileChooserPanel, statusRatingPanel, actorPanel, directorPanel,
-                musicPanel, queryPanel, hoverPanel, trailersPanel, studioPanel, avatarPanel, languagePanel, watchlistSettingsPanel, logoTitlePanel,
+                musicPanel, queryPanel, hoverPanel, trailersPanel, studioPanel, avatarPanel, languagePanel, watchlistSettingsPanel, parentalPinPanel, logoTitlePanel,
                 descriptionPanel, providerPanel, buttonsPanel, infoPanel,
                 positionPanel, aboutPanel, exporterPanel, pausePanel, notificationsPanel
-            ].forEach(panel => {
+            ].filter(Boolean).forEach(panel => {
                 panel.style.display = 'none';
             });
 
@@ -324,6 +329,11 @@ export function createSettingsModal() {
       setBusyState(true);
 
       try {
+        const panelSaveHooks = [parentalPinPanel?.__jmsSave].filter(fn => typeof fn === 'function');
+        for (const saveHook of panelSaveHooks) {
+          await saveHook({ reload });
+        }
+
         const result = await applySettings(reload);
         if (reload || result?.ok === false) return result;
 
@@ -348,8 +358,12 @@ export function createSettingsModal() {
         return result;
       } catch (err) {
         console.error('Settings save failed:', err);
+        const errText =
+          String(err?.message || '').trim() ||
+          labels?.settingsSaveFailed ||
+          'Ayarlar kaydedilemedi.';
         showNotification(
-          `<i class="fas fa-triangle-exclamation" style="margin-right: 8px;"></i> ${labels?.settingsSaveFailed || 'Ayarlar kaydedilemedi.'}`,
+          `<i class="fas fa-triangle-exclamation" style="margin-right: 8px;"></i> ${errText}`,
           4200,
           'error'
         );
@@ -451,6 +465,7 @@ themeToggleBtn.onclick = async () => {
     });
 
     modalContent.append(closeBtn, title, form);
+    enhanceFormAccessibility(form, { prefix: 'settings' });
     modal.appendChild(modalContent);
     document.body.appendChild(modal);
 

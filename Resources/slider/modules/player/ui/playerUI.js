@@ -15,7 +15,8 @@ import { showGenreFilterModal } from "./genreFilterModal.js";
 import { showTopTracksModal } from "./topModal.js";
 import { getAuthToken } from "../core/auth.js";
 import { showNotification } from "./notification.js";
-import { loadCSS, isMobileDevice } from "../main.js";
+import { loadCSS } from "../../../main.js";
+import { isMobileDevice } from "../main.js";
 import { makeCleanupBag, addEvent, trackTimeout, trackObserver } from "../utils/cleanup.js";
 import { withServer, withParams } from "../../jfUrl.js";
 import { showRadioModal } from "./radioModal.js";
@@ -352,12 +353,15 @@ export function createModernPlayerUI() {
   const volumeSlider = Object.assign(document.createElement("input"), {
     type: "range",
     className: "player-volume-slider",
+    id: "player-volume-slider",
+    name: "player-volume-slider",
     min: "0",
     max: "1",
     step: "0.01",
     value: "1",
     title: config.languageLabels.volumeLevel,
   });
+  volumeSlider.setAttribute("aria-label", config.languageLabels.volumeLevel || config.languageLabels.volume || "Ses seviyesi");
 
   volumeSlider.addEventListener('input', e => {
     const volume = parseFloat(e.target.value);

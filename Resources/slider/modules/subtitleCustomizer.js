@@ -19,6 +19,15 @@ let playbackManagersCache = {
 };
 const patchedSubtitleAppearancePlayers = new Set();
 const patchedSubtitleAppearanceMeta = new WeakMap();
+const cachedSubtitleOffsets = new WeakMap();
+const originalCueTimings = new WeakMap();
+const trackCueTimingSyncState = new WeakMap();
+const mirroredSubtitleTrackModes = new Map();
+
+let nativeSubtitleUiOffsetCache = {
+  slider: null,
+  value: null
+};
 
 const config = getConfig();
 const labels =
@@ -345,6 +354,10 @@ function formatDelayValue(delaySec) {
   const normalized =
     Math.round(clampNumber(delaySec, -30, 30, DEFAULT_SETTINGS.delaySec) * 10) / 10;
   return `${normalized.toFixed(1)}s`;
+}
+
+function normalizeDelaySeconds(delaySec) {
+  return Math.round(clampNumber(delaySec, -30, 30, DEFAULT_SETTINGS.delaySec) * 10) / 10;
 }
 
 function normalizeDropShadow(raw) {
@@ -910,6 +923,11 @@ function applyCueCss(settings) {
   );
   const textColor = getTextColorValue(settings);
   const textBackground = getBackgroundColorValue(settings);
+  const backgroundRadius = getBackgroundRadiusCssValue(settings);
+  const backgroundPadding = settings.backgroundEnabled ? SUBTITLE_BACKGROUND_PADDING : "0";
+  const subtitleDisplay = settings.backgroundEnabled ? "block" : "inline";
+  const subtitleWidth = settings.backgroundEnabled ? "fit-content" : "auto";
+  const subtitleMaxWidth = settings.backgroundEnabled ? "calc(100% - 1.8em)" : "100%";
   const style = ensureCueStyleElement();
   const lines = [];
 
@@ -927,8 +945,19 @@ function applyCueCss(settings) {
   lines.push(`  font-family: ${fontStack} !important;`);
   lines.push(`  text-shadow: ${textShadow} !important;`);
   lines.push(`  background-color: ${textBackground} !important;`);
+  lines.push(`  padding: ${backgroundPadding} !important;`);
+  lines.push(`  border-radius: ${backgroundRadius} !important;`);
+  lines.push(`  display: ${subtitleDisplay} !important;`);
+  lines.push(`  width: ${subtitleWidth} !important;`);
+  lines.push(`  max-width: ${subtitleMaxWidth} !important;`);
+  lines.push("  margin-left: auto !important;");
+  lines.push("  margin-right: auto !important;");
+  lines.push(`  box-decoration-break: ${settings.backgroundEnabled ? "clone" : "slice"} !important;`);
+  lines.push(`  -webkit-box-decoration-break: ${settings.backgroundEnabled ? "clone" : "slice"} !important;`);
+  lines.push("  background-clip: padding-box !important;");
   lines.push("  line-height: 1.3 !important;");
   lines.push("  text-align: center;");
+  lines.push("  overflow-wrap: anywhere;");
   lines.push("}");
 
   lines.push(".videoSubtitles {");
@@ -936,6 +965,7 @@ function applyCueCss(settings) {
   lines.push("  left: 0 !important;");
   lines.push("  right: 0 !important;");
   lines.push("  pointer-events: none !important;");
+  lines.push("  text-align: center !important;");
   lines.push("}");
 
   style.textContent = lines.join("\n");
@@ -992,6 +1022,183 @@ function getLiveSubtitleCustomizerSettings(fallback = null) {
   return loadSettings();
 }
 
+function setElementStyle(node, prop, value, priority = "") {
+  if (!(node instanceof HTMLElement)) return;
+  if (value === null || value === undefined || value === "") {
+    node.style.removeProperty(prop);
+    return;
+  }
+  node.style.setProperty(prop, value, priority);
+}
+
+function getSubtitleMirrorElements(video = null) {
+  const playerContainer =
+    video?.closest?.(".videoPlayerContainer") ||
+    document.querySelector(".videoPlayerContainer");
+  if (!(playerContainer instanceof HTMLElement)) {
+    return {
+      container: null,
+      text: null,
+      playerContainer: null
+    };
+  }
+
+  let container = playerContainer.querySelector(".videoSubtitles[data-jms-subtitle-mirror='1']");
+  let text = container?.querySelector?.(".videoSubtitlesInner");
+
+  if (!(container instanceof HTMLElement) || !(text instanceof HTMLElement)) {
+    container = null;
+    text = null;
+  }
+
+  return {
+    container,
+    text,
+    playerContainer
+  };
+}
+
+function ensureSubtitleMirror(video) {
+  const refs = getSubtitleMirrorElements(video);
+  if (refs.container && refs.text) return refs;
+  if (!(refs.playerContainer instanceof HTMLElement)) return refs;
+
+  const container = document.createElement("div");
+  container.className = "videoSubtitles";
+  container.dataset.jmsSubtitleMirror = "1";
+
+  const text = document.createElement("div");
+  text.className = "videoSubtitlesInner";
+  text.dataset.jmsSubtitleMirror = "1";
+  text.classList.add("hide");
+
+  container.appendChild(text);
+  refs.playerContainer.appendChild(container);
+
+  return {
+    container,
+    text,
+    playerContainer: refs.playerContainer
+  };
+}
+
+function clearSubtitleMirror(video = null) {
+  const refs = getSubtitleMirrorElements(video);
+  if (refs.text instanceof HTMLElement) {
+    refs.text.textContent = "";
+    refs.text.classList.add("hide");
+  }
+}
+
+function restoreMirroredSubtitleTracks(video = null) {
+  const tracks = video?.textTracks;
+  if (tracks) {
+    for (let i = 0; i < tracks.length; i++) {
+      const track = tracks[i];
+      if (!track || !mirroredSubtitleTrackModes.has(track)) continue;
+      const prevMode = mirroredSubtitleTrackModes.get(track);
+      mirroredSubtitleTrackModes.delete(track);
+      try {
+        if (track.mode === "hidden" && prevMode === "showing") {
+          track.mode = prevMode;
+        }
+      } catch {}
+    }
+  }
+
+  for (const [track, prevMode] of mirroredSubtitleTrackModes.entries()) {
+    try {
+      if (track?.mode === "hidden" && prevMode === "showing") {
+        track.mode = prevMode;
+      }
+    } catch {}
+    mirroredSubtitleTrackModes.delete(track);
+  }
+}
+
+function isTrackMirrorEligible(track) {
+  if (!track || typeof track !== "object") return false;
+  return track.mode === "showing" || track.mode === "hidden";
+}
+
+function getTrackCueText(cue) {
+  if (!cue) return "";
+
+  const rawText = typeof cue.text === "string" ? cue.text : "";
+  if (rawText.trim()) return rawText;
+
+  try {
+    const fragment = cue.getCueAsHTML?.();
+    if (!fragment) return "";
+    const holder = document.createElement("div");
+    holder.appendChild(fragment.cloneNode(true));
+    return holder.textContent || "";
+  } catch {}
+
+  return "";
+}
+
+function syncSubtitleMirror(video, settings, options = null) {
+  const disabled = options?.disabled === true;
+  const hasComplexRenderer = options?.hasComplexRenderer === true;
+  const tracks = getSubtitleTracks(video, false);
+  let mirrorTrack = null;
+
+  if (!disabled && !hasComplexRenderer) {
+    mirrorTrack =
+      tracks.find((track) => isTrackMirrorEligible(track) && track.mode === "showing") ||
+      tracks.find((track) => mirroredSubtitleTrackModes.has(track) && track.mode === "hidden") ||
+      tracks.find((track) => isTrackMirrorEligible(track) && track.mode === "hidden");
+  }
+
+  if (!mirrorTrack) {
+    restoreMirroredSubtitleTracks(video);
+    clearSubtitleMirror(video);
+    return false;
+  }
+
+  if (!mirroredSubtitleTrackModes.has(mirrorTrack)) {
+    mirroredSubtitleTrackModes.set(mirrorTrack, mirrorTrack.mode || "showing");
+  }
+
+  try {
+    if (mirrorTrack.mode !== "hidden") {
+      mirrorTrack.mode = "hidden";
+    }
+  } catch {}
+
+  const refs = ensureSubtitleMirror(video);
+  if (!(refs.container instanceof HTMLElement) || !(refs.text instanceof HTMLElement)) {
+    return false;
+  }
+
+  applySubtitleContainerStyles(refs.container, settings);
+  applySubtitleTextStyles(refs.text, settings);
+
+  const activeCues = mirrorTrack.activeCues;
+  const lines = [];
+  const seen = new Set();
+
+  for (let i = 0; activeCues && i < activeCues.length; i++) {
+    const cue = activeCues[i];
+    const text = getTrackCueText(cue);
+    const normalized = text.replace(/\r\n?/g, "\n").trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    lines.push(normalized);
+  }
+
+  if (!lines.length) {
+    refs.text.textContent = "";
+    refs.text.classList.add("hide");
+    return true;
+  }
+
+  refs.text.textContent = lines.join("\n");
+  refs.text.classList.remove("hide");
+  return true;
+}
+
 function applySubtitleContainerStyles(container, settings) {
   if (!(container instanceof HTMLElement)) return;
 
@@ -1029,17 +1236,37 @@ function applySubtitleTextStyles(subtitleText, settings) {
   const textColor = getTextColorValue(settings);
   const textBackground = getBackgroundColorValue(settings);
   const backgroundRadius = getBackgroundRadiusCssValue(settings);
+  const hasBackground = !!settings.backgroundEnabled;
+  const isHidden =
+    subtitleText.hidden ||
+    subtitleText.classList.contains("hide") ||
+    !String(subtitleText.textContent || "").trim();
 
   subtitleText.style.color = textColor;
   subtitleText.style.fontSize = `${settings.sizePercent}%`;
   subtitleText.style.fontFamily = fontStack;
   subtitleText.style.textShadow = textShadow;
-  subtitleText.style.backgroundColor = textBackground;
-  subtitleText.style.padding = settings.backgroundEnabled ? SUBTITLE_BACKGROUND_PADDING : "0";
-  subtitleText.style.borderRadius = settings.backgroundEnabled ? backgroundRadius : "0";
-  subtitleText.style.display = settings.backgroundEnabled ? "inline-block" : "";
   subtitleText.style.lineHeight = "1.3";
   subtitleText.style.textAlign = "center";
+
+  setElementStyle(subtitleText, "background-color", textBackground, "important");
+  setElementStyle(subtitleText, "padding", hasBackground ? SUBTITLE_BACKGROUND_PADDING : "0", "important");
+  setElementStyle(subtitleText, "border-radius", hasBackground ? backgroundRadius : "0", "important");
+  setElementStyle(
+    subtitleText,
+    "display",
+    isHidden ? "none" : (hasBackground ? "block" : "inline"),
+    "important"
+  );
+  setElementStyle(subtitleText, "width", hasBackground ? "fit-content" : "auto", "important");
+  setElementStyle(subtitleText, "max-width", hasBackground ? "calc(100% - 1.8em)" : "100%", "important");
+  setElementStyle(subtitleText, "margin-left", hasBackground ? "auto" : "0", "important");
+  setElementStyle(subtitleText, "margin-right", hasBackground ? "auto" : "0", "important");
+  setElementStyle(subtitleText, "box-decoration-break", hasBackground ? "clone" : "slice", "important");
+  setElementStyle(subtitleText, "-webkit-box-decoration-break", hasBackground ? "clone" : "slice", "important");
+  setElementStyle(subtitleText, "background-clip", "padding-box", "important");
+  setElementStyle(subtitleText, "white-space", "pre-line", "important");
+  setElementStyle(subtitleText, "overflow-wrap", "anywhere", "important");
 
   if (settings.position === "top") {
     subtitleText.style.marginTop = "1.2em";
@@ -1394,8 +1621,7 @@ function applyComplexSubtitleStyles(settings) {
 }
 
 function applyNativeSubtitleOffsetViaUi(delaySec) {
-  const normalized =
-    Math.round(clampNumber(delaySec, -30, 30, DEFAULT_SETTINGS.delaySec) * 10) / 10;
+  const normalized = normalizeDelaySeconds(delaySec);
   const slider = document.querySelector(".subtitleSyncSlider");
   if (!(slider instanceof HTMLInputElement)) return false;
 
@@ -1421,13 +1647,17 @@ function applyNativeSubtitleOffsetViaUi(delaySec) {
 }
 
 function syncNativeSubtitleSyncUi(delaySec, opts = null) {
-  const normalized =
-    Math.round(clampNumber(delaySec, -30, 30, DEFAULT_SETTINGS.delaySec) * 10) / 10;
+  const normalized = normalizeDelaySeconds(delaySec);
 
   const slider = document.querySelector(".subtitleSyncSlider");
+  const sliderValueRaw = slider instanceof HTMLInputElement ? Number(slider.value) : null;
+  let sliderValueChanged = false;
   if (slider instanceof HTMLInputElement) {
     const next = String(normalized);
-    if (slider.value !== next) slider.value = next;
+    if (slider.value !== next) {
+      slider.value = next;
+      sliderValueChanged = true;
+    }
   }
 
   const textField = document.querySelector(".subtitleSyncTextField");
@@ -1436,9 +1666,75 @@ function syncNativeSubtitleSyncUi(delaySec, opts = null) {
   }
 
   if (opts?.applyToPlayer) {
-    return applyNativeSubtitleOffsetViaUi(normalized);
+    const sliderAlreadyZero =
+      slider instanceof HTMLInputElement &&
+      Number.isFinite(sliderValueRaw) &&
+      Math.abs(sliderValueRaw) <= 0.051;
+    const cacheMatches =
+      slider instanceof HTMLInputElement &&
+      nativeSubtitleUiOffsetCache.slider === slider &&
+      Math.abs(Number(nativeSubtitleUiOffsetCache.value) - normalized) <= 0.051;
+    if (
+      Math.abs(normalized) <= 0.051 &&
+      !sliderValueChanged &&
+      sliderAlreadyZero &&
+      nativeSubtitleUiOffsetCache.slider !== slider
+    ) {
+      return false;
+    }
+    if (!sliderValueChanged && cacheMatches) {
+      return false;
+    }
+    const applied = applyNativeSubtitleOffsetViaUi(normalized);
+    if (applied && slider instanceof HTMLInputElement) {
+      nativeSubtitleUiOffsetCache = {
+        slider,
+        value: normalized
+      };
+    }
+    return applied;
   }
   return false;
+}
+
+function getCachedSubtitleOffset(target, playerArg = null) {
+  if (!target || (typeof target !== "object" && typeof target !== "function")) return null;
+  const entry = cachedSubtitleOffsets.get(target);
+  if (!entry) return null;
+
+  if (
+    playerArg &&
+    playerArg !== target &&
+    (typeof playerArg === "object" || typeof playerArg === "function")
+  ) {
+    return entry.byPlayer.get(playerArg) ?? null;
+  }
+
+  return entry.self ?? null;
+}
+
+function setCachedSubtitleOffset(target, sec, playerArg = null) {
+  if (!target || (typeof target !== "object" && typeof target !== "function")) return;
+
+  let entry = cachedSubtitleOffsets.get(target);
+  if (!entry) {
+    entry = {
+      self: null,
+      byPlayer: new WeakMap()
+    };
+    cachedSubtitleOffsets.set(target, entry);
+  }
+
+  if (
+    playerArg &&
+    playerArg !== target &&
+    (typeof playerArg === "object" || typeof playerArg === "function")
+  ) {
+    entry.byPlayer.set(playerArg, sec);
+    return;
+  }
+
+  entry.self = sec;
 }
 
 function tryRefreshPlayerAppearance(settings) {
@@ -1489,20 +1785,47 @@ function tryRefreshPlayerAppearance(settings) {
         return false;
       }
       didApplySubtitleDelay = true;
+      setCachedSubtitleOffset(target, sec, playerArg);
       return true;
     };
+
+    const currentOffset = readSubtitleOffset(target, playerArg);
+    if (Number.isFinite(currentOffset) && Math.abs(currentOffset - sec) <= 0.051) {
+      didApplySubtitleDelay = true;
+      setCachedSubtitleOffset(target, sec, playerArg);
+      return true;
+    }
+
+    const cachedOffset = getCachedSubtitleOffset(target, playerArg);
+    if (Number.isFinite(cachedOffset) && Math.abs(cachedOffset - sec) <= 0.051) {
+      return false;
+    }
+
+    if (
+      Math.abs(sec) <= 0.051 &&
+      !Number.isFinite(currentOffset) &&
+      !Number.isFinite(cachedOffset)
+    ) {
+      return false;
+    }
 
     let invoked = false;
     try {
       if (playerArg && playerArg !== target) target.setSubtitleOffset(sec, playerArg);
       else target.setSubtitleOffset(sec);
       invoked = true;
+      if (!Number.isFinite(currentOffset)) {
+        setCachedSubtitleOffset(target, sec, playerArg);
+      }
       return isVerified(invoked);
     } catch {
       if (!playerArg) return false;
       try {
         target.setSubtitleOffset(sec);
         invoked = true;
+        if (!Number.isFinite(currentOffset)) {
+          setCachedSubtitleOffset(target, sec, null);
+        }
         return isVerified(invoked);
       } catch {
         return false;
@@ -1511,18 +1834,19 @@ function tryRefreshPlayerAppearance(settings) {
   };
 
   if (Number.isFinite(subtitleDelayRaw)) {
-    const subtitleDelay =
-      Math.round(clampNumber(subtitleDelayRaw, -30, 30, DEFAULT_SETTINGS.delaySec) * 10) / 10;
+    const subtitleDelay = normalizeDelaySeconds(subtitleDelayRaw);
 
     const tryManagerApply = (manager, player = null) => {
       if (!manager || typeof manager !== "object") return false;
       const targetPlayer = player || manager.getActivePlayer?.() || null;
 
-      try {
-        if (typeof manager.enableShowingSubtitleOffset === "function") {
-          manager.enableShowingSubtitleOffset(targetPlayer || undefined);
-        }
-      } catch {}
+      if (Math.abs(subtitleDelay) > 0.051) {
+        try {
+          if (typeof manager.enableShowingSubtitleOffset === "function") {
+            manager.enableShowingSubtitleOffset(targetPlayer || undefined);
+          }
+        } catch {}
+      }
 
       return applyOffsetToTarget(manager, subtitleDelay, targetPlayer);
     };
@@ -1674,21 +1998,63 @@ function shiftTrackCues(track, settings) {
   }
 }
 
-function shiftTrackCueTimings(track, delayDeltaSec) {
+function shiftTrackCueTimings(track, delaySec) {
   const cues = track?.cues;
-  if (!cues || !cues.length) return;
+  const cueCount = cues?.length || 0;
+  const normalizedDelay = normalizeDelaySeconds(delaySec);
+  const firstCue = cueCount ? cues[0] : null;
+  const lastCue = cueCount ? cues[cueCount - 1] : null;
+  const prevState = trackCueTimingSyncState.get(track);
 
-  const shift = Number(delayDeltaSec);
-  if (!Number.isFinite(shift) || shift === 0) return;
+  if (
+    prevState &&
+    prevState.delaySec === normalizedDelay &&
+    prevState.cueCount === cueCount &&
+    prevState.firstCue === firstCue &&
+    prevState.lastCue === lastCue
+  ) {
+    return false;
+  }
 
-  for (let i = 0; i < cues.length; i++) {
+  let changed = false;
+
+  for (let i = 0; i < cueCount; i++) {
     const cue = cues[i];
     if (!cue) continue;
+
+    let timing = originalCueTimings.get(cue);
+    if (!timing) {
+      const startTime = Number(cue.startTime);
+      const endTime = Number(cue.endTime);
+      if (!Number.isFinite(startTime) || !Number.isFinite(endTime)) continue;
+      timing = { startTime, endTime };
+      originalCueTimings.set(cue, timing);
+    }
+
+    const duration = Math.max(0, timing.endTime - timing.startTime);
+    let nextStart = timing.startTime - normalizedDelay;
+    if (nextStart < 0) nextStart = 0;
+    const nextEnd = nextStart + duration;
+
+    const startChanged = Math.abs(Number(cue.startTime) - nextStart) > 0.0005;
+    const endChanged = Math.abs(Number(cue.endTime) - nextEnd) > 0.0005;
+    if (!startChanged && !endChanged) continue;
+
     try {
-      cue.startTime -= shift;
-      cue.endTime -= shift;
+      cue.startTime = nextStart;
+      cue.endTime = nextEnd;
+      changed = true;
     } catch {}
   }
+
+  trackCueTimingSyncState.set(track, {
+    delaySec: normalizedDelay,
+    cueCount,
+    firstCue,
+    lastCue
+  });
+
+  return changed;
 }
 
 function setSubtitleDialogOpenState(isOpen) {
@@ -2258,28 +2624,35 @@ export function initSubtitleCustomizer() {
     applyComplexSubtitleStyles(settings);
 
     const video = pickActiveVideo();
-    if (!video) return;
+    if (!video) {
+      restoreMirroredSubtitleTracks();
+      clearSubtitleMirror();
+      return;
+    }
 
-    const showingTracks = getShowingSubtitleTracks(video);
     const subtitleTracks = getSubtitleTracks(video, false);
+    const isMirroringTextSubtitles = syncSubtitleMirror(video, settings, {
+      disabled: !settings.backgroundEnabled,
+      hasComplexRenderer: hasAssSubtitleRenderer
+    });
+    const showingTracks = getShowingSubtitleTracks(video);
 
     const delayChanged = settings.delaySec !== lastAppliedDelay;
     const posChanged = settings.position !== lastAppliedPosition;
     const delayDeltaSec = settings.delaySec - lastAppliedDelay;
-    const needCueDelayFallback =
-      delayChanged &&
-      !playerRefreshState?.didApplySubtitleDelay &&
-      Number.isFinite(delayDeltaSec) &&
-      delayDeltaSec !== 0;
+    const shouldUseCueDelayFallback = !playerRefreshState?.didApplySubtitleDelay;
+    let cueTimingChanged = false;
 
-    if (needCueDelayFallback) {
-      subtitleTracks.forEach((track) => {
-        shiftTrackCueTimings(track, delayDeltaSec);
-      });
-    }
+    subtitleTracks.forEach((track) => {
+      const changed = shiftTrackCueTimings(
+        track,
+        shouldUseCueDelayFallback ? settings.delaySec : DEFAULT_SETTINGS.delaySec
+      );
+      cueTimingChanged = cueTimingChanged || changed;
+    });
 
     showingTracks.forEach((track) => {
-      if (needCueDelayFallback) {
+      if (cueTimingChanged) {
         refreshTrack(track);
       }
       shiftTrackCues(track, settings);
@@ -2295,7 +2668,9 @@ export function initSubtitleCustomizer() {
         delaySec: settings.delaySec,
         delayChanged,
         delayDeltaSec,
-        needCueDelayFallback,
+        shouldUseCueDelayFallback,
+        cueTimingChanged,
+        isMirroringTextSubtitles,
         showingTracks: showingTracks.length,
         subtitleTracks: subtitleTracks.length,
         playerRefreshState
@@ -2435,6 +2810,14 @@ export function initSubtitleCustomizer() {
     setSubtitleDialogOpenState(false);
     try { delete window.__jmsSubtitleCustomizerState; } catch {}
     unpatchAllPlayerSubtitleAppearance();
+    restoreMirroredSubtitleTracks();
+    document
+      .querySelectorAll(".videoSubtitles[data-jms-subtitle-mirror='1']")
+      .forEach((node) => node.remove());
+    nativeSubtitleUiOffsetCache = {
+      slider: null,
+      value: null
+    };
 
     document.removeEventListener("play", passiveApply, true);
     document.removeEventListener("loadedmetadata", passiveApply, true);

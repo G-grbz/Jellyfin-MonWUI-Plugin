@@ -6,6 +6,7 @@ import { loadJSMediaTags } from "./lyrics/id3Reader.js";
 import { getConfig } from "../config.js";
 import { initializeControlStates } from "./ui/controls.js";
 import { faIconHtml } from "../faIcons.js";
+import { loadCSS } from "../../main.js";
 
 const config = getConfig();
 
@@ -147,38 +148,6 @@ function waitForElement(selector, timeout = 5000) {
       return el;
     };
     resolve = ((orig) => (v) => orig(cleanupResolve(v)))(resolve);
-  });
-}
-
-export function loadCSS() {
-  const { playerTheme: theme = "dark", playerStyle = "player" } = getConfig();
-  const expected = new Map([
-    ["base", `./slider/src/${playerStyle}-${theme}.css`],
-  ]);
-
-  if (isMobileDevice()) {
-    expected.set("fullscreen", "./slider/src/fullscreen.css");
-  }
-
-  expected.forEach((href, key) => {
-    let link = document.querySelector(`link[data-jellyfin-player-css="${key}"]`);
-
-    if (!link) {
-      link = document.createElement("link");
-      link.rel = "stylesheet";
-      link.setAttribute("data-jellyfin-player-css", key);
-      document.head.appendChild(link);
-    }
-
-    if (link.getAttribute("href") !== href) {
-      link.href = href;
-    }
-  });
-
-  document.querySelectorAll('link[data-jellyfin-player-css]').forEach(link => {
-    if (!expected.has(link.getAttribute("data-jellyfin-player-css"))) {
-      link.remove();
-    }
   });
 }
 

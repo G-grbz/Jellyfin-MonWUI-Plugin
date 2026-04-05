@@ -4,8 +4,6 @@ import { updateSyncedLyrics } from "../lyrics/lyrics.js";
 import { getConfig } from "../../config.js";
 
 let uiEvtCtrl = null;
-let mediaCtrl = null;
-let positionUpdateInterval = null;
 let isDragging = false;
 let isClick = false;
 let dragStartX = 0;
@@ -23,14 +21,6 @@ function resetUiEvtCtrl() {
   uiEvtCtrl = new AbortController();
   return uiEvtCtrl.signal;
 }
-function resetMediaCtrl() {
-  if (mediaCtrl) {
-    try { mediaCtrl.abort(); } catch {}
-  }
-  mediaCtrl = new AbortController();
-  return mediaCtrl.signal;
-}
-
 export function formatTime(seconds) {
   if (!isFinite(seconds)) return "0:00";
   const minutes = Math.floor(Math.min(seconds, 5999) / 60);
@@ -43,91 +33,37 @@ function getEffectiveDuration() {
     return Number.NaN;
   }
 
-  const { audio, currentTrack } = musicPlayerState;
+  const { audio } = musicPlayerState;
 
   if (audio && isFinite(audio.duration) && audio.duration > 0) {
     return audio.duration;
   }
-  const runtimeTicks = Number(currentTrack?.RunTimeTicks);
-  if (Number.isFinite(runtimeTicks) && runtimeTicks > 0) {
-    return runtimeTicks / 10_000_000;
-  }
   if (isFinite(musicPlayerState.currentTrackDuration)) {
     return musicPlayerState.currentTrackDuration;
   }
-  return 0;
+  return 30;
 }
 
 function updateMediaPositionState() {
-  if ("mediaSession" in navigator && musicPlayerState.audio) {
-    if (musicPlayerState.isLiveStream) return;
-    try {
-      navigator.mediaSession.setPositionState({
-        duration: getEffectiveDuration(),
-        playbackRate: musicPlayerState.audio.playbackRate,
-        position: musicPlayerState.audio.currentTime
-      });
-    } catch (e) {
-      console.warn("MediaSession konum durumu güncellemesi başarısız:", e);
-    }
-  }
-}
+  if (!("mediaSession" in navigator) || !navigator.mediaSession.setPositionState) return;
 
-export function initMediaSessionHandlers() {
-  const signal = resetMediaCtrl();
+  const audio = musicPlayerState.audio;
+  if (!audio || musicPlayerState.isLiveStream) return;
 
-  if (!("mediaSession" in navigator)) return;
+  const duration = getEffectiveDuration();
+  if (!isFinite(duration) || duration <= 0) return;
+
+  const currentTime = Number(audio.currentTime);
+  const position = Math.max(0, Math.min(isFinite(currentTime) ? currentTime : 0, duration));
 
   try {
-    const audio = musicPlayerState.audio;
-    if (!audio) return;
-
-    navigator.mediaSession.setActionHandler("play", () => {
-      audio.play().catch(e => console.error("Oynatma hatası:", e));
+    navigator.mediaSession.setPositionState({
+      duration,
+      playbackRate: audio.playbackRate || 1,
+      position
     });
-    navigator.mediaSession.setActionHandler("pause", () => {
-      audio.pause();
-    });
-    navigator.mediaSession.setActionHandler("seekto", (details) => {
-      if (details.seekTime != null) {
-        audio.currentTime = details.seekTime;
-        updateProgress();
-        updateMediaPositionState();
-      }
-    });
-    navigator.mediaSession.setActionHandler("seekforward", () => {
-      audio.currentTime = Math.min(getEffectiveDuration(), audio.currentTime + 10);
-      updateProgress();
-      updateMediaPositionState();
-    });
-    navigator.mediaSession.setActionHandler("seekbackward", () => {
-      audio.currentTime = Math.max(0, audio.currentTime - 10);
-      updateProgress();
-      updateMediaPositionState();
-    });
-
-    if (/Android/i.test(navigator.userAgent)) {
-      if (positionUpdateInterval) clearInterval(positionUpdateInterval);
-      positionUpdateInterval = setInterval(updateMediaPositionState, 1000);
-    }
-
-    signal.addEventListener("abort", () => {
-      if (positionUpdateInterval) {
-        clearInterval(positionUpdateInterval);
-        positionUpdateInterval = null;
-      }
-      try {
-        navigator.mediaSession.setActionHandler("play", null);
-        navigator.mediaSession.setActionHandler("pause", null);
-        navigator.mediaSession.setActionHandler("seekto", null);
-        navigator.mediaSession.setActionHandler("seekforward", null);
-        navigator.mediaSession.setActionHandler("seekbackward", null);
-        navigator.mediaSession.playbackState = "none";
-      } catch {}
-    });
-
-  } catch (error) {
-    console.warn("MediaSession eylem işleyicisi desteklenmiyor:", error);
+  } catch (e) {
+    console.warn("MediaSession konum durumu güncellemesi başarısız:", e);
   }
 }
 
@@ -164,8 +100,6 @@ export function setupAudioListeners() {
     updateDuration();
     updateMediaPositionState();
   }, { signal });
-
-  initMediaSessionHandlers();
 }
 
 export function setupProgressControls() {
@@ -338,25 +272,7 @@ export function updateDuration() {
 }
 
 export function cleanupMediaSession() {
-  if (positionUpdateInterval) {
-    clearInterval(positionUpdateInterval);
-    positionUpdateInterval = null;
-  }
-  if ("mediaSession" in navigator) {
-    try {
-      navigator.mediaSession.setActionHandler("play", null);
-      navigator.mediaSession.setActionHandler("pause", null);
-      navigator.mediaSession.setActionHandler("seekto", null);
-      navigator.mediaSession.setActionHandler("seekforward", null);
-      navigator.mediaSession.setActionHandler("seekbackward", null);
-      navigator.mediaSession.playbackState = "none";
-    } catch {}
-  }
-
-  if (mediaCtrl) {
-    try { mediaCtrl.abort(); } catch {}
-    mediaCtrl = null;
-  }
+  return;
 }
 
 export function cleanupProgressControls() {

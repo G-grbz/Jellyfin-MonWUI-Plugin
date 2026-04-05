@@ -1,5 +1,6 @@
 import { getConfig } from "../../config.js";
 import { getLanguageLabels, getDefaultLanguage } from '../../.././language/index.js';
+import { enhanceFormAccessibility } from "../../accessibility.js";
 
 export function createSettingsModal() {
     const config = getConfig();
@@ -72,6 +73,7 @@ export function createSettingsModal() {
         modal.style.display = 'none';
         location.reload();
     };
+    enhanceFormAccessibility(form, { prefix: "gmmp-settings" });
     modalContent.append(closeBtn, title, form);
     modal.appendChild(modalContent);
     document.body.appendChild(modal);

@@ -9,31 +9,6 @@ import { enableKeyboardControls } from "../ui/controls.js";
 
 let __artistModalModulePromise = null;
 
-function ensureAudioElementMounted() {
-  const audio = musicPlayerState.audio;
-  if (!audio || typeof document === "undefined") return;
-
-  musicPlayerState.audioElement = audio;
-
-  if (audio.isConnected) return;
-
-  audio.id = audio.id || "gmmp-audio-element";
-  audio.tabIndex = -1;
-  audio.setAttribute("aria-hidden", "true");
-  audio.setAttribute("data-gmmp-audio", "1");
-  Object.assign(audio.style, {
-    position: "fixed",
-    width: "1px",
-    height: "1px",
-    opacity: "0",
-    pointerEvents: "none",
-    inset: "auto auto 0 0",
-    zIndex: "-1"
-  });
-
-  (document.body || document.documentElement)?.appendChild(audio);
-}
-
 function startGmmpSchedulerWhenVisible() {
     __artistModalModulePromise = __artistModalModulePromise || import("../ui/artistModal.js");
     __artistModalModulePromise
@@ -53,29 +28,14 @@ export async function initPlayer() {
   try {
     await loadJSMediaTags();
     loadUserSettings();
-    ensureAudioElementMounted();
-
-    if ("mediaSession" in navigator) {
-      musicPlayerState.mediaSession = navigator.mediaSession;
-    }
 
     const playerElements = createModernPlayerUI();
     setupAudioListeners();
 
 
     if (/Android/i.test(navigator.userAgent)) {
-      document.addEventListener('visibilitychange', () => {
-        if (document.hidden) {
-          updateMediaMetadata(musicPlayerState.playlist[musicPlayerState.currentIndex]);
-        }
-      });
-
       window.addEventListener('beforeunload', () => {
-        try {
-          if (musicPlayerState.mediaSession) {
-            musicPlayerState.mediaSession.metadata = null;
-          }
-        } catch {}
+        try { navigator.mediaSession.metadata = null; } catch {}
       });
     }
 

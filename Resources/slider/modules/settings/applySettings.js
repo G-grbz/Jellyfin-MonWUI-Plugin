@@ -1,5 +1,5 @@
 import { getAdminTargetProfile, getConfig, getDeviceProfileAuto, publishAdminSnapshotIfForced } from "../config.js";
-import { loadCSS } from "../player/main.js";
+import { loadCSS } from "../../main.js";
 import { updateSlidePosition } from '../positionUtils.js';
 import { createCheckbox, createImageTypeSelect, bindCheckboxKontrol, bindTersCheckboxKontrol, updateConfig } from "../settings.js";
 import { updateHeaderUserAvatar, updateAvatarStyles, clearAvatarCache } from "../userAvatar.js";
@@ -433,7 +433,7 @@ const USER_ONLY_KEYS = [
             notificationsEnabled: formData.get('notificationsEnabled') === 'on',
             nextTracksSource: formData.get('nextTracksSource'),
 
-            useListFile: formData.get('useListFile') === 'on',
+            useListFile: false,
             useManualList: formData.get('useManualList') === 'on',
             manualListIds: formData.get('manualListIds'),
             customQueryString: (() => {

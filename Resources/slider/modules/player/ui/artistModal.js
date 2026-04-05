@@ -12,10 +12,10 @@ import { showStatsModal } from "./statsModal.js";
 import { updatePlaylistModal } from "./playlistModal.js";
 import { withServer, withParams, getServerBaseCached } from "../../jfUrl.js";
 import { isRadioTrack } from "../core/radio.js";
+import { enhanceFormAccessibility } from "../../accessibility.js";
+import { getSessionInfo } from "/Plugins/JMSFusion/runtime/api.js";
 
-console.log("[artistModal] loaded", { hasMusicDB: !!musicDB, hasAddOrUpdate: !!musicDB?.addOrUpdateTracks });
 window.__musicDB = musicDB;
-let __artistModalClickLoggerAdded = false;
 
 const config = getConfig();
 
@@ -28,6 +28,58 @@ let __fullscanSchedulerId = null;
 let __schedulerBooted = false;
 let __syncAbortCtrl = null;
 let __dbReadyOnce = null;
+
+function text(value) {
+  return String(value ?? "").trim();
+}
+
+function pickFirstText(...values) {
+  for (const value of values) {
+    const normalized = text(value);
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
+function getLiveApiClient() {
+  return (typeof window !== "undefined" && (window.ApiClient || window.apiClient)) || null;
+}
+
+function persistCredentialHints({ userId, apiKey } = {}) {
+  try {
+    if (userId) {
+      sessionStorage.setItem("userId", userId);
+      localStorage.setItem("userId", userId);
+    }
+  } catch {}
+
+  try {
+    if (apiKey) {
+      sessionStorage.setItem("accessToken", apiKey);
+      localStorage.setItem("accessToken", apiKey);
+      sessionStorage.setItem("api-key", apiKey);
+      localStorage.setItem("api-key", apiKey);
+    }
+  } catch {}
+}
+
+function buildArtistModalAuthHeaders(apiKey, userId) {
+  const headers = {
+    Accept: "application/json",
+  };
+
+  if (apiKey) {
+    headers["X-Emby-Token"] = apiKey;
+    headers["X-MediaBrowser-Token"] = apiKey;
+  }
+
+  if (userId) {
+    headers["X-Emby-UserId"] = userId;
+    headers["X-MediaBrowser-UserId"] = userId;
+  }
+
+  return headers;
+}
 
 async function ensureMusicDbReady() {
   if (__dbReadyOnce) return __dbReadyOnce;
@@ -207,7 +259,13 @@ export function getJellyfinCredentials() {
       sessionStorage.getItem("json-credentials") ||
       localStorage.getItem("json-credentials");
     const credentials = raw ? JSON.parse(raw) : null;
+    const api = getLiveApiClient();
+    const session = (typeof getSessionInfo === "function" ? getSessionInfo() : null) || {};
+
     let serverUrl = (
+      api?._serverAddress ||
+      api?._serverInfo?.LocalAddress ||
+      api?._serverInfo?.RemoteAddress ||
       credentials?.Servers?.[0]?.RemoteAddress ||
       credentials?.Servers?.[0]?.LocalAddress ||
       credentials?.Servers?.[0]?.Url ||
@@ -221,30 +279,45 @@ export function getJellyfinCredentials() {
       }
     }
 
-    const api = (typeof window !== "undefined" && window.ApiClient) ? window.ApiClient : null;
+    const userId = pickFirstText(
+      typeof api?.getCurrentUserId === "function" ? api.getCurrentUserId() : null,
+      api?._currentUserId,
+      api?._serverInfo?.UserId,
+      session?.userId,
+      session?.UserId,
+      sessionStorage.getItem("userId"),
+      localStorage.getItem("userId"),
+      localStorage.getItem("emby-userid"),
+      sessionStorage.getItem("emby-userid"),
+      localStorage.getItem("jellyfin-userid"),
+      sessionStorage.getItem("jellyfin-userid"),
+      credentials?.User?.Id,
+      credentials?.Servers?.[0]?.UserId
+    );
 
-    const userId =
-      credentials?.Servers?.[0]?.UserId ||
-      (typeof api?.getCurrentUserId === "function" ? api.getCurrentUserId() : null) ||
-      localStorage.getItem("userId") ||
-      sessionStorage.getItem("userId") ||
-      localStorage.getItem("emby-userid") ||
-      sessionStorage.getItem("emby-userid") ||
-      localStorage.getItem("jellyfin-userid") ||
-      sessionStorage.getItem("jellyfin-userid") ||
-      null;
+    const apiKey = pickFirstText(
+      typeof api?.accessToken === "function" ? api.accessToken() : null,
+      api?._serverInfo?.AccessToken,
+      api?._authToken,
+      session?.accessToken,
+      session?.AccessToken,
+      sessionStorage.getItem("accessToken"),
+      localStorage.getItem("accessToken"),
+      sessionStorage.getItem("api-key"),
+      localStorage.getItem("api-key"),
+      getAuthToken(),
+      credentials?.AccessToken,
+      credentials?.Servers?.[0]?.AccessToken
+    );
 
-    const apiKey =
-      getAuthToken() ||
-      sessionStorage.getItem("api-key") ||
-      localStorage.getItem("api-key") ||
-      credentials?.Servers?.[0]?.AccessToken ||
-      null;
+    if (userId || apiKey) {
+      persistCredentialHints({ userId, apiKey });
+    }
 
     return {
       serverUrl,
-      userId,
-      apiKey,
+      userId: userId || null,
+      apiKey: apiKey || null,
       isValid: !!userId && !!apiKey,
     };
   } catch {
@@ -259,24 +332,6 @@ export function createArtistModal() {
   artistModal.id = "artist-modal";
   artistModal.className = "modal hidden";
   artistModal.setAttribute("aria-hidden", "true");
-
-  if (!__artistModalClickLoggerAdded) {
-    __artistModalClickLoggerAdded = true;
-    document.addEventListener("click", (e) => {
-      const modal = document.getElementById("artist-modal");
-      if (!modal) return;
-      if (!e.target || !modal.contains(e.target)) return;
-      const t = e.target;
-      const fa = t.closest?.(".modal-fetch-all-music-btn");
-      const syn = t.closest?.(".modal-fetch-new-music-btn");
-      const cls = (t.className && String(t.className)) || t.tagName;
-      console.log("[artistModal click]", {
-        target: cls,
-        hitFetchAll: !!fa,
-        hitSync: !!syn,
-      });
-    }, true);
-  }
 
   const modalContent = document.createElement("div");
   modalContent.className = "modal-content modal-artist-content";
@@ -377,7 +432,10 @@ export function createArtistModal() {
   const searchInput = document.createElement("input");
   searchInput.type = "text";
   searchInput.className = "modal-artist-search";
+  searchInput.id = "artist-modal-search";
+  searchInput.name = "artist-modal-search";
   searchInput.placeholder = config.languageLabels.placeholder;
+  searchInput.setAttribute("aria-label", config.languageLabels.placeholder || "Parçalarda ara");
   searchInput.addEventListener("input", (e) => {
     clearSearchTimer();
     const val = e.target.value;
@@ -528,7 +586,6 @@ export async function syncDbIncremental({ force = false } = {}) {
         SortOrder: "Descending",
         Limit: String(LIMIT),
         StartIndex: String(startIndex),
-        api_key: apiKey,
       });
 
       const ctrl = new AbortController();
@@ -537,11 +594,7 @@ export async function syncDbIncremental({ force = false } = {}) {
         withParams(`/Users/${userId}/Items`, Object.fromEntries(params.entries())),
         {
           signal: ctrl.signal,
-          headers: {
-            "X-Emby-Token": apiKey,
-            "X-MediaBrowser-Token": apiKey,
-            "Accept": "application/json",
-          },
+          headers: buildArtistModalAuthHeaders(apiKey, userId),
         }
       ).finally(() => {
         if (__syncAbortCtrl === ctrl) __syncAbortCtrl = null;
@@ -620,7 +673,6 @@ export async function syncDbFullscan({ force = false } = {}) {
       Limit: 20000,
       SortBy: "DateCreated",
       SortOrder: "Ascending",
-      api_key: apiKey,
     });
 
     const ctrl = new AbortController();
@@ -630,11 +682,7 @@ export async function syncDbFullscan({ force = false } = {}) {
       withParams(`/Users/${userId}/Items`, Object.fromEntries(params.entries())),
       {
         signal: ctrl.signal,
-        headers: {
-          "X-Emby-Token": apiKey,
-          "X-MediaBrowser-Token": apiKey,
-          "Accept": "application/json",
-        },
+        headers: buildArtistModalAuthHeaders(apiKey, userId),
       }
     ).catch((e) => {
       if (e?.name === "AbortError") return null;
@@ -736,7 +784,6 @@ export function startGlobalDbFullscanScheduler() {
 }
 
 async function loadAllMusicFromJellyfin({ forceFetch = false } = {}) {
-  console.log("[FetchAll] loadAllMusicFromJellyfin ENTER", { forceFetch });
   const modalEl = document.getElementById("artist-modal");
   if (!modalEl) return;
 
@@ -754,7 +801,6 @@ async function loadAllMusicFromJellyfin({ forceFetch = false } = {}) {
     let needFetch = !!forceFetch || tracks.length === 0;
 
     if (needFetch) {
-      console.log("[FetchAll] needFetch true -> will fetch from Jellyfin");
       const { userId, apiKey, isValid } = getJellyfinCredentials();
       if (isValid) {
         const LIMIT = 500;
@@ -770,16 +816,13 @@ async function loadAllMusicFromJellyfin({ forceFetch = false } = {}) {
             SortBy: "AlbumArtist,Album,SortName",
             Limit: String(LIMIT),
             StartIndex: String(startIndex),
-            api_key: apiKey,
           });
 
           const url = withParams(`/Users/${userId}/Items`, Object.fromEntries(params.entries()));
-          console.log("[FetchAll] URL =>", url);
 
           const ctrl = new AbortController();
           addFetchController(ctrl);
           const timeoutId = setTimeout(() => {
-            console.warn("[FetchAll] fetch timeout -> aborting");
             try { ctrl.abort(); } catch {}
           }, 90_000);
 
@@ -787,15 +830,9 @@ async function loadAllMusicFromJellyfin({ forceFetch = false } = {}) {
           try {
             resp = await fetch(url, {
               signal: ctrl.signal,
-              headers: {
-                "X-Emby-Token": apiKey,
-                "X-MediaBrowser-Token": apiKey,
-                "Accept": "application/json",
-              },
+              headers: buildArtistModalAuthHeaders(apiKey, userId),
             });
-            console.log("[FetchAll] fetch returned", { ok: resp.ok, status: resp.status, statusText: resp.statusText });
           } catch (e) {
-            console.error("[FetchAll] fetch threw", e);
             throw e;
           } finally {
             clearTimeout(timeoutId);
@@ -803,7 +840,6 @@ async function loadAllMusicFromJellyfin({ forceFetch = false } = {}) {
           }
 
           const rawText = await resp.text();
-          console.log("[FetchAll] raw response (first 200) =>", rawText.slice(0, 200));
           if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText} :: ${rawText.slice(0, 200)}`);
 
           let data;
@@ -819,19 +855,16 @@ async function loadAllMusicFromJellyfin({ forceFetch = false } = {}) {
               try {
                 await musicDB.addOrUpdateTracks(items);
               } catch (e) {
-                console.error("[FetchAll] DB write failed (addOrUpdateTracks)", e);
                 throw e;
               }
             } else if (typeof musicDB?.saveTracks === "function") {
               try {
                 await musicDB.saveTracks(combined);
               } catch (e) {
-                console.error("[FetchAll] DB write failed (saveTracks)", e);
                 throw e;
               }
             }
           }
-          console.log("[FetchAll] page", { startIndex, got: items.length, total });
 
           if (!items.length) break;
           startIndex += items.length;
@@ -839,12 +872,8 @@ async function loadAllMusicFromJellyfin({ forceFetch = false } = {}) {
         }
 
         tracks = combined;
-        console.log("[FetchAll] fetched total items:", tracks.length);
         if (typeof musicDB?.addOrUpdateTracks !== "function") {
           await musicDB.saveTracks(tracks);
-          console.log("[FetchAll] DB write OK:", tracks.length);
-        } else {
-          console.log("[FetchAll] DB incremental write OK");
         }
       }
     }
@@ -874,7 +903,7 @@ async function loadAllMusicFromJellyfin({ forceFetch = false } = {}) {
     if (totalPages > 1) paginationContainer.style.display = "flex";
   } catch (error) {
     if (error?.name === "AbortError") return;
-    console.error("[FetchAll] ERROR:", error);
+    console.error("Tüm müzikler yüklenirken hata:", error);
     showNotification(
       `<i class="fas fa-exclamation-circle"></i> FetchAll error: ${String(error?.message || error)}`,
       5000,
@@ -901,6 +930,9 @@ function createSortDropdown() {
 
   const sortSelect = document.createElement("select");
   sortSelect.className = "modal-sort-select";
+  sortSelect.id = "artist-modal-sort-select";
+  sortSelect.name = "artist-modal-sort-select";
+  sortSelect.setAttribute("aria-label", config.languageLabels.sortBy || "Sırala");
 
   const directionBtn = document.createElement("button");
   directionBtn.className = "sort-direction-btn";
@@ -1242,8 +1274,14 @@ function createTrackElement(track, index, showPosition = true) {
   const trackCheckbox = document.createElement("input");
   trackCheckbox.type = "checkbox";
   trackCheckbox.className = "modal-track-checkbox";
+  trackCheckbox.id = `artist-track-checkbox-${track.Id}`;
+  trackCheckbox.name = `artist-track-checkbox-${track.Id}`;
   trackCheckbox.dataset.trackId = track.Id;
   trackCheckbox.checked = selectedTrackIds.has(track.Id);
+  trackCheckbox.setAttribute(
+    "aria-label",
+    `${config.languageLabels.selectTrack || "Parçayı seç"}: ${track.Name || config.languageLabels.unknownTrack || "Bilinmeyen parça"}`
+  );
   trackNumberContainer.appendChild(trackCheckbox);
 
   trackElement.appendChild(trackNumberContainer);
@@ -1440,14 +1478,10 @@ async function loadArtistDetails(artistId) {
   addFetchController(ctrl);
   try {
     const resp = await fetch(
-      withParams(`/Users/${userId}/Items/${artistId}`, { api_key: apiKey }),
+      withParams(`/Users/${userId}/Items/${artistId}`),
       {
         signal: ctrl.signal,
-        headers: {
-          "X-Emby-Token": apiKey,
-          "X-MediaBrowser-Token": apiKey,
-          "Accept": "application/json",
-        },
+        headers: buildArtistModalAuthHeaders(apiKey, userId),
       }
     );
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -1672,6 +1706,7 @@ function setupHeaderActions(headerActions) {
   const selectAllCheckbox = document.createElement("input");
   selectAllCheckbox.type = "checkbox";
   selectAllCheckbox.id = "artist-modal-select-all";
+  selectAllCheckbox.name = "artist-modal-select-all";
   selectAllCheckbox.className = "modal-select-all-checkbox";
   selectAllCheckbox.title = config.languageLabels.selectAll;
 
@@ -1867,6 +1902,7 @@ async function showSaveToPlaylistModal() {
   const nameInput = document.createElement("input");
   nameInput.type = "text";
   nameInput.placeholder = config.languageLabels.enterPlaylistName;
+  nameInput.setAttribute("aria-label", config.languageLabels.enterPlaylistName || "Oynatma listesi adı");
 
   const titleName = document.querySelector("#artist-modal .modal-artist-name")?.textContent || "";
   nameInput.value = `${titleName} - ${new Date().toLocaleString(config.dateLocale || "tr-TR", {
@@ -1883,7 +1919,8 @@ async function showSaveToPlaylistModal() {
   publicLabel.className = "public-checkbox-label";
   const publicCheckbox = document.createElement("input");
   publicCheckbox.type = "checkbox";
-  publicCheckbox.id = "playlist-public";
+  publicCheckbox.id = "artist-playlist-public";
+  publicCheckbox.name = "artist-playlist-public";
   publicLabel.appendChild(publicCheckbox);
   publicLabel.appendChild(document.createTextNode(config.languageLabels.makePlaylistPublic));
 
@@ -1895,12 +1932,12 @@ async function showSaveToPlaylistModal() {
   const newPlaylistRadio = document.createElement("input");
   newPlaylistRadio.type = "radio";
   newPlaylistRadio.name = "saveAction";
-  newPlaylistRadio.id = "new-playlist";
+  newPlaylistRadio.id = "artist-new-playlist";
   newPlaylistRadio.value = "new";
   newPlaylistRadio.checked = true;
   newPlaylistRadio.onchange = togglePlaylistSelection;
   const newPlaylistLabel = document.createElement("label");
-  newPlaylistLabel.htmlFor = "new-playlist";
+  newPlaylistLabel.htmlFor = "artist-new-playlist";
   newPlaylistLabel.textContent = config.languageLabels.newPlaylist || "Yeni liste oluştur";
   newPlaylistOption.append(newPlaylistRadio, newPlaylistLabel);
 
@@ -1909,11 +1946,11 @@ async function showSaveToPlaylistModal() {
   const existingPlaylistRadio = document.createElement("input");
   existingPlaylistRadio.type = "radio";
   existingPlaylistRadio.name = "saveAction";
-  existingPlaylistRadio.id = "existing-playlist";
+  existingPlaylistRadio.id = "artist-existing-playlist";
   existingPlaylistRadio.value = "existing";
   existingPlaylistRadio.onchange = togglePlaylistSelection;
   const existingPlaylistLabel = document.createElement("label");
-  existingPlaylistLabel.htmlFor = "existing-playlist";
+  existingPlaylistLabel.htmlFor = "artist-existing-playlist";
   existingPlaylistLabel.textContent = config.languageLabels.addToExisting || "Mevcut listeye ekle";
   existingPlaylistOption.append(existingPlaylistRadio, existingPlaylistLabel);
 
@@ -1928,7 +1965,10 @@ async function showSaveToPlaylistModal() {
 
   const playlistSelect = document.createElement("select");
   playlistSelect.className = "playlist-select";
+  playlistSelect.id = "artist-existing-playlist-select";
+  playlistSelect.name = "artist-existing-playlist-select";
   playlistSelect.disabled = true;
+  playlistSelectLabel.htmlFor = "artist-existing-playlist-select";
 
   const loadingOption = document.createElement("option");
   loadingOption.value = "";
@@ -1976,6 +2016,7 @@ async function showSaveToPlaylistModal() {
 
   modalFooter.appendChild(saveButton);
   modalContent.append(modalHeader, modalBody, modalFooter);
+  enhanceFormAccessibility(modalContent, { prefix: "artist-save" });
   modal.appendChild(modalContent);
   document.body.appendChild(modal);
 

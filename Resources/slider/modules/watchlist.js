@@ -1,4 +1,4 @@
-import { fetchItemDetailsFull, fetchItemsBulk, getEmbyHeaders, getSessionInfo, makeApiRequest, playNow, updateFavoriteStatus } from "/Plugins/JMSFusion/runtime/api.js";
+import { fetchItemDetailsFull, fetchItemsBulk, getEmbyHeaders, getLastPlayNowBlockReason, getSessionInfo, makeApiRequest, playNow, updateFavoriteStatus } from "/Plugins/JMSFusion/runtime/api.js";
 import { CollectionCacheDB } from "./collectionCacheDb.js";
 import { getConfig } from "./config.js";
 import { withServer } from "./jfUrl.js";
@@ -3488,6 +3488,9 @@ async function startWatchlistPlayback(triggerEl, itemId) {
     await closeWatchlistModal();
     const started = await playNow(id);
     if (!started) {
+      if (getLastPlayNowBlockReason() === "parental-pin") {
+        return false;
+      }
       throw new Error(L("playStartFailed", "Oynatma başlatılamadı"));
     }
     return true;

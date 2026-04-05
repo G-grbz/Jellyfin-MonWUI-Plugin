@@ -59,11 +59,14 @@ function ensureSettingsUI() {
 
   const delaySlider = document.createElement("input");
   delaySlider.type = "range";
+  delaySlider.id = "lyrics-delay-slider";
+  delaySlider.name = "lyrics-delay-slider";
   delaySlider.min = "-5";
   delaySlider.max = "5";
   delaySlider.step = "0.1";
   delaySlider.value = localStorage.getItem("lyricsDelay") || "0";
   delaySlider.className = "lyrics-delay-slider";
+  delaySlider.setAttribute("aria-label", config.languageLabels.lyricsDelay || "Şarkı sözü gecikmesi");
 
   const delayValue = document.createElement("span");
   delayValue.className = "lyrics-setting-value";
@@ -79,10 +82,12 @@ function ensureSettingsUI() {
   delayValue.addEventListener("click", () => {
     const manualInput = document.createElement("input");
     manualInput.type = "number";
+    manualInput.name = "lyrics-delay-manual-input";
     manualInput.step = "0.1";
     manualInput.value = delaySlider.value;
     manualInput.className = "lyrics-setting-manual-input";
     manualInput.style.width = "4em";
+    manualInput.setAttribute("aria-label", config.languageLabels.lyricsDelay || "Şarkı sözü gecikmesi");
 
     delayValue.style.display = "none";
     delayValue.parentNode.insertBefore(manualInput, delayValue.nextSibling);
@@ -123,11 +128,14 @@ function ensureSettingsUI() {
 
   const durationSlider = document.createElement("input");
   durationSlider.type = "range";
+  durationSlider.id = "lyrics-duration-slider";
+  durationSlider.name = "lyrics-duration-slider";
   durationSlider.min = "1";
   durationSlider.max = "15";
   durationSlider.step = "0.5";
   durationSlider.value = localStorage.getItem("lyricsDuration") || "5";
   durationSlider.className = "lyrics-duration-slider";
+  durationSlider.setAttribute("aria-label", config.languageLabels.lyricsDuration || "Şarkı sözü aktiflik süresi");
 
   const durationValue = document.createElement("span");
   durationValue.className = "lyrics-setting-value";
@@ -143,12 +151,14 @@ function ensureSettingsUI() {
   durationValue.addEventListener("click", () => {
     const manualInput = document.createElement("input");
     manualInput.type = "number";
+    manualInput.name = "lyrics-duration-manual-input";
     manualInput.step = "0.5";
     manualInput.min = "1";
     manualInput.max = "15";
     manualInput.value = durationSlider.value;
     manualInput.className = "lyrics-setting-manual-input";
     manualInput.style.width = "4em";
+    manualInput.setAttribute("aria-label", config.languageLabels.lyricsDuration || "Şarkı sözü aktiflik süresi");
 
     durationValue.style.display = "none";
     durationValue.parentNode.insertBefore(manualInput, durationValue.nextSibling);

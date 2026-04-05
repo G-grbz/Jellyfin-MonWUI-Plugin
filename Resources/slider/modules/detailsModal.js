@@ -3471,7 +3471,8 @@ wireMiniCardDelegation();
     e.stopPropagation();
     try {
       playBtn.disabled = true;
-      await playNow(baseItem.Id);
+      const started = await playNow(baseItem.Id);
+      if (!started) return;
       await closeDetailsModal();
       notifyDetailsModalPlay(baseItem.Id);
     } catch (err) {
@@ -3654,7 +3655,8 @@ wireMiniCardDelegation();
       const epId = el.getAttribute("data-epid");
       if (!epId) return;
       try {
-        await playNow(epId);
+        const started = await playNow(epId);
+        if (!started) return;
         await closeDetailsModal();
         notifyDetailsModalPlay(epId);
       } catch (err) {

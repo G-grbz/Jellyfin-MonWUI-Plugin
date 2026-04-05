@@ -84,7 +84,7 @@ export async function playJellyfinPlaylist(playlistId) {
     const playlistResponse = await fetch(
       withParams(`/Playlists/${playlistId}/Items`, {
         UserId: userId,
-        Fields: "PrimaryImageAspectRatio,MediaSources,Chapters,ArtistItems,AlbumArtist,Album,Genres",
+        Fields: "PrimaryImageAspectRatio,MediaSources,Chapters,ArtistItems,AlbumArtist,Album,Genres,RunTimeTicks,ImageTags,UserData",
       }),
       { headers: { "X-Emby-Token": authToken } }
     );

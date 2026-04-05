@@ -4,6 +4,7 @@ import { getAuthToken } from "../core/auth.js";
 import { showNotification } from "../ui/notification.js";
 import { refreshPlaylist } from "../core/playlist.js";
 import { withServer, withParams } from "../../jfUrl.js";
+import { enhanceFormAccessibility } from "../../accessibility.js";
 
 
 const config = getConfig();
@@ -99,6 +100,8 @@ function buildModal(genres, token) {
   searchInput.type = "text";
   searchInput.placeholder = config.languageLabels?.searchGenres || "Türlerde ara…";
   searchInput.className = "genre-filter-search";
+  searchInput.id = "genre-filter-search";
+  searchInput.name = "genre-filter-search";
 
   searchContainer.append(searchIcon, searchInput);
 
@@ -130,8 +133,6 @@ function buildModal(genres, token) {
   actionButtons.append(selectAllBtn, selectNoneBtn, clearFilterBtn, applyBtn);
   const sorted = [...genres].sort((a, b) => (a.Name || "").localeCompare(b.Name || "", "tr", { sensitivity: "base" }));
   let currentLetter = "";
-  const apiKeyParam = token ? `&api_key=${encodeURIComponent(token)}` : "";
-
   sorted.forEach((genre) => {
     const name = genre.Name || "";
     const firstLetter = name.charAt(0).toUpperCase();
@@ -201,6 +202,7 @@ function buildModal(genres, token) {
 
   updateSelectedCount();
   modalContent.append(header, searchContainer, genresContainer, selectedCount, actionButtons);
+  enhanceFormAccessibility(modalContent, { prefix: "genre-filter" });
   modal.appendChild(modalContent);
   document.body.appendChild(modal);
   const handleBackdrop = (e) => {

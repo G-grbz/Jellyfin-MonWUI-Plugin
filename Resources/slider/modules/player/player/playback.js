@@ -27,6 +27,7 @@ import {
   resolveRadioStationArtUrl,
   resolveRadioStream
 } from "../core/radio.js";
+import { getVideoStreamUrl } from "/Plugins/JMSFusion/runtime/api.js";
 
 const config = getConfig();
 const SEEK_RETRY_DELAY = 0;
@@ -37,6 +38,8 @@ let currentCanPlayHandler = null;
 let currentPlayErrorHandler = null;
 let _metaReqId = 0;
 let _artReqId = 0;
+let _streamReqId = 0;
+const resolvedAudioUrlCache = new Map();
 
 const updatePlaybackUI = (isPlaying) => {
   if (musicPlayerState.playPauseBtn) {
@@ -163,11 +166,10 @@ function refreshLiveRadioTrackInfo(track) {
   updateMediaMetadata(track);
 }
 
-function handleCanPlay() {
+ function handleCanPlay() {
   musicPlayerState.audio.play()
     .then(() => {
       updatePlaybackUI(true);
-      updatePositionState();
       const track = musicPlayerState.isUserModified
         ? musicPlayerState.combinedPlaylist[musicPlayerState.currentIndex]
         : musicPlayerState.playlist[musicPlayerState.currentIndex];
@@ -197,6 +199,7 @@ function handlePlayError() {
 
 function cleanupAudioListeners() {
   const audio = musicPlayerState.audio;
+  _streamReqId += 1;
   disposables.clearAll();
   try { stopLyricsSync(); } catch {}
   _lyricsRunning = false;
@@ -489,9 +492,6 @@ export async function updateModernTrackInfo(track) {
   updateMediaMetadata(track);
 
   await Promise.all([ loadAlbumArt(track), updateTrackMeta(track) ]);
-  if (musicPlayerState.currentTrack?.Id === track.Id) {
-    updateMediaMetadata(track);
-  }
   updatePlayerBackground();
 
   if (musicPlayerState.favoriteBtn) {
@@ -596,7 +596,6 @@ function setAlbumArt(imageUrl) {
       sizes: '300x300',
       type: 'image/png'
     }];
-    musicPlayerState.currentArtworkTrackId = musicPlayerState.currentTrack?.Id || null;
     return;
   }
 
@@ -607,7 +606,6 @@ function setAlbumArt(imageUrl) {
       sizes: '300x300',
       type: 'image/jpeg'
     }];
-    musicPlayerState.currentArtworkTrackId = musicPlayerState.currentTrack?.Id || null;
     return;
   }
 
@@ -617,7 +615,6 @@ function setAlbumArt(imageUrl) {
     sizes: '300x300',
     type: imageUrl.startsWith('data:') ? imageUrl.split(';')[0].split(':')[1] : 'image/jpeg'
   }];
-  musicPlayerState.currentArtworkTrackId = musicPlayerState.currentTrack?.Id || null;
 }
 
 function createMetaWrapper() {
@@ -708,6 +705,90 @@ async function getEmbeddedImage(trackId) {
   return tags?.pictureUri || null;
 }
 
+function getTrackId(track) {
+  return track?.Id || track?.id || null;
+}
+
+function isDirectJellyfinAudioUrl(url) {
+  const value = String(url || "");
+  return /\/Audio\/[^/]+\/stream(?:\.\w+)?(?:\?|$)/i.test(value);
+}
+
+function syncResolvedTrackSource(trackId, url) {
+  if (!trackId || !url) return;
+  resolvedAudioUrlCache.set(trackId, url);
+
+  const lists = [
+    musicPlayerState.playlist,
+    musicPlayerState.originalPlaylist,
+    musicPlayerState.effectivePlaylist,
+    musicPlayerState.combinedPlaylist,
+  ];
+
+  lists.forEach((list) => {
+    if (!Array.isArray(list)) return;
+    list.forEach((item) => {
+      if (getTrackId(item) === trackId) {
+        item.mediaSource = url;
+      }
+    });
+  });
+
+  if (getTrackId(musicPlayerState.currentTrack) === trackId && musicPlayerState.currentTrack) {
+    musicPlayerState.currentTrack.mediaSource = url;
+  }
+}
+
+function buildDirectAudioUrl(track) {
+  const trackId = getTrackId(track);
+  if (!trackId) {
+    console.error("Parça Id Bulunamadı:", track);
+    return null;
+  }
+
+  const authToken = getAuthToken();
+  if (!authToken) {
+    showNotification(
+    `<i class="fas fa-exclamation-circle"></i> ${config.languageLabels.authRequired || "Kimlik doğrulama hatası"}`,
+    3000,
+    'error'
+  );
+    return null;
+  }
+
+  return apiUrl(`/Audio/${encodeURIComponent(trackId)}/stream.mp3?Static=true&api_key=${authToken}`);
+}
+
+async function resolveTrackAudioUrl(track) {
+  if (!track) return null;
+  if (track?.filePath) return track.filePath;
+
+  const trackId = getTrackId(track);
+  if (!trackId) return null;
+
+  const cached = resolvedAudioUrlCache.get(trackId);
+  if (cached) return cached;
+
+  const existingSource = String(track?.mediaSource || "").trim();
+  const shouldResolveViaPlaybackInfo =
+    !existingSource ||
+    isDirectJellyfinAudioUrl(existingSource) ||
+    musicPlayerState.playlistSource === "jellyfin";
+
+  if (shouldResolveViaPlaybackInfo) {
+    try {
+      const resolvedUrl = await getVideoStreamUrl(trackId, 360, 0);
+      if (resolvedUrl) {
+        syncResolvedTrackSource(trackId, resolvedUrl);
+        return resolvedUrl;
+      }
+    } catch {}
+  }
+
+  if (existingSource) return existingSource;
+  return buildDirectAudioUrl(track);
+}
+
 export function playTrack(index) {
   if (index === musicPlayerState.currentIndex &&
       musicPlayerState.playlist[index]?.Id ===
@@ -743,11 +824,7 @@ export function playTrack(index) {
   musicPlayerState.currentIndex = index;
   musicPlayerState.currentTrack = track;
   musicPlayerState.isLiveStream = isRadioTrack(track);
-  const runtimeTicks = Number(track?.RunTimeTicks);
-  const runtimeSeconds = Number.isFinite(runtimeTicks) && runtimeTicks > 0
-    ? runtimeTicks / 10_000_000
-    : 0;
-  musicPlayerState.currentTrackDuration = isRadioTrack(track) ? NaN : runtimeSeconds;
+  musicPlayerState.currentTrackDuration = isRadioTrack(track) ? Number.NaN : 0;
   musicPlayerState.currentTrackName = isRadioTrack(track)
     ? getRadioTrackDisplayInfo(track).title
     : (track.Name || config.languageLabels.unknownTrack);
@@ -755,7 +832,6 @@ export function playTrack(index) {
   musicPlayerState.radioNowPlayingSource = isRadioTrack(track)
     ? getRadioStationSubtitle(track)
     : null;
-  updatePositionState();
 
   showNotification(
     `${isRadioTrack(track) ? '<i class="fas fa-broadcast-tower" style="margin-right: 8px;"></i>' : '<i class="fas fa-music" style="margin-right: 8px;"></i>'}${config.languageLabels.simdioynat}: ${musicPlayerState.currentTrackName}`,
@@ -826,50 +902,36 @@ export function playTrack(index) {
     try {
       audio.crossOrigin = "anonymous";
     } catch {}
-    const audioUrl = getAudioUrl(track);
-    if (!audioUrl) {
-      handlePlaybackError(new Error("Audio URL resolve edilemedi"), 'url');
-      return;
-    }
-    audio.src = audioUrl;
-    audio.load();
+    const streamReqId = ++_streamReqId;
+    (async () => {
+      const audioUrl = await resolveTrackAudioUrl(track);
+      if (streamReqId !== _streamReqId) return;
+      if (!audioUrl) {
+        handlePlaybackError(new Error("Audio source unavailable"), "resolve-url");
+        return;
+      }
+      audio.src = audioUrl;
+      audio.load();
+    })();
   }
 
   updateNextTracks();
 }
 
 function getAudioUrl(track) {
-  if (musicPlayerState.playlistSource === "jellyfin") {
-    const trackId = track.Id || track.id;
-    if (!trackId) {
-      console.error("Parça Id Bulunamadı:", track);
-      return null;
-    }
-
-    const authToken = getAuthToken();
-    if (!authToken) {
-      showNotification(
-      `<i class="fas fa-exclamation-circle"></i> ${config.languageLabels.authRequired || "Kimlik doğrulama hatası"}`,
-      3000,
-      'error'
-    );
-      return null;
-    }
-
-    return apiUrl(`/Audio/${encodeURIComponent(trackId)}/stream.mp3?Static=true&api_key=${authToken}`);
+  if (track?.filePath) return track.filePath;
+  if (track?.mediaSource) return track.mediaSource;
+  const trackId = getTrackId(track);
+  if (trackId) {
+    const cached = resolvedAudioUrlCache.get(trackId);
+    if (cached) return cached;
   }
-
-  return track.filePath || track.mediaSource ||
-        (track.Id && apiUrl(`/Audio/${track.Id}/stream.mp3`));
+  return buildDirectAudioUrl(track);
 }
 
 function getEffectiveDuration() {
   const audio = musicPlayerState.audio;
   if (audio && isFinite(audio.duration)) return audio.duration;
-  const runtimeTicks = Number(musicPlayerState.currentTrack?.RunTimeTicks);
-  if (Number.isFinite(runtimeTicks) && runtimeTicks > 0) {
-    return runtimeTicks / 10_000_000;
-  }
   if (isFinite(musicPlayerState.currentTrackDuration)) return musicPlayerState.currentTrackDuration;
   return 0;
 }

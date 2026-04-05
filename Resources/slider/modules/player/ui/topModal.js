@@ -7,6 +7,7 @@ import { readID3Tags } from "../lyrics/id3Reader.js";
 import { saveCurrentPlaylistToJellyfin } from "../core/playlist.js";
 import { fetchJellyfinPlaylists } from "../core/jellyfinPlaylists.js";
 import { withParams } from "../../jfUrl.js";
+import { enhanceFormAccessibility } from "../../accessibility.js";
 
 const config = getConfig();
 const DEFAULT_ARTWORK = "url('./slider/src/images/defaultArt.png')";
@@ -43,6 +44,9 @@ export function showTopTracksModal() {
 
   const limitSelector = document.createElement('select');
   limitSelector.className = 'top-tracks-limit-selector';
+  limitSelector.id = 'top-tracks-limit-selector';
+  limitSelector.name = 'top-tracks-limit-selector';
+  limitSelector.setAttribute('aria-label', config.languageLabels.trackLimit || 'Parça limiti');
   [20,50,100,200,400,600,800,1000].forEach(n => {
     const opt = document.createElement('option');
     opt.value = n;
@@ -248,6 +252,7 @@ async function showSaveToPlaylistModal() {
 
   const modalTitle = document.createElement("h3");
   modalTitle.textContent = config.languageLabels.saveToPlaylist || "Seçilenleri Kaydet";
+  modalTitle.id = "top-save-modal-title";
   modalHeader.appendChild(modalTitle);
 
   const closeButton = document.createElement("span");
@@ -264,6 +269,7 @@ async function showSaveToPlaylistModal() {
   const nameInput = document.createElement("input");
   nameInput.type = "text";
   nameInput.placeholder = config.languageLabels.enterPlaylistName;
+  nameInput.setAttribute("aria-labelledby", modalTitle.id);
   nameInput.value = `${activeTab === 'top' ? config.languageLabels.topTracks :
                   activeTab === 'recent' ? config.languageLabels.recentlyPlayed :
                   activeTab === 'latest' ? config.languageLabels.latestTracks :
@@ -281,7 +287,8 @@ async function showSaveToPlaylistModal() {
   publicLabel.className = "public-checkbox-label";
   const publicCheckbox = document.createElement("input");
   publicCheckbox.type = "checkbox";
-  publicCheckbox.id = "playlist-public";
+  publicCheckbox.id = "top-playlist-public";
+  publicCheckbox.name = "top-playlist-public";
   publicLabel.appendChild(publicCheckbox);
   publicLabel.appendChild(document.createTextNode(config.languageLabels.makePlaylistPublic));
 
@@ -293,12 +300,12 @@ async function showSaveToPlaylistModal() {
   const newPlaylistRadio = document.createElement("input");
   newPlaylistRadio.type = "radio";
   newPlaylistRadio.name = "saveAction";
-  newPlaylistRadio.id = "new-playlist";
+  newPlaylistRadio.id = "top-new-playlist";
   newPlaylistRadio.value = "new";
   newPlaylistRadio.checked = true;
   newPlaylistRadio.onchange = togglePlaylistSelection;
   const newPlaylistLabel = document.createElement("label");
-  newPlaylistLabel.htmlFor = "new-playlist";
+  newPlaylistLabel.htmlFor = "top-new-playlist";
   newPlaylistLabel.textContent = config.languageLabels.newPlaylist || "Yeni liste oluştur";
   newPlaylistOption.appendChild(newPlaylistRadio);
   newPlaylistOption.appendChild(newPlaylistLabel);
@@ -308,11 +315,11 @@ async function showSaveToPlaylistModal() {
   const existingPlaylistRadio = document.createElement("input");
   existingPlaylistRadio.type = "radio";
   existingPlaylistRadio.name = "saveAction";
-  existingPlaylistRadio.id = "existing-playlist";
+  existingPlaylistRadio.id = "top-existing-playlist";
   existingPlaylistRadio.value = "existing";
   existingPlaylistRadio.onchange = togglePlaylistSelection;
   const existingPlaylistLabel = document.createElement("label");
-  existingPlaylistLabel.htmlFor = "existing-playlist";
+  existingPlaylistLabel.htmlFor = "top-existing-playlist";
   existingPlaylistLabel.textContent = config.languageLabels.addToExisting || "Mevcut listeye ekle";
   existingPlaylistOption.appendChild(existingPlaylistRadio);
   existingPlaylistOption.appendChild(existingPlaylistLabel);
@@ -329,7 +336,10 @@ async function showSaveToPlaylistModal() {
 
   const playlistSelect = document.createElement("select");
   playlistSelect.className = "playlist-select";
+  playlistSelect.id = "top-existing-playlist-select";
+  playlistSelect.name = "top-existing-playlist-select";
   playlistSelect.disabled = true;
+  playlistSelectLabel.htmlFor = "top-existing-playlist-select";
 
   const loadingOption = document.createElement("option");
   loadingOption.value = "";
@@ -390,6 +400,7 @@ async function showSaveToPlaylistModal() {
   modalContent.appendChild(modalHeader);
   modalContent.appendChild(modalBody);
   modalContent.appendChild(modalFooter);
+  enhanceFormAccessibility(modalContent, { prefix: "top-save" });
   modal.appendChild(modalContent);
   document.body.appendChild(modal);
 
@@ -512,8 +523,14 @@ async function loadTracks() {
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
       checkbox.className = 'top-track-checkbox';
+      checkbox.id = `top-track-checkbox-${track.Id}`;
+      checkbox.name = `top-track-checkbox-${track.Id}`;
       checkbox.dataset.trackId = track.Id;
       checkbox.checked = selectedTrackIds.has(track.Id);
+      checkbox.setAttribute(
+        'aria-label',
+        `${config.languageLabels.selectTrack || 'Parçayı seç'}: ${track.Name || config.languageLabels.unknownTrack || 'Bilinmeyen parça'}`
+      );
       const onCheck = (e) => {
         const trackId = e.target.dataset.trackId;
         if (e.target.checked) {

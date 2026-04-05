@@ -31,8 +31,11 @@ const CSS_READY_TIMEOUT_MS = 2000;
 const MAX_RECENT_TOAST_KEYS = 500;
 const CREATED_TS_CACHE_MAX = 2000;
 const TOAST_QUEUE_MAX = 60;
+const NOTIF_THEME_LINK_ID = "jfNotifCss";
+const NOTIF_THEME_HREF_FRAGMENT = "slider/src/notifications";
 let __uiReady = false;
 let __forcePEObs = null;
+let __notifCssObs = null;
 const createdTsCache = new Map();
 const pollCtl = {
   latestTimer: null,
@@ -291,16 +294,81 @@ function toastShouldEnqueue(key) {
   return true;
 }
 
+function isNotifThemeStylesheet(node) {
+  if (!node || node.nodeType !== 1) return false;
+  if (String(node.tagName || "").toLowerCase() !== "link") return false;
+  const rel = String(node.getAttribute?.("rel") || "");
+  if (rel.toLowerCase() !== "stylesheet") return false;
+  const href = String(node.getAttribute?.("href") || node.href || "");
+  return href.includes(NOTIF_THEME_HREF_FRAGMENT);
+}
+
+function pruneForeignNotifStylesheets(activeLink = null) {
+  document.querySelectorAll('link[rel="stylesheet"][href]').forEach((link) => {
+    const href = String(link.getAttribute("href") || link.href || "");
+    if (!href.includes(NOTIF_THEME_HREF_FRAGMENT)) return;
+    if (activeLink && link === activeLink) return;
+    link.remove();
+  });
+}
+
+function queueNotifStylesheetPrune(activeLink = null) {
+  pruneForeignNotifStylesheets(activeLink);
+  requestAnimationFrame(() => pruneForeignNotifStylesheets(activeLink));
+  setTimeout(() => pruneForeignNotifStylesheets(activeLink), 0);
+  setTimeout(() => pruneForeignNotifStylesheets(activeLink), 60);
+  setTimeout(() => pruneForeignNotifStylesheets(activeLink), 250);
+}
+
+function ensureNotifStylesheetSentinel() {
+  if (__notifCssObs || typeof MutationObserver !== "function") return;
+  const root = document.head || document.documentElement;
+  if (!root) return;
+  __notifCssObs = new MutationObserver((mutations) => {
+    let shouldPrune = false;
+    for (const mutation of mutations) {
+      if (mutation.type === "attributes") {
+        if (isNotifThemeStylesheet(mutation.target)) {
+          shouldPrune = true;
+          break;
+        }
+        continue;
+      }
+      for (const node of mutation.addedNodes) {
+        if (isNotifThemeStylesheet(node)) {
+          shouldPrune = true;
+          break;
+        }
+        if (node?.nodeType === 1 && node.querySelector?.('link[rel="stylesheet"][href*="slider/src/notifications"]')) {
+          shouldPrune = true;
+          break;
+        }
+      }
+      if (shouldPrune) break;
+    }
+    if (!shouldPrune) return;
+    const activeLink = document.getElementById(NOTIF_THEME_LINK_ID);
+    queueNotifStylesheetPrune(activeLink);
+  });
+  __notifCssObs.observe(root, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["href", "rel", "id"]
+  });
+}
+
 function ensureNotifStylesheet() {
-  document.querySelectorAll('link[rel="stylesheet"][href*="slider/src/notifications"]')
-    .forEach(l => { if (l.id !== 'jfNotifCss') l.parentElement?.removeChild(l); });
-  let link = document.getElementById('jfNotifCss');
+  let link = document.getElementById(NOTIF_THEME_LINK_ID);
+  pruneForeignNotifStylesheets(link);
   if (!link) {
     link = document.createElement('link');
-    link.id = 'jfNotifCss';
+    link.id = NOTIF_THEME_LINK_ID;
     link.rel = 'stylesheet';
     (document.head || document.documentElement).appendChild(link);
   }
+  ensureNotifStylesheetSentinel();
+  queueNotifStylesheetPrune(link);
   return link;
 }
 
@@ -341,6 +409,7 @@ function setTheme(themeNumber) {
   } else {
     finish();
   }
+  queueNotifStylesheetPrune(link);
   try { localStorage.setItem(getThemePreferenceKey(), themeNumber); } catch {}
 }
 

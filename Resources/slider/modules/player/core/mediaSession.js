@@ -1,12 +1,13 @@
 import { musicPlayerState } from "./state.js";
 import { togglePlayPause, playPrevious, playNext } from "../player/playback.js";
-import { apiUrl, getAuthToken } from "./auth.js";
+import { getAuthToken, apiUrl } from "./auth.js";
 import { makeCleanupBag, addEvent } from "../utils/cleanup.js";
 import { getRadioTrackArtistLine, getRadioTrackDisplayInfo, isRadioTrack, resolveRadioStationArtUrl } from "./radio.js";
 
 const DEFAULT_ARTWORK_URL = "./slider/src/images/defaultArt.png";
 
 let mediaBag = null;
+let mediaMetadataReqId = 0;
 
 export function initMediaSession() {
   if (!("mediaSession" in navigator)) {
@@ -14,8 +15,8 @@ export function initMediaSession() {
     return;
   }
 
-  musicPlayerState.mediaSession = navigator.mediaSession;
   cleanupMediaSession();
+  musicPlayerState.mediaSession = navigator.mediaSession;
 
   mediaBag = makeCleanupBag(initMediaSession);
 
@@ -96,10 +97,8 @@ function handleStopAction() {
   if (!a) return;
   a.pause();
   a.currentTime = 0;
-  if (musicPlayerState.playPauseBtn) {
-    musicPlayerState.playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
-  }
-  try { navigator.mediaSession.playbackState = "paused"; } catch {}
+  updatePlaybackState();
+  updatePositionState();
 }
 
 export function updatePositionState() {
@@ -122,9 +121,10 @@ export function updatePositionState() {
 }
 
 export async function updateMediaMetadata(track) {
-  if (!("mediaSession" in navigator) || typeof MediaMetadata !== "function") return;
+  if (!("mediaSession" in navigator)) return;
 
   try {
+    const reqId = ++mediaMetadataReqId;
     const radioDisplay = isRadioTrack(track)
       ? getRadioTrackDisplayInfo(track)
       : null;
@@ -144,6 +144,7 @@ export async function updateMediaMetadata(track) {
       artwork: await getTrackArtwork(track)
     };
 
+    if (reqId !== mediaMetadataReqId) return;
     navigator.mediaSession.metadata = new MediaMetadata(metadata);
     updatePlaybackState();
   } catch (error) {
@@ -152,18 +153,6 @@ export async function updateMediaMetadata(track) {
 }
 
 async function getTrackArtwork(track) {
-  const currentArtwork = Array.isArray(musicPlayerState.currentArtwork)
-    ? musicPlayerState.currentArtwork.filter((item) => item?.src)
-    : null;
-
-  if (
-    track?.Id &&
-    musicPlayerState.currentArtworkTrackId === track.Id &&
-    currentArtwork?.length
-  ) {
-    return currentArtwork;
-  }
-
   const safeRadioArtwork = isRadioTrack(track)
     ? await resolveRadioStationArtUrl(track)
     : null;
@@ -180,20 +169,18 @@ async function getTrackArtwork(track) {
 
   if (track?.AlbumPrimaryImageTag || track?.PrimaryImageTag) {
     const imageId = track.AlbumId || track.Id;
-    const imageTag = track.AlbumPrimaryImageTag || track.PrimaryImageTag;
-    const params = new URLSearchParams({
-      fillHeight: "512",
-      fillWidth: "512",
-      quality: "90"
-    });
-    if (imageTag) params.set("tag", imageTag);
-
-    const authToken = getAuthToken();
-    if (authToken) params.set("api_key", authToken);
-
+    const token = getAuthToken();
+    const imageUrl = new URL(apiUrl(`/Items/${imageId}/Images/Primary`));
+    imageUrl.searchParams.set("quality", "90");
+    imageUrl.searchParams.set("fillWidth", "512");
+    imageUrl.searchParams.set("fillHeight", "512");
+    imageUrl.searchParams.set("tag", track.AlbumPrimaryImageTag || track.PrimaryImageTag);
+    if (token) {
+      imageUrl.searchParams.set("api_key", token);
+    }
     return [
       {
-        src: apiUrl(`/Items/${encodeURIComponent(imageId)}/Images/Primary?${params.toString()}`),
+        src: imageUrl.toString(),
         sizes: "512x512",
         type: "image/jpeg"
       }
@@ -201,11 +188,22 @@ async function getTrackArtwork(track) {
   }
   return [
     {
-      src: new URL(DEFAULT_ARTWORK_URL, window.location.href).href,
+      src: toAbsoluteArtworkUrl(DEFAULT_ARTWORK_URL),
       sizes: "512x512",
       type: "image/png"
     }
   ];
+}
+
+function toAbsoluteArtworkUrl(src) {
+  const value = String(src || "").trim();
+  if (!value) return "";
+  if (/^(https?:)/i.test(value)) return value;
+  try {
+    return new URL(value, window.location.href).toString();
+  } catch {
+    return value;
+  }
 }
 
 function updatePlaybackState() {
@@ -241,4 +239,5 @@ export function cleanupMediaSession() {
     try { navigator.mediaSession.playbackState = "none"; } catch {}
     try { navigator.mediaSession.metadata = null; } catch {}
   }
+  musicPlayerState.mediaSession = null;
 }

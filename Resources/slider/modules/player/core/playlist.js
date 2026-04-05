@@ -34,7 +34,7 @@ export async function refreshPlaylist() {
     let items = [];
 
     const headers = { "X-Emby-Token": token };
-    const baseQuery = "IncludeItemTypes=Audio&Recursive=true&SortBy=Random";
+    const baseQuery = "IncludeItemTypes=Audio&Recursive=true&SortBy=Random&Fields=RunTimeTicks,ImageTags,Album,AlbumArtist,ArtistItems,MediaStreams,MediaSources,UserData";
 
     let totalItems = 0;
     try {

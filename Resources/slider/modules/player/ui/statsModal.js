@@ -263,8 +263,10 @@ function buildStatsModal() {
   const restoreInput = document.createElement("input");
   restoreInput.type = "file";
   restoreInput.id = "restore-file-input";
+  restoreInput.name = "restore-file-input";
   restoreInput.accept = ".json";
   restoreInput.style.display = "none";
+  restoreInput.setAttribute("aria-label", config.languageLabels?.restoreDatabase || "Yedekten geri yükle");
 
   const clearDbBtn = document.createElement("button");
   clearDbBtn.id = "clear-db-btn";

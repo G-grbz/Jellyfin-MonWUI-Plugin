@@ -10,6 +10,7 @@ import {
 import { getRandomAvatarUrl } from "./avatarPicker.js";
 import { createConfiguredUserAvatar } from "./userAvatar.js";
 import { saveCredentials, saveApiKey, clearCredentials } from "/Plugins/JMSFusion/runtime/auth.js";
+import { enhanceFormAccessibility } from "./accessibility.js";
 
 const OVERLAY_ID = "jfProfileChooserOverlay";
 const HEADER_BTN_ID = "jfProfileChooserBtn";
@@ -738,6 +739,7 @@ function buildOverlayDom(L) {
       </div>
     </div>
   `;
+  enhanceFormAccessibility(overlay, { prefix: "profile-chooser" });
   return overlay;
 }
 
