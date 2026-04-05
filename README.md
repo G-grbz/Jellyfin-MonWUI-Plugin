@@ -51,7 +51,7 @@ The goal is simple: make Jellyfin feel more polished, more personal, and more pr
 | <div><img src="https://github.com/user-attachments/assets/85444c6e-7d7b-4540-a355-6ca22640e15f" width="100%"/><br/><sub><b>Normal View</b></sub></div> | <div><img src="https://github.com/user-attachments/assets/fc7e0c5c-3fb9-44af-8848-870b84c418db" width="100%"/><br/><sub><b>Pause Screen</b></sub></div> |
 | <div><img src="https://github.com/user-attachments/assets/5218f887-15f0-43ee-82c1-eceab3e7793b" width="100%"/><br/><sub><b>Notification Modal</b></sub></div> | <div><img src="https://github.com/user-attachments/assets/d6d8300b-f0f0-4c3b-a9b8-1d2b9c630e9a" width="100%"/><br/><sub><b>Age Badge</b></sub></div> |
 | <div><img src="https://github.com/user-attachments/assets/79571773-d7b6-4850-816f-822278634698" width="100%"/><br/><sub><b>HoverTrailers</b></sub></div> | <div><img src="https://github.com/user-attachments/assets/94d78061-b34b-4782-bafb-04df89647df3" width="100%"/><br/><sub><b>Popovers</b></sub></div> |
-| <div><img src="https://github.com/user-attachments/assets/4b0f0192-3ccb-4c74-bb83-1229072db4a6" width="100%"/><br/><sub><b>Choose Avatar</b></sub></div> | <div></div> |
+| <div><img src="https://github.com/user-attachments/assets/4b0f0192-3ccb-4c74-bb83-1229072db4a6" width="100%"/><br/><sub><b>Choose Avatar</b></sub></div> | <div><img src="https://github.com/user-attachments/assets/b5f6de0d-06fe-4cf9-99ee-f9415967806a" width="100%"/><br/><sub><b>Parental PIN Control</b></sub></div> |
 
 </details>
 
