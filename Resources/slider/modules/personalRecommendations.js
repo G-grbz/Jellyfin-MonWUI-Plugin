@@ -1786,11 +1786,12 @@ async function fetchLastPlayedSeedItems(userId, count = 1) {
 
   try {
     const url =
-      `/Users/${encodeURIComponent(userId)}/Items/Resume?` +
-      `Limit=${Math.max(1, count)}&Fields=${encodeURIComponent(fields)}`;
+      `/Users/${encodeURIComponent(userId)}/Items?` +
+      `Recursive=true&Filters=IsResumable&MediaTypes=Video&EnableUserData=true&` +
+      `SortBy=DatePlayed,DateCreated&SortOrder=Descending&Limit=${Math.max(1, count)}&Fields=${encodeURIComponent(fields)}`;
     const r = await makeApiRequest(url);
     const items = Array.isArray(r?.Items) ? r.Items : [];
-    return items.filter(x => x?.Id);
+    return items.filter(x => x?.Id && Number(x?.UserData?.PlaybackPositionTicks || 0) > 0);
   } catch {}
 
   return [];
