@@ -958,9 +958,17 @@ function getSlideDurationMs() {
 const config = getConfig();
 syncProfileChooserHeaderButtonVisibility(config?.enableProfileChooser !== false);
 
+function getMainConfig() {
+  try {
+    return (typeof getConfig === "function" ? getConfig() : config) || config || {};
+  } catch {
+    return config || {};
+  }
+}
+
 function isSliderEnabled() {
   try {
-    const cfg = (typeof getConfig === "function" ? getConfig() : config) || {};
+    const cfg = getMainConfig();
     return cfg.enableSlider !== false;
   } catch {
     return true;
@@ -1060,7 +1068,8 @@ function runNonCriticalUiBootOnce() {
       } catch {}
 
       try {
-        if (config && config.enableNotifications) {
+        const liveCfg = getMainConfig();
+        if (liveCfg.enableNotifications !== false) {
           if (!window.__jmsNotificationsBooted) {
             window.__jmsNotificationsBooted = true;
             initNotifications();
@@ -1091,7 +1100,7 @@ window.cleanupSubtitleCustomizer = cleanupSubtitleCustomizer;
 const cleanupOsdHeaderRatings = initOsdHeaderRatings();
 window.cleanupOsdHeaderRatings = cleanupOsdHeaderRatings;
 
-const NOTIF_ENABLED = !!(config && config.enableNotifications);
+const NOTIF_ENABLED = getMainConfig().enableNotifications !== false;
 forcejfNotifBtnPointerEvents();
 try {
   if (!window.cleanupProfileChooser) {
@@ -1787,6 +1796,7 @@ export async function slidesInit() {
 
     let userId = null, accessToken = null;
     let fetchItemDetailsCached = window.__jmsFetchItemDetailsCached || null;
+    const config = getMainConfig();
 
     function isQuotaErr(e){ return e && (e.name === 'QuotaExceededError' || e.code === 22); }
 
@@ -1984,13 +1994,14 @@ export async function slidesInit() {
           try {
             const data = await cachedFetchJson({
             keyParts: ["resume", userId, playingLimit * 2],
-            url: `/Users/${userId}/Items/Resume?Limit=${playingLimit * 2}`,
+            url: `/Users/${userId}/Items?Filters=IsResumable&MediaTypes=Video&Recursive=true&EnableUserData=true&Fields=${encodeURIComponent("Type,UserData,ImageTags,BackdropImageTags,PrimaryImageAspectRatio,Series,SeriesId,CollectionIds,MediaStreams")}&SortBy=DatePlayed,DateCreated&SortOrder=Descending&Limit=${Math.max(10, playingLimit * 3)}`,
             opts: { headers: authHeaders },
             fetchJson: fetchJsonViaSafeFetch,
             ttlMs: Number(config?.resumeCacheTtlMs) || 30_000,
             allowStaleOnError: true,
           });
-            let fetchedItems = data.Items || [];
+            let fetchedItems = Array.isArray(data?.Items) ? data.Items : [];
+            fetchedItems = fetchedItems.filter((item) => Number(item?.UserData?.PlaybackPositionTicks || 0) > 0);
 
             if (config.excludeEpisodesFromPlaying) {
               playingItems = fetchedItems.filter((item) => item.Type !== "Episode").slice(0, playingLimit);
@@ -2188,8 +2199,39 @@ export async function slidesInit() {
           savedLimit
         );
 
+        const selectedById = new Map(
+          selectedItems
+            .filter((it) => it?.Id)
+            .map((it) => [it.Id, it])
+        );
         const detailed = await fetchItemDetailsCached.many(selectedItems.map(i => i.Id));
-        items = detailed.filter((x) => x);
+        items = detailed
+          .map((detail, idx) => {
+            const base = selectedById.get(detail?.Id || selectedItems[idx]?.Id) || selectedItems[idx] || null;
+            if (!detail) return base;
+            if (!base) return detail;
+
+            const baseTicks = Number(base?.UserData?.PlaybackPositionTicks || 0);
+            const detailTicks = Number(detail?.UserData?.PlaybackPositionTicks || 0);
+            const mergedUserData =
+              (baseTicks > detailTicks)
+                ? { ...(detail?.UserData || {}), ...(base?.UserData || {}) }
+                : { ...(base?.UserData || {}), ...(detail?.UserData || {}) };
+
+            return {
+              ...base,
+              ...detail,
+              UserData: mergedUserData,
+              RunTimeTicks: detail?.RunTimeTicks || base?.RunTimeTicks || 0,
+              MediaStreams: Array.isArray(detail?.MediaStreams) && detail.MediaStreams.length
+                ? detail.MediaStreams
+                : (base?.MediaStreams || []),
+              RemoteTrailers: Array.isArray(detail?.RemoteTrailers) && detail.RemoteTrailers.length
+                ? detail.RemoteTrailers
+                : (base?.RemoteTrailers || []),
+            };
+          })
+          .filter((x) => x);
       }
     } catch (err) {
       console.error("Slide verisi hazırlanırken hata:", err);
@@ -2502,7 +2544,7 @@ function setupNavigationObserver() {
       if (isOnHomePage) {
         window.__initOnHomeOnce = false;
         fullSliderReset();
-        if (!(config && config.enableNotifications)) {
+        if (getMainConfig().enableNotifications === false) {
           document.getElementById('jfNotifBtn')?.remove();
           document.querySelector('.jf-notif-panel')?.remove();
         }
