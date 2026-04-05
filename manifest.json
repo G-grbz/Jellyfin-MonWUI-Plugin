@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/G-grbz/Jellyfin-MonWUI-Plugin/main/img/icon.png",
     "versions": [
       {
+        "version": "2.4.0.0",
+        "changelog": "Improve parental PIN & UI; optimize GMMP",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v2.4.0/JMSFusion-2.4.0.0-server.zip",
+        "checksum": "fcedfa8ff2dcfb1ed0b5d6e50d9f90bc",
+        "timestamp": "2026-04-05T11:15:10.7156385Z"
+      },
+      {
         "version": "2.3.0.0",
         "changelog": "Enhance modals, UI cards & media session",
         "targetAbi": "10.10.0.0",
