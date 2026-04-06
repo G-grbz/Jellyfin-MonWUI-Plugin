@@ -49,6 +49,7 @@ let savePromise = null;
 let suspendSync = false;
 let bootstrappedLocal = false;
 let snapshotLoaded = false;
+let lastLifecycleFlushAt = 0;
 
 const storage = window.localStorage;
 const originalGetItem = storage.getItem.bind(storage);
@@ -149,12 +150,13 @@ function buildSnapshotFromStorage() {
   return out;
 }
 
-async function persistSnapshot(snapshot) {
+async function persistSnapshot(snapshot, options = {}) {
   const payload = normalizeSnapshot(snapshot);
   state = payload;
   serverSnapshotEmpty = Object.keys(payload).length === 0;
 
-  savePromise = fetch(`${SAVE_URL}?profile=${encodeURIComponent(profile)}&ts=${Date.now()}`, {
+  const requestInit = {
+    keepalive: options?.keepalive === true,
     method: "POST",
     cache: "no-store",
     headers: {
@@ -165,7 +167,9 @@ async function persistSnapshot(snapshot) {
       global: payload,
       profile
     })
-  }).then(async response => {
+  };
+
+  savePromise = fetch(`${SAVE_URL}?profile=${encodeURIComponent(profile)}&ts=${Date.now()}`, requestInit).then(async response => {
     if (!response.ok) {
       const raw = await response.text().catch(() => "");
       throw new Error(raw || `UserSettings publish HTTP ${response.status}`);
@@ -191,6 +195,22 @@ function schedulePersist() {
     saveTimer = null;
     void persistSnapshot(buildSnapshotFromStorage());
   }, SAVE_DEBOUNCE_MS);
+}
+
+function flushPendingSnapshotOnPageLifecycle() {
+  if (!snapshotLoaded) return;
+  if (saveTimer == null && !savePromise) return;
+
+  const now = Date.now();
+  if ((now - lastLifecycleFlushAt) < 1000) return;
+  lastLifecycleFlushAt = now;
+
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+
+  void persistSnapshot(buildSnapshotFromStorage(), { keepalive: true });
 }
 
 function patchLocalStorage() {
@@ -293,4 +313,11 @@ const bridge = {
 
 window.__JMS_MANAGED_STORAGE__ = bridge;
 patchLocalStorage();
+window.addEventListener("pagehide", flushPendingSnapshotOnPageLifecycle, { capture: true });
+window.addEventListener("beforeunload", flushPendingSnapshotOnPageLifecycle, { capture: true });
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    flushPendingSnapshotOnPageLifecycle();
+  }
+});
 await loadServerSnapshot();
