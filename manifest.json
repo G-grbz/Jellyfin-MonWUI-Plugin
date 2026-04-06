@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/G-grbz/Jellyfin-MonWUI-Plugin/main/img/icon.png",
     "versions": [
       {
+        "version": "2.4.2.0",
+        "changelog": "Improve the save functionality and fix the CSS issues in the settings module",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v2.4.0/JMSFusion-2.4.2.0-server.zip",
+        "checksum": "bd995a02922e57502053c06299501c85",
+        "timestamp": "2026-04-06T19:14:56.4441959Z"
+      },
+      {
         "version": "2.4.1.0",
         "changelog": "Fix: resolved display issue with `Continue Watching` items",
         "targetAbi": "10.11.0.0",
