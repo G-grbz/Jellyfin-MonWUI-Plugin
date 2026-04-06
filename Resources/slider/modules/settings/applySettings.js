@@ -25,6 +25,12 @@ const _MAX_MIN = 1000;
 
 let __isAdminCached_apply = null;
 
+async function flushManagedStorageSnapshot() {
+  const bridge = window.__JMS_MANAGED_STORAGE__;
+  if (!bridge || typeof bridge.flush !== "function") return;
+  await bridge.flush();
+}
+
 function getJfRootFromLocation_apply() {
   const path = window.location.pathname || "/";
   const split = path.split("/web/");
@@ -706,7 +712,18 @@ const USER_ONLY_KEYS = [
         const hasTmdbApiKeyField = formData.has('TmdbApiKey');
         const tmdbApiKey = String(formData.get('TmdbApiKey') || '').trim();
 
+        const rawInput = formData.get('sortingKeywords')?.trim();
         updateConfig(toSave);
+        localStorage.removeItem('gradientOverlayImageType');
+
+        if (!rawInput) {
+          localStorage.removeItem('sortingKeywords');
+        } else {
+          localStorage.setItem('sortingKeywords', JSON.stringify(updatedConfig.sortingKeywords));
+        }
+
+        await flushManagedStorageSnapshot();
+
         if (isAdmin && hasTmdbApiKeyField) {
           await updateJmsPluginConfig({ TmdbApiKey: tmdbApiKey });
         }
@@ -716,7 +733,6 @@ const USER_ONLY_KEYS = [
         } catch {}
         try { window.__jmsOsdHeaderRatings?.destroy?.(); } catch {}
         try { initOsdHeaderRatings(); } catch {}
-        localStorage.removeItem('gradientOverlayImageType');
 
         const forcedAdminPublish = !!(cfgGuard?.forceGlobalUserSettings && isAdmin);
         let publishResult = { attempted: false, forced: false, ok: true };
@@ -725,13 +741,6 @@ const USER_ONLY_KEYS = [
         }
         updateSlidePosition();
         updateHeaderUserAvatar();
-
-        const rawInput = formData.get('sortingKeywords')?.trim();
-        if (!rawInput) {
-          localStorage.removeItem('sortingKeywords');
-        } else {
-          localStorage.setItem('sortingKeywords', JSON.stringify(updatedConfig.sortingKeywords));
-        }
         if (oldTheme !== updatedConfig.playerTheme || oldPlayerStyle !== updatedConfig.playerStyle) {
         loadCSS();
     }
