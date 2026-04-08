@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/G-grbz/Jellyfin-MonWUI-Plugin/main/img/icon.png",
     "versions": [
       {
+        "version": "2.5.0.0",
+        "changelog": "Improve settings modal and add sync",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v2.5.0/JMSFusion-2.5.0.0-server.zip",
+        "checksum": "58c525685e96f92d7d1811336e48b417",
+        "timestamp": "2026-04-08T12:46:51.8610909Z"
+      },
+      {
         "version": "2.4.2.0",
         "changelog": "Improve the save functionality and fix the CSS issues in the settings module",
         "targetAbi": "10.11.0.0",
