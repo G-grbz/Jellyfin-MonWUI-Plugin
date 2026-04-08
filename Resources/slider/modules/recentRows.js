@@ -1,5 +1,5 @@
 import { getSessionInfo, makeApiRequest, playNow, waitForAuthReadyStrict } from "/Plugins/JMSFusion/runtime/api.js";
-import { getConfig } from "./config.js";
+import { getConfig, getHomeSectionsRuntimeConfig } from "./config.js";
 import { getLanguageLabels } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";
 import { REOPEN_COOLDOWN_MS, OPEN_HOVER_DELAY_MS } from "./hoverTrailerModal.js";
@@ -91,7 +91,8 @@ function getEffectiveRowCount(value) {
 
 function getRecentRowsRuntimeConfig(source = getLiveConfig()) {
   const cfg = source || {};
-  const enableRecentMaster = cfg.enableRecentRows !== false;
+  const homeSectionsConfig = getHomeSectionsRuntimeConfig(cfg);
+  const enableRecentMaster = homeSectionsConfig.enableRecentRows;
 
   return {
     showHeroCards: cfg.showRecentRowsHeroCards !== false,
@@ -100,9 +101,9 @@ function getRecentRowsRuntimeConfig(source = getLiveConfig()) {
     enableRecentEpisodes: enableRecentMaster && (cfg.enableRecentEpisodesRow !== false),
     enableRecentMusic: enableRecentMaster && (cfg.enableRecentMusicRow !== false),
     enableRecentTracks: enableRecentMaster && (cfg.enableRecentMusicTracksRow !== false),
-    enableContinueMovies: cfg.enableContinueMovies !== false,
-    enableContinueSeries: cfg.enableContinueSeries !== false,
-    enableOtherLibRows: !!cfg.enableOtherLibRows,
+    enableContinueMovies: homeSectionsConfig.enableContinueMovies,
+    enableContinueSeries: homeSectionsConfig.enableContinueSeries,
+    enableOtherLibRows: homeSectionsConfig.enableOtherLibRows,
     effectiveRecentMoviesCount: getEffectiveRowCount(clampPositiveCount(cfg.recentMoviesCardCount, DEFAULT_RECENT_ROWS_COUNT)),
     effectiveRecentSeriesCount: getEffectiveRowCount(clampPositiveCount(cfg.recentSeriesCardCount, DEFAULT_RECENT_ROWS_COUNT)),
     effectiveRecentEpisodesCount: getEffectiveRowCount(clampPositiveCount(cfg.recentEpisodesCardCount, 10)),
@@ -2495,8 +2496,9 @@ function pickRecentRowsParentAndAnchor() {
   const hsc = findRealHomeSectionsContainer();
   if (hsc) return { parent: hsc, anchor: null };
 
+  const homeSectionsConfig = getHomeSectionsRuntimeConfig(getLiveConfig());
   const pr = document.getElementById("personal-recommendations");
-  if (config.enablePersonalRecommendations && pr) {
+  if (homeSectionsConfig.enablePersonalRecommendations && pr) {
     const titleEl =
       pr.querySelector("h2.sectionTitle.sectionTitle-cards.prc-title") ||
       pr.querySelector(".sectionTitleContainer.sectionTitleContainer-cards") ||
@@ -2564,9 +2566,13 @@ export function mountRecentRowsLazy() {
   const anyEnabled =
     anyRecent ||
     runtimeCfg.enableContinueMovies ||
-    runtimeCfg.enableContinueSeries;
+    runtimeCfg.enableContinueSeries ||
+    runtimeCfg.enableOtherLibRows;
 
-  if (!anyEnabled) return;
+  if (!anyEnabled) {
+    cleanupRecentRows();
+    return;
+  }
 
   let wrap = document.getElementById("recent-rows");
   if (!wrap) {

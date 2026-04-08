@@ -1,5 +1,5 @@
 import { getSessionInfo, fetchItemDetails, makeApiRequest, isAuthReadyStrict } from "/Plugins/JMSFusion/runtime/api.js";
-import { getConfig } from "./config.js";
+import { getConfig, getPauseFeaturesRuntimeConfig } from "./config.js";
 import { getLanguageLabels, getDefaultLanguage } from "../language/index.js";
 import { withServer } from "./jfUrl.js";
 import { GENERATED_BUCKET_APPENDS, GENERATED_NEW_BUCKETS } from "./generatedTagBuckets.js";
@@ -1682,6 +1682,20 @@ function deriveKeywordDescriptors(item = {}) {
 }
 
 export function setupPauseScreen() {
+  const pauseRuntime = getPauseFeaturesRuntimeConfig();
+  if (!pauseRuntime.enablePauseOverlay && !pauseRuntime.enableSmartAutoPause) {
+    try {
+      window.__jmsPauseOverlay?.destroy?.();
+    } catch {}
+    try {
+      if (window.__jmsPauseOverlay) {
+        window.__jmsPauseOverlay.active = false;
+        window.__jmsPauseOverlay.destroy = null;
+      }
+    } catch {}
+    return () => {};
+  }
+
   console.log("[PO] setupPauseScreen called", { active: window.__jmsPauseOverlay?.active });
   let _badgeCtx = "first";
 

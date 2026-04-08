@@ -326,6 +326,7 @@ export function getConfig() {
     watchlistTabsSliderEnabled: localStorage.getItem('watchlistTabsSliderEnabled') !== 'false',
     watchlistAutoRemovePlayed: localStorage.getItem('watchlistAutoRemovePlayed') === 'true',
     watchlistAutoRemovePlayedFromFavorites: localStorage.getItem('watchlistAutoRemovePlayedFromFavorites') === 'true',
+    watchlistImportFavoritesOnStartup: localStorage.getItem('watchlistImportFavoritesOnStartup') === 'true',
     showPlayedButton: localStorage.getItem('showPlayedButton') !== 'false',
     showCast: localStorage.getItem('showCast') !== 'false',
     detailUrl: localStorage.getItem('detailUrl') !== 'false',
@@ -344,7 +345,7 @@ export function getConfig() {
     useRandomContent: localStorage.getItem('useRandomContent') !== 'false',
     fullscreenMode: localStorage.getItem('fullscreenMode') === 'true' ? true : false,
     listLimit: 20,
-    version: "v2.4.0",
+    version: "v2.5.0",
     historySize: 20,
     updateInterval: 300000,
     nextTracksSource: localStorage.getItem('nextTracksSource') || 'playlist',
@@ -429,6 +430,11 @@ export function getConfig() {
     enableRenderResume: localStorage.getItem('enableRenderResume') !== 'false',
     toastGroupThreshold: parseInt(localStorage.getItem("toastGroupThreshold"), 10) || 5,
     enableCounterSystem: localStorage.getItem('enableCounterSystem') !== 'false',
+
+    enableHomeSectionsMaster: (localStorage.getItem('enableHomeSectionsMaster') || 'true') !== 'false',
+    enablePauseFeaturesMaster: (localStorage.getItem('enablePauseFeaturesMaster') || 'true') !== 'false',
+    enableSubtitleCustomizerModule: (localStorage.getItem('enableSubtitleCustomizerModule') || 'true') !== 'false',
+    enableParentalPinModule: (localStorage.getItem('enableParentalPinModule') || 'true') !== 'false',
 
     enableDirectorRows: localStorage.getItem('enableDirectorRows') !== 'false',
     showDirectorRowsHeroCards: localStorage.getItem('showDirectorRowsHeroCards') !== 'false',
@@ -826,6 +832,59 @@ export function getConfig() {
   ]);
 
   return resolvedConfig;
+}
+
+export function isHomeSectionsMasterEnabled(source = null) {
+  const cfg = source || getConfig();
+  return cfg?.enableHomeSectionsMaster !== false;
+}
+
+export function getHomeSectionsRuntimeConfig(source = null) {
+  const cfg = source || getConfig() || {};
+  const masterEnabled = isHomeSectionsMasterEnabled(cfg);
+
+  return {
+    masterEnabled,
+    enableStudioHubs: masterEnabled && cfg.enableStudioHubs !== false,
+    enablePersonalRecommendations: masterEnabled && cfg.enablePersonalRecommendations !== false,
+    enableBecauseYouWatched: masterEnabled && cfg.enableBecauseYouWatched !== false,
+    enableGenreHubs: masterEnabled && cfg.enableGenreHubs !== false,
+    enableDirectorRows: masterEnabled && cfg.enableDirectorRows !== false,
+    enableRecentRows: masterEnabled && cfg.enableRecentRows !== false,
+    enableContinueMovies: masterEnabled && cfg.enableContinueMovies !== false,
+    enableContinueSeries: masterEnabled && cfg.enableContinueSeries !== false,
+    enableOtherLibRows: masterEnabled && !!cfg.enableOtherLibRows
+  };
+}
+
+export function isPauseFeaturesMasterEnabled(source = null) {
+  const cfg = source || getConfig();
+  return cfg?.enablePauseFeaturesMaster !== false;
+}
+
+export function getPauseFeaturesRuntimeConfig(source = null) {
+  const cfg = source || getConfig() || {};
+  const masterEnabled = isPauseFeaturesMasterEnabled(cfg);
+  const pauseOverlayCfg = cfg?.pauseOverlay || {};
+  const smartAutoPauseCfg = cfg?.smartAutoPause || {};
+
+  return {
+    masterEnabled,
+    enablePauseOverlay: masterEnabled && pauseOverlayCfg.enabled !== false,
+    enableSmartAutoPause: masterEnabled && smartAutoPauseCfg.enabled !== false,
+    enablePauseAgeBadge: masterEnabled && pauseOverlayCfg.showAgeBadge !== false,
+    enablePauseOsdHeaderRatings: masterEnabled && pauseOverlayCfg.showOsdHeaderRatings !== false
+  };
+}
+
+export function isSubtitleCustomizerModuleEnabled(source = null) {
+  const cfg = source || getConfig();
+  return cfg?.enableSubtitleCustomizerModule !== false;
+}
+
+export function isParentalPinModuleEnabled(source = null) {
+  const cfg = source || getConfig();
+  return cfg?.enableParentalPinModule !== false;
 }
 
 function pruneGlobalConfig(cfg) {

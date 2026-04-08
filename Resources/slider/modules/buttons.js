@@ -489,7 +489,7 @@ export function createProviderContainer({ config, ProviderIds, RemoteTrailers, i
     settingsLink.addEventListener("click", (e) => {
       e.preventDefault();
       const settings = initSettings();
-      settings.open('slider');
+      settings.open('monwui');
     });
     providerDiv.appendChild(settingsLink);
     ensureProviderDivMounted();

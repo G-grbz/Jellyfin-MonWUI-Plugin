@@ -39,6 +39,8 @@ export function createSettingsModal() {
     const config = getConfig();
     const currentLang = config.defaultLanguage || getDefaultLanguage();
     const labels = getLanguageLabels(currentLang) || {};
+    const monwuiTabLabel = labels.sliderSettings || 'MonWUI Ayarları';
+    const sliderTabLabel = labels.sliderPageLabel || 'Slider Ayarları';
 
     const modal = document.createElement('div');
     modal.id = 'settings-modal';
@@ -63,7 +65,7 @@ export function createSettingsModal() {
     closeBtn.onclick = () => modal.style.display = 'none';
 
     const title = document.createElement('h2');
-    title.textContent = labels.sliderSettings || 'Slider Ayarları';
+    title.textContent = monwuiTabLabel;
 
     function createProfileSelector(labels) {
       const wrap = document.createElement("div");
@@ -144,39 +146,29 @@ export function createSettingsModal() {
     const tabContent = document.createElement('div');
     tabContent.className = 'settings-tab-content';
 
-    const sliderTab = createTab('slider', 'fa-gear', labels.sliderSettings || 'Slider Ayarları', true);
-    const animationTab = createTab('animation', 'fa-film', labels.animationSettings || 'Animasyon Ayarları', true);
-    const profileChooserTab = createTab( 'profile-chooser', 'fa-user-group', labels.profileChooserHeader || 'Kim izliyor?', true);
-    const musicTab = createTab('music', 'fa-music', labels.gmmpSettings || 'GMMP Ayarları', true);
-    const pauseTab = createTab('pause', 'fa-pause', labels.pauseSettings || 'Durdurma Ekranı', true);
-    const positionTab = createTab('position', 'fa-arrows-up-down-left-right', labels.positionSettings || 'Konumlandırma Ayarları', true);
-    const queryTab = createTab('query', 'fa-code', labels.queryStringInput || 'API Sorgu Parametresi', true);
-    const hoverTab = createTab('hover', 'fa-play-circle', labels.hoverTrailer || 'HoverTrailer Ayarları', true);
-    const trailersTab = createTab('trailers', 'fa-video', labels.trailersHeader || 'Fragmanlar', true);
-    const studioTab = createTab('studio', 'fa-building', labels.studioHubs || 'Stüdyo Koleksiyonları Ayarı', true);
-    const avatarTab = createTab('avatar', 'fa-user', labels.avatarCreateInput || 'Avatar Ayarları', true);
-    const notificationsTab = createTab('notifications', 'fa-bell', labels.notificationsSettings || 'Bildirim Ayarları', true);
-    const watchlistSettingsTab = createTab('watchlist-settings', 'fa-bookmark', labels.watchlistSettingsTab || 'İzleme Listesi Ayarları', true);
+    const mainTab = createTab('monwui', 'fa-sliders', monwuiTabLabel, true);
+    const sliderTab = createTab('slider', 'fa-gear', sliderTabLabel, false);
+    const profileChooserTab = createTab( 'profile-chooser', 'fa-user-group', labels.profileChooserHeader || 'Kim izliyor?');
+    const musicTab = createTab('music', 'fa-music', labels.gmmpSettings || 'GMMP Ayarları');
+    const pauseTab = createTab('pause', 'fa-pause', labels.pauseSettings || 'Durdurma Ekranı');
+    const positionTab = createTab('position', 'fa-arrows-up-down-left-right', labels.positionSettings || 'Konumlandırma Ayarları');
+    const queryTab = createTab('query', 'fa-code', labels.queryStringInput || 'API Sorgu Parametresi');
+    const hoverTab = createTab('hover', 'fa-play-circle', labels.hoverTrailer || 'HoverTrailer Ayarları');
+    const trailersTab = createTab('trailers', 'fa-video', labels.trailersHeader || 'Fragmanlar');
+    const studioTab = createTab('studio', 'fa-building', labels.studioHubs || 'Stüdyo Koleksiyonları Ayarı');
+    const avatarTab = createTab('avatar', 'fa-user', labels.avatarCreateInput || 'Avatar Ayarları');
+    const notificationsTab = createTab('notifications', 'fa-bell', labels.notificationsSettings || 'Bildirim Ayarları');
+    const watchlistSettingsTab = createTab('watchlist-settings', 'fa-bookmark', labels.watchlistSettingsTab || 'İzleme Listesi Ayarları');
     const parentalPinTab = config?.currentUserIsAdmin
-      ? createTab('parental-pin', 'fa-key', labels.parentalPinTab || 'PIN Kontrolü', true)
+      ? createTab('parental-pin', 'fa-key', labels.parentalPinTab || 'PIN Kontrolü')
       : null;
-    const logoTitleTab = createTab('logo-title', 'fa-image', labels.logoOrTitleHeader || 'Logo/Başlık', true);
-    const statusRatingTab = createTab('status-rating', 'fa-star', labels.statusRatingInfo || 'Durum ve Puan Bilgileri', true);
-    const actorTab = createTab('actor', 'fa-users', labels.actorInfo || 'Artist Bilgileri', true);
-    const directorTab = createTab('director', 'fa-user-tie', labels.directorWriter || 'Yönetmen ve Yazar', true);
-    const languageTab = createTab('language', 'fa-closed-captioning', labels.languageInfoHeader || 'Ses ve Altyazı', true);
-    const descriptionTab = createTab('description', 'fa-file-text', labels.descriptionsHeader || 'Açıklamalar', true);
-    const providerTab = createTab('provider', 'fa-external-link', labels.providerHeader || 'Dış Bağlantılar', true);
-    const buttonsTab = createTab('buttons', 'fa-toggle-on', labels.buttons || 'Butonlar', true);
-    const infoTab = createTab('info', 'fa-info-circle', labels.infoHeader || 'Tür, Yıl ve Ülke', true);
-    const exporterTab = createTab('exporter', 'fa-download', labels.backupRestore || 'Yedekle - Geri Yükle', true);
-    const aboutTab = createTab('about', 'fa-circle-info', labels.aboutHeader || 'Hakkında', true);
+    const exporterTab = createTab('exporter', 'fa-download', labels.backupRestore || 'Yedekle - Geri Yükle');
+    const aboutTab = createTab('about', 'fa-circle-info', labels.aboutHeader || 'Hakkında');
 
     const tabs = [
-        sliderTab, animationTab, profileChooserTab, musicTab, pauseTab, positionTab,
-        queryTab, studioTab, hoverTab, trailersTab, avatarTab, notificationsTab, statusRatingTab, actorTab, directorTab,
-        languageTab, watchlistSettingsTab, parentalPinTab, logoTitleTab, descriptionTab, providerTab,
-        buttonsTab, infoTab, exporterTab, aboutTab
+        mainTab, sliderTab, profileChooserTab, musicTab, pauseTab, positionTab,
+        queryTab, studioTab, hoverTab, trailersTab, avatarTab, notificationsTab,
+        watchlistSettingsTab, parentalPinTab, exporterTab, aboutTab
     ].filter(Boolean);
     tabContainer.append(...tabs);
 
@@ -207,30 +199,52 @@ export function createSettingsModal() {
     const parentalPinPanel = config?.currentUserIsAdmin
       ? createParentalPinPanel(config, labels)
       : null;
+    const mainPanel = createMainSettingsPanel(labels, {
+        sliderPanel,
+        profileChooserPanel,
+        musicPanel,
+        pausePanel,
+        studioPanel,
+        hoverPanel,
+        avatarPanel,
+        notificationsPanel
+    });
+
     [
-        sliderPanel, animationPanel, musicPanel, positionPanel, queryPanel,
-         hoverPanel, trailersPanel, studioPanel, avatarPanel, notificationsPanel, statusRatingPanel,
-        actorPanel, directorPanel, languagePanel, watchlistSettingsPanel, parentalPinPanel, logoTitlePanel,
-        descriptionPanel, providerPanel, buttonsPanel, infoPanel,
+        { panel: infoPanel, title: labels.infoHeader || 'Tür, Yıl ve Ülke Bilgileri' },
+        { panel: buttonsPanel, title: labels.buttons || 'Buton Ayarları' },
+        { panel: logoTitlePanel, title: labels.logoOrTitleHeader || 'Logo / Başlık Ayarları' },
+        { panel: descriptionPanel, title: labels.descriptionsHeader || 'Açıklama Ayarları' },
+        { panel: providerPanel, title: labels.providerHeader || 'Dış Bağlantılar / Sağlayıcı Ayarları' },
+        { panel: languagePanel, title: labels.languageInfoHeader || 'Ses ve Altyazı Bilgileri' },
+        { panel: statusRatingPanel, title: labels.statusRatingInfo || 'Durum, Puanlama ve Kalite Rozeti Ayarları' },
+        { panel: actorPanel, title: labels.actorInfo || 'Aktör Gösterim Ayarları' },
+        { panel: directorPanel, title: labels.directorWriter || 'Yönetmen ve Yazar Ayarları' },
+        { panel: animationPanel, title: labels.animationSettings || 'Animasyon Ayarları' }
+    ].forEach(({ panel, title }) => {
+        appendMergedPanelToSlider(sliderPanel, panel, title);
+    });
+
+    [
+        mainPanel, sliderPanel, musicPanel, positionPanel, queryPanel,
+         hoverPanel, trailersPanel, studioPanel, avatarPanel, notificationsPanel,
+        watchlistSettingsPanel, parentalPinPanel,
         pausePanel, exporterPanel, aboutPanel, profileChooserPanel
     ].filter(Boolean).forEach(panel => {
         panel.style.display = 'none';
     });
-    sliderPanel.style.display = 'block';
+    mainPanel.style.display = 'block';
 
     const panels = [
-        sliderPanel, animationPanel, profileChooserPanel, musicPanel, statusRatingPanel, actorPanel,
-        directorPanel, queryPanel, hoverPanel, trailersPanel, studioPanel, avatarPanel, languagePanel, watchlistSettingsPanel, parentalPinPanel, logoTitlePanel,
-        descriptionPanel, providerPanel, buttonsPanel, infoPanel,
+        mainPanel, sliderPanel, profileChooserPanel, musicPanel,
+        queryPanel, hoverPanel, trailersPanel, studioPanel, avatarPanel, watchlistSettingsPanel, parentalPinPanel,
         pausePanel, positionPanel, aboutPanel, exporterPanel, notificationsPanel
     ].filter(Boolean);
     tabContent.append(...panels);
 
     const interactiveTabs = [
-        sliderTab, animationTab, profileChooserTab, musicTab, queryTab, hoverTab,
-        trailersTab, studioTab, avatarTab, notificationsTab, statusRatingTab,
-        actorTab, directorTab, languageTab, watchlistSettingsTab, parentalPinTab, logoTitleTab,
-        descriptionTab, providerTab, buttonsTab, infoTab,
+        mainTab, sliderTab, profileChooserTab, musicTab, queryTab, hoverTab,
+        trailersTab, studioTab, avatarTab, notificationsTab, watchlistSettingsTab, parentalPinTab,
         positionTab, pauseTab, aboutTab, exporterTab
     ].filter(Boolean);
     interactiveTabs.forEach(tab => {
@@ -239,9 +253,8 @@ export function createSettingsModal() {
                 t.classList.remove('active');
             });
             [
-                sliderPanel, animationPanel, profileChooserPanel, statusRatingPanel, actorPanel, directorPanel,
-                musicPanel, queryPanel, hoverPanel, trailersPanel, studioPanel, avatarPanel, languagePanel, watchlistSettingsPanel, parentalPinPanel, logoTitlePanel,
-                descriptionPanel, providerPanel, buttonsPanel, infoPanel,
+                mainPanel, sliderPanel, profileChooserPanel,
+                musicPanel, queryPanel, hoverPanel, trailersPanel, studioPanel, avatarPanel, watchlistSettingsPanel, parentalPinPanel,
                 positionPanel, aboutPanel, exporterPanel, pausePanel, notificationsPanel
             ].filter(Boolean).forEach(panel => {
                 panel.style.display = 'none';
@@ -826,6 +839,122 @@ function createTab(id, icon, label, isActive = false, isDisabled = false) {
     return tab;
 }
 
+function extractContainerByInput(root, inputName, closestSelector = '.setting-item') {
+    const input = root?.querySelector(`input[name="${inputName}"]`);
+    return input?.closest(closestSelector) || null;
+}
+
+function extractContainerBySelect(root, selectName, closestSelector = '.setting-item') {
+    const select = root?.querySelector(`select[name="${selectName}"]`);
+    return select?.closest(closestSelector) || null;
+}
+
+function extractTmdbGroup(root) {
+    const keyInput = root?.querySelector('#tmdbKeyForReviews');
+    return keyInput?.closest('.fsetting-item')?.parentElement || null;
+}
+
+function extractCheckboxPair(root, inputName) {
+    const input = root?.querySelector(`input[name="${inputName}"]`);
+    if (!input) return null;
+
+    const label = root.querySelector(`label[for="${input.id}"]`);
+    const wrap = document.createElement('div');
+    wrap.className = 'setting-item';
+    wrap.appendChild(input);
+    if (label) {
+        wrap.appendChild(label);
+    }
+    return wrap;
+}
+
+function createMainSettingsPanel(labels, panels) {
+    const panel = document.createElement('div');
+    panel.id = 'monwui-panel';
+    panel.className = 'settings-panel';
+
+    const config = getConfig();
+    const basicsSection = createSection(labels.mainCoreSettings || 'Temel Ayarlar');
+    const enablesSection = createSection(labels.mainEnableSettings || 'Ana Etkinleştirmeler');
+
+    [
+        extractContainerBySelect(panels.sliderPanel, 'defaultLanguage', '.setting-item'),
+        extractTmdbGroup(panels.sliderPanel),
+        extractContainerByInput(panels.sliderPanel, 'enableSlider', '.setting-item'),
+        extractContainerByInput(panels.sliderPanel, 'onlyShowSliderOnHomeTab', '.setting-item')
+    ].filter(Boolean).forEach((node) => {
+        basicsSection.appendChild(node);
+    });
+
+    const homeSectionsMaster = createCheckbox(
+        'enableHomeSectionsMaster',
+        labels.enableHomeSectionsMaster || 'MonWui ui kartlarını etkinleştir',
+        config.enableHomeSectionsMaster !== false
+    );
+    enablesSection.appendChild(homeSectionsMaster);
+
+    const pauseFeaturesMaster = createCheckbox(
+        'enablePauseFeaturesMaster',
+        labels.enablePauseFeaturesMaster || 'Duraklatma ekranı özelliklerini etkinleştir',
+        config.enablePauseFeaturesMaster !== false
+    );
+    enablesSection.appendChild(pauseFeaturesMaster);
+
+    enablesSection.appendChild(createCheckbox(
+        'enableSubtitleCustomizerModule',
+        labels.enableSubtitleCustomizerModule || 'Altyazı Özelleştiriciyi etkinleştir',
+        config.enableSubtitleCustomizerModule !== false
+    ));
+
+    enablesSection.appendChild(createCheckbox(
+        'enableParentalPinModule',
+        labels.enableParentalPinModule || 'Parental PIN modülünü etkinleştir',
+        config.enableParentalPinModule !== false
+    ));
+
+    [
+        extractContainerByInput(panels.profileChooserPanel, 'enableProfileChooser', '.fsetting-item'),
+        extractCheckboxPair(panels.musicPanel, 'enabledGmmp'),
+        extractContainerByInput(panels.hoverPanel, 'allPreviewModal', '.setting-item'),
+        extractContainerByInput(panels.avatarPanel, 'createAvatar', '.setting-item'),
+        extractContainerByInput(panels.notificationsPanel, 'enableNotifications', '.setting-item')
+    ].filter(Boolean).forEach((node) => {
+        enablesSection.appendChild(node);
+    });
+
+    panel.append(basicsSection, enablesSection);
+    return panel;
+}
+
+function normalizeSectionTitle(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function appendMergedPanelToSlider(targetPanel, sourcePanel, title) {
+    if (!targetPanel || !sourcePanel) return;
+
+    sourcePanel.classList.remove('settings-panel');
+    sourcePanel.classList.add('merged-settings-panel');
+    sourcePanel.style.display = '';
+
+    const hasSingleSection =
+        sourcePanel.childElementCount === 1 &&
+        sourcePanel.firstElementChild?.classList?.contains('settings-section');
+
+    const existingTitle = hasSingleSection && sourcePanel.firstElementChild?.firstElementChild?.tagName === 'H3'
+        ? normalizeSectionTitle(sourcePanel.firstElementChild.firstElementChild.textContent)
+        : '';
+
+    if (hasSingleSection && existingTitle === normalizeSectionTitle(title)) {
+        targetPanel.appendChild(sourcePanel);
+        return;
+    }
+
+    const wrapperSection = createSection(title);
+    wrapperSection.appendChild(sourcePanel);
+    targetPanel.appendChild(wrapperSection);
+}
+
 export function createSection(title) {
     const section = document.createElement('div');
     section.className = 'settings-section';
@@ -1013,13 +1142,13 @@ export function bindTersCheckboxKontrol(
     }, 50);
 }
 
-export function initSettings(defaultTab = 'slider') {
+export function initSettings(defaultTab = 'monwui') {
     const modal = createSettingsModal();
 
     return {
         open: (tab = defaultTab) => {
             const tabs = modal.querySelectorAll('.settings-tab');
-            const panels = modal.querySelectorAll('.settings-panel');
+            const panels = modal.querySelectorAll('.settings-tab-content > .settings-panel');
             tabs.forEach(tab => tab.classList.remove('active'));
             panels.forEach(panel => panel.style.display = 'none');
             const targetTab = modal.querySelector(`.settings-tab[data-tab="${tab}"]`);
@@ -1292,7 +1421,7 @@ export function isSettingsModalOpen() {
   return style.display !== 'none';
 }
 
-export function toggleSettingsModal(defaultTab = 'slider') {
+export function toggleSettingsModal(defaultTab = 'monwui') {
   const modal = document.getElementById('settings-modal');
   if (modal && isSettingsModalOpen()) {
     modal.style.display = 'none';
@@ -1422,7 +1551,7 @@ async function applyGlobalSettingsLockUI({
   );
 }
 
-export function installSettingsHotkey(defaultTab = 'slider') {
+export function installSettingsHotkey(defaultTab = 'monwui') {
   if (__settingsHotkeyInstalled) return;
   __settingsHotkeyInstalled = true;
 
@@ -1433,4 +1562,4 @@ export function installSettingsHotkey(defaultTab = 'slider') {
   }, { passive: false });
 }
 
-installSettingsHotkey('slider');
+installSettingsHotkey('monwui');

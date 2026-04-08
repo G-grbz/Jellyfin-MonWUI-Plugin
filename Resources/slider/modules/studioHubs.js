@@ -1,5 +1,5 @@
 import { getSessionInfo, getEmbyHeaders, makeApiRequest, updateFavoriteStatus } from "/Plugins/JMSFusion/runtime/api.js";
-import { getConfig, getDeviceProfileAuto } from './config.js';
+import { getConfig, getDeviceProfileAuto, getHomeSectionsRuntimeConfig } from './config.js';
 import { getLanguageLabels } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";
 import { openDetailsModal } from "./detailsModal.js";
@@ -856,8 +856,34 @@ function createBackdropCardShell(title, studio, serverId) {
   return a;
 }
 
+function cleanupStudioHubsSection() {
+  clearTimeout(__studioHubsRetryTo);
+  __studioHubsRetryTo = null;
+
+  if (__fetchAbort) {
+    try { __fetchAbort.abort(); } catch {}
+  }
+
+  const section = document.getElementById("studio-hubs");
+  if (!section) return;
+
+  try {
+    section.querySelectorAll('video.hub-video').forEach(v => {
+      try { v.pause(); } catch {}
+      try { v.removeAttribute('src'); v.load?.(); } catch {}
+    });
+  } catch {}
+
+  try { section.remove(); } catch {}
+}
+
 export async function renderStudioHubs() {
-  if (!config.enableStudioHubs) return;
+  const runtimeConfig = getConfig?.() || config || {};
+  const homeSectionsConfig = getHomeSectionsRuntimeConfig(runtimeConfig);
+  if (!homeSectionsConfig.enableStudioHubs) {
+    cleanupStudioHubsSection();
+    return;
+  }
   if (__studioHubBusy) return;
   __studioHubBusy = true;
 
@@ -1115,7 +1141,12 @@ async function searchStudiosByAliases(desired, signal) {
 }
 
 export function ensureStudioHubsMounted({ eager=false } = {}) {
-  if (!config.enableStudioHubs) return;
+  const runtimeConfig = getConfig?.() || config || {};
+  const homeSectionsConfig = getHomeSectionsRuntimeConfig(runtimeConfig);
+  if (!homeSectionsConfig.enableStudioHubs) {
+    cleanupStudioHubsSection();
+    return;
+  }
 
   const kick = async () => {
     if (__studioHubsMounting) return;

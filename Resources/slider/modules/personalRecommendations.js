@@ -1,5 +1,5 @@
 import { getSessionInfo, makeApiRequest, getCachedUserTopGenres } from "/Plugins/JMSFusion/runtime/api.js";
-import { getConfig } from "./config.js";
+import { getConfig, getHomeSectionsRuntimeConfig } from "./config.js";
 import { getLanguageLabels, getDefaultLanguage } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";
 import { openGenreExplorer, openPersonalExplorer } from "./genreExplorer.js";
@@ -67,6 +67,10 @@ const BYW_CARD_COUNT = Number.isFinite(getConfig()?.becauseYouWatchedCardCount)
 const BYW_ROW_COUNT = Number.isFinite(getConfig()?.becauseYouWatchedRowCount)
   ? Math.max(1, getConfig()?.becauseYouWatchedRowCount | 0)
   : 1;
+
+function getHomeRecommendationRuntimeConfig(source = null) {
+  return getHomeSectionsRuntimeConfig(source || (getConfig?.() || config || {}));
+}
 
 function isPersonalRecsHeroEnabled() {
   return getConfig()?.showPersonalRecsHeroCards !== false;
@@ -865,10 +869,6 @@ function makePRCLooseKey(it) {
   return `${tp}::${nm}`;
 }
 
-/* Runtime CSS injection disabled intentionally.
-   Personal recommendations styles are fully maintained in src/personalRecommendations.css
-   to avoid repeated style tag injections and cascade-order conflicts. */
-
 function buildPosterUrlLQ(item) {
   return buildPosterUrl(item, 120, 25);
 }
@@ -1123,6 +1123,7 @@ function insertAfter(parent, node, ref) {
 
 function enforceOrder(homeSectionsHint) {
   const cfg = getConfig();
+  const homeRuntimeConfig = getHomeRecommendationRuntimeConfig(cfg);
   const studio = document.getElementById('studio-hubs');
   const recs  = document.getElementById('personal-recommendations');
   const genre = document.getElementById('genre-hubs');
@@ -1147,7 +1148,7 @@ function enforceOrder(homeSectionsHint) {
       }
     } else {
       const anchor =
-        (cfg.enablePersonalRecommendations && recs && recs.parentElement === parent) ? recs :
+        (homeRuntimeConfig.enablePersonalRecommendations && recs && recs.parentElement === parent) ? recs :
         (studio && studio.parentElement === parent) ? studio :
         null;
       if (anchor) {
@@ -1165,7 +1166,7 @@ function enforceOrder(homeSectionsHint) {
   const wantUnderRecent = !!(recent && recent.parentElement === parent);
   const wantUnderPersonal =
     !wantUnderRecent &&
-    !!(cfg.enablePersonalRecommendations && recs && recs.parentElement === parent);
+    !!(homeRuntimeConfig.enablePersonalRecommendations && recs && recs.parentElement === parent);
 
     if (wantUnderRecent)  { insertAfter(parent, genre, recent); return; }
     if (wantUnderPersonal){ insertAfter(parent, genre, recs);   return; }
@@ -1534,16 +1535,31 @@ function scheduleRecsRetry(ms = 600) {
 }
 
 export async function renderPersonalRecommendations() {
-  if (!config.enablePersonalRecommendations && !ENABLE_GENRE_HUBS) return;
-
-  if (__personalRecsInitDone) {
-  const personalOk = !!document.querySelector("#personal-recommendations .personal-recs-card:not(.skeleton)");
-  const genreOk = !ENABLE_GENRE_HUBS || !!document.querySelector("#genre-hubs .genre-hub-section");
-  if (personalOk && genreOk) {
-    scheduleHomeScrollerRefresh(0);
+  const runtimeConfig = getHomeRecommendationRuntimeConfig();
+  if (
+    !runtimeConfig.enablePersonalRecommendations &&
+    !runtimeConfig.enableGenreHubs &&
+    !runtimeConfig.enableBecauseYouWatched
+  ) {
+    resetPersonalRecsAndGenreState();
     return;
   }
-}
+
+  if (__personalRecsInitDone) {
+    const personalOk =
+      !runtimeConfig.enablePersonalRecommendations ||
+      !!document.querySelector("#personal-recommendations .personal-recs-card:not(.skeleton)");
+    const genreOk =
+      !runtimeConfig.enableGenreHubs ||
+      !!document.querySelector("#genre-hubs .genre-hub-section");
+    const bywOk =
+      !runtimeConfig.enableBecauseYouWatched ||
+      !!document.querySelector('[id^="because-you-watched--"] .personal-recs-card:not(.skeleton), #because-you-watched .personal-recs-card:not(.skeleton)');
+    if (personalOk && genreOk && bywOk) {
+      scheduleHomeScrollerRefresh(0);
+      return;
+    }
+  }
   __personalRecsInitDone = true;
 
   if (__personalRecsBusy) return;
@@ -1580,7 +1596,7 @@ export async function renderPersonalRecommendations() {
 
     const tasks = [];
 
-    if (config.enablePersonalRecommendations) {
+    if (runtimeConfig.enablePersonalRecommendations) {
       const section = ensurePersonalRecsContainer(indexPage);
       const row = section?.querySelector?.(".personal-recs-row") || null;
       if (row) {
@@ -1603,14 +1619,14 @@ export async function renderPersonalRecommendations() {
       }
     }
 
-    if (ENABLE_BYW) {
+    if (runtimeConfig.enableBecauseYouWatched) {
       tasks.push((async () => {
         try { await renderBecauseYouWatchedAuto(indexPage); }
         catch (e) { console.warn("BYW render failed:", e); }
       })());
     }
 
-    if (ENABLE_GENRE_HUBS) {
+    if (runtimeConfig.enableGenreHubs) {
       tasks.push((async () => {
         try { await renderGenreHubs(indexPage); }
         catch (e) {
@@ -2312,7 +2328,6 @@ function renderRecommendationCards(row, items, serverId) {
   }
 
   const unique = items;
-  const rIC = window.requestIdleCallback || ((fn)=>setTimeout(fn,0));
   const slice = unique;
   if (IS_MOBILE) {
     const mobileCards = [];
@@ -2334,64 +2349,30 @@ function renderRecommendationCards(row, items, serverId) {
     return;
   }
 
-  const aboveFoldCount = IS_MOBILE ? Math.min(4, slice.length) : Math.min(6, slice.length);
-  const f1 = document.createDocumentFragment();
+  const aboveFoldCount = Math.min(6, slice.length);
+  const frag = document.createDocumentFragment();
   const domSeen = new Set();
-  const aboveCards = [];
+  const allCards = [];
+  let rendered = 0;
 
-  for (let i = 0; i < aboveFoldCount; i++) {
-    const c = createRecommendationCard(slice[i], serverId, true);
-    aboveCards.push(c);
-    const k = c?.dataset?.key || c?.getAttribute?.('data-key');
+  for (let i = 0; i < slice.length && rendered < EFFECTIVE_CARD_COUNT; i++) {
+    const it = slice[i];
+    const k = makePRCKey(it);
+    if (k && domSeen.has(k)) continue;
     if (k) domSeen.add(k);
-    f1.appendChild(c);
+    const c = createRecommendationCard(it, serverId, rendered < aboveFoldCount);
+    allCards.push(c);
+    frag.appendChild(c);
+    rendered++;
   }
 
-  row.appendChild(f1);
+  row.appendChild(frag);
+  triggerScrollerUpdate(row);
 
   try {
     const { userId } = getSessionInfo();
-    scheduleResumeLabels(aboveCards, userId);
+    scheduleResumeLabels(allCards, userId);
   } catch {}
-
-  let idx = aboveFoldCount;
-  let rendered = aboveFoldCount;
-
-  function pump() {
-    if (rendered >= EFFECTIVE_CARD_COUNT) return;
-    if (idx >= slice.length) return;
-    const chunk = IS_MOBILE ? 2 : 10;
-    const fx = document.createDocumentFragment();
-    const justAddedCards = [];
-
-    let added = 0;
-
-    while (added < chunk && idx < slice.length) {
-      const it = slice[idx++];
-      const k = makePRCKey(it);
-      if (!k || domSeen.has(k)) continue;
-      domSeen.add(k);
-      const c = createRecommendationCard(it, serverId, false);
-      justAddedCards.push(c);
-      fx.appendChild(c);
-      added++;
-      if (rendered + added >= EFFECTIVE_CARD_COUNT) break;
-    }
-    if (added) {
-      row.appendChild(fx);
-      rendered += added;
-    }
-    if (added) {
-      try {
-        const { userId } = getSessionInfo();
-        scheduleResumeLabels(justAddedCards, userId);
-      } catch {}
-    }
-    if (rendered < EFFECTIVE_CARD_COUNT) {
-      rIC(pump);
-    }
-  }
-  rIC(pump);
 }
 
 const LIGHT_FIELDS = [
@@ -2854,7 +2835,6 @@ export function setupScroller(row) {
     return best;
   };
 
-  // Keep the last card flush with the right edge instead of exposing trailing blank space.
   const getScrollStops = () => {
     const max = Math.max(0, row.scrollWidth - row.clientWidth);
     const items = getScrollItems();
@@ -2992,12 +2972,13 @@ export function setupScroller(row) {
 
 function getGenreHubsAnchor(parent) {
   if (!getConfig().placeGenreHubsUnderStudioHubs) return null;
+  const runtimeConfig = getHomeRecommendationRuntimeConfig();
 
   const recent = document.getElementById("recent-rows");
   if (recent && recent.parentElement === parent) return recent;
 
   const pr = document.getElementById("personal-recommendations");
-  if (getConfig().enablePersonalRecommendations && pr && pr.parentElement === parent) return pr;
+  if (runtimeConfig.enablePersonalRecommendations && pr && pr.parentElement === parent) return pr;
 
   return null;
 }
@@ -3687,6 +3668,12 @@ function escapeHtml(s) {
 export function resetPersonalRecsAndGenreState() {
   try { detachGenreScrollIdleLoader(); } catch {}
   try { abortAllGenreFetches(); } catch {}
+  try {
+    if (__recsRetryTimer) {
+      clearTimeout(__recsRetryTimer);
+      __recsRetryTimer = null;
+    }
+  } catch {}
 
   __personalRecsInitDone = false;
   __personalRecsBusy = false;
@@ -3723,6 +3710,30 @@ export function resetPersonalRecsAndGenreState() {
       } catch {}
     }
   } catch {}
+
+  try {
+    const sections = Array.from(new Set([
+      document.getElementById("personal-recommendations"),
+      document.getElementById("genre-hubs"),
+      ...Array.from(document.querySelectorAll('[id^="because-you-watched--"], #because-you-watched'))
+    ].filter(Boolean)));
+
+    for (const section of sections) {
+      try {
+        section.querySelectorAll('.personal-recs-card, .dir-row-hero').forEach(el => {
+          try { el.dispatchEvent(new Event('jms:cleanup')); } catch {}
+        });
+      } catch {}
+      try {
+        section.querySelectorAll('.personal-recs-row, .genre-row, .byw-row').forEach(row => {
+          try { row.dispatchEvent(new Event('jms:cleanup')); } catch {}
+        });
+      } catch {}
+      try { section.remove(); } catch {}
+    }
+  } catch {}
+
+  try { __signalGenreHubsDone(); } catch {}
 }
 
 let __homeScrollerRefreshTimer = null;

@@ -1,5 +1,10 @@
 import { saveCredentials, saveApiKey, getAuthToken } from "/Plugins/JMSFusion/runtime/auth.js";
-import { getConfig } from "./modules/config.js";
+import {
+  getConfig,
+  getHomeSectionsRuntimeConfig,
+  getPauseFeaturesRuntimeConfig,
+  isSubtitleCustomizerModuleEnabled
+} from "./modules/config.js";
 import { getLanguageLabels, getDefaultLanguage } from "./language/index.js";
 import { getCurrentIndex, setCurrentIndex } from "./modules/sliderState.js";
 import { startSlideTimer, stopSlideTimer, pauseSlideTimer, resumeSlideTimer } from "./modules/timer.js";
@@ -10,7 +15,6 @@ import { attachMouseEvents } from "./modules/events.js";
 import { fetchItemDetails as fetchItemDetailsNet, getSessionInfo, getAuthHeader, waitForAuthReadyStrict, isAuthReadyStrict } from "/Plugins/JMSFusion/runtime/api.js";
 import { cachedFetchJson, createCachedItemDetailsFetcher, startLibraryDeltaWatcher } from "./modules/sliderCache.js";
 import { forceHomeSectionsTop, forceSkinHeaderPointerEvents } from "./modules/positionOverrides.js";
-import { setupPauseScreen } from "./modules/pauseModul.js";
 import { initAvatarSystem } from "./modules/userAvatar.js";
 import { initializeQualityBadges, primeQualityFromItems, annotateDomWithQualityHints } from "./modules/qualityBadges.js";
 import { initNotifications, forcejfNotifBtnPointerEvents } from "./modules/notifications.js";
@@ -26,8 +30,6 @@ import { withServer } from "./modules/jfUrl.js";
 import { initUserProfileAvatarPicker } from "./modules/avatarPicker.js";
 import { startBackgroundCollectionIndexer, getBackgroundCollectionIndexerStatus } from "./modules/collectionIndexer.js";
 import { initProfileChooser, syncProfileChooserHeaderButtonVisibility } from "./modules/profileChooser.js";
-import { initSubtitleCustomizer } from "./modules/subtitleCustomizer.js";
-import { initOsdHeaderRatings } from "./modules/osdHeaderRatings.js";
 import { openDetailsModal } from "./modules/detailsModal.js";
 const idle = window.requestIdleCallback || ((cb) => setTimeout(cb, 0));
 const MATERIAL_ICONS_REPAIR_STYLE_ID = "jms-material-icons-utf8-repair";
@@ -510,12 +512,44 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
     ]);
   }
 
-  function isRecommendationCssActive(cfg) {
+  function shouldRenderPersonalRecommendationUi(cfg) {
+    const homeSectionsConfig = getHomeSectionsRuntimeConfig(cfg);
     return !!(
-      cfg.enablePersonalRecommendations ||
-      cfg.enableGenreHubs ||
-      cfg.enableDirectorRows ||
-      cfg.enableRecentRows
+      homeSectionsConfig.enablePersonalRecommendations ||
+      homeSectionsConfig.enableGenreHubs ||
+      homeSectionsConfig.enableBecauseYouWatched
+    );
+  }
+
+  function shouldRenderDirectorRowsUi(cfg) {
+    return getHomeSectionsRuntimeConfig(cfg).enableDirectorRows;
+  }
+
+  function shouldRenderRecentRowsUi(cfg) {
+    const homeSectionsConfig = getHomeSectionsRuntimeConfig(cfg);
+    return !!(
+      homeSectionsConfig.enableRecentRows ||
+      homeSectionsConfig.enableContinueMovies ||
+      homeSectionsConfig.enableContinueSeries ||
+      homeSectionsConfig.enableOtherLibRows
+    );
+  }
+
+  function shouldRenderStudioHubsUi(cfg) {
+    return getHomeSectionsRuntimeConfig(cfg).enableStudioHubs;
+  }
+
+  function isRecommendationCssActive(cfg) {
+    const homeSectionsConfig = getHomeSectionsRuntimeConfig(cfg);
+    return !!(
+      homeSectionsConfig.enablePersonalRecommendations ||
+      homeSectionsConfig.enableGenreHubs ||
+      homeSectionsConfig.enableBecauseYouWatched ||
+      homeSectionsConfig.enableDirectorRows ||
+      homeSectionsConfig.enableRecentRows ||
+      homeSectionsConfig.enableContinueMovies ||
+      homeSectionsConfig.enableContinueSeries ||
+      homeSectionsConfig.enableOtherLibRows
     ) || matchesAny([
       '#personal-recommendations',
       '#genre-hubs',
@@ -527,7 +561,7 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
   }
 
   function isStudioHubsCssActive(cfg) {
-    return cfg.enableStudioHubs !== false || matchesAny([
+    return shouldRenderStudioHubsUi(cfg) || matchesAny([
       '#studio-hubs',
       '.hub-preview-popover'
     ]);
@@ -581,8 +615,23 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
     ]);
   }
 
-  function isSubtitleCustomizerCssActive() {
-    return matchesAny([
+  function isPauseFeatureCssActive(cfg) {
+    const pauseConfig = getPauseFeaturesRuntimeConfig(cfg);
+    return !!(
+      pauseConfig.enablePauseOverlay ||
+      pauseConfig.enableSmartAutoPause
+    ) || matchesAny([
+      '#jms-pause-overlay',
+      '#jms-overlay-progress',
+      '#pause-status-bottom-right',
+      '#jms-reco-panel',
+      '.rating-genre-overlay',
+      '.rating-icons-overlay'
+    ]);
+  }
+
+  function isSubtitleCustomizerCssActive(cfg) {
+    return isSubtitleCustomizerModuleEnabled(cfg) && matchesAny([
       '.videoOsdBottom.videoOsdBottom-maincontrols .buttons',
       '.btnJmsSubtitleCustomizer',
       '[data-jms-subtitle-dialog]',
@@ -609,14 +658,15 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
     const miniPopoverCssEnabled = isMiniPopoverCssActive(cfg);
     const avatarPickerCssEnabled = isAvatarPickerCssActive(cfg);
     const profileChooserCssEnabled = isProfileChooserCssActive(cfg);
-    const subtitleCustomizerCssEnabled = isSubtitleCustomizerCssActive();
+    const pauseFeatureCssEnabled = isPauseFeatureCssActive(cfg);
+    const subtitleCustomizerCssEnabled = isSubtitleCustomizerCssActive(cfg);
     const sliderCssEnabled = isSliderCssActive(cfg);
 
     syncCSS('/slider/src/fontawesome/all.min.css', 'jms-css-fontawesome', true);
     // Notification themes are owned by modules/notifications.js via #jfNotifCss.
     // Keep cleaning the legacy synced link so it cannot pin theme 1 in the DOM.
     D.getElementById('jms-css-notifications')?.remove();
-    syncCSS('/slider/src/pauseModul.css', 'jms-css-pause', true);
+    syncCSS('/slider/src/pauseModul.css', 'jms-css-pause', pauseFeatureCssEnabled);
     syncCSS('/slider/src/personalRecommendations.css', 'jms-css-recs', recommendationCssEnabled);
     syncCSS('/slider/src/studioHubs.css', 'jms-css-studiohubs', studioHubsCssEnabled);
     syncCSS('/slider/src/detailsModal.css', 'jms-css-detailsModal', detailsModalCssEnabled);
@@ -652,6 +702,9 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
     if (!profileChooserCssEnabled) {
       removeCssByHref(['slider/src/profileChooser.css']);
     }
+    if (!pauseFeatureCssEnabled) {
+      removeCssByHref(['slider/src/pauseModul.css']);
+    }
     if (!subtitleCustomizerCssEnabled) {
       removeCssByHref(['slider/src/subtitleCustomizer.css']);
     }
@@ -680,6 +733,10 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
       applyFeatureCss();
     });
   }
+
+  try {
+    window.__jmsQueueFeatureCssSync = queueFeatureCssSync;
+  } catch {}
 
   applyFeatureCss();
 
@@ -966,6 +1023,46 @@ function getMainConfig() {
   }
 }
 
+function shouldRenderPersonalRecommendationUi(cfg = getMainConfig()) {
+  const homeSectionsConfig = getHomeSectionsRuntimeConfig(cfg);
+  return !!(
+    homeSectionsConfig.enablePersonalRecommendations ||
+    homeSectionsConfig.enableGenreHubs ||
+    homeSectionsConfig.enableBecauseYouWatched
+  );
+}
+
+function shouldRenderDirectorRowsUi(cfg = getMainConfig()) {
+  return getHomeSectionsRuntimeConfig(cfg).enableDirectorRows;
+}
+
+function shouldRenderRecentRowsUi(cfg = getMainConfig()) {
+  const homeSectionsConfig = getHomeSectionsRuntimeConfig(cfg);
+  return !!(
+    homeSectionsConfig.enableRecentRows ||
+    homeSectionsConfig.enableContinueMovies ||
+    homeSectionsConfig.enableContinueSeries ||
+    homeSectionsConfig.enableOtherLibRows
+  );
+}
+
+function shouldRenderStudioHubsUi(cfg = getMainConfig()) {
+  return getHomeSectionsRuntimeConfig(cfg).enableStudioHubs;
+}
+
+function getPauseRuntimeConfig(cfg = getMainConfig()) {
+  return getPauseFeaturesRuntimeConfig(cfg);
+}
+
+function shouldBootPauseModule(cfg = getMainConfig()) {
+  const pauseConfig = getPauseRuntimeConfig(cfg);
+  return !!(pauseConfig.enablePauseOverlay || pauseConfig.enableSmartAutoPause);
+}
+
+function shouldBootPauseOsdHeaderRatings(cfg = getMainConfig()) {
+  return getPauseRuntimeConfig(cfg).enablePauseOsdHeaderRatings;
+}
+
 function isSliderEnabled() {
   try {
     const cfg = getMainConfig();
@@ -976,24 +1073,170 @@ function isSliderEnabled() {
 }
 
 let cleanupPauseOverlay = null;
+let pauseModulePromise = null;
 let pauseBooted = false;
+let cleanupSubtitleCustomizer = null;
+let subtitleCustomizerBooted = false;
+let subtitleCustomizerModulePromise = null;
+let cleanupOsdHeaderRatings = null;
+let osdHeaderRatingsBooted = false;
+let osdHeaderRatingsModulePromise = null;
 let navObsBooted = false;
 window.sliderResetInProgress = window.sliderResetInProgress || false;
 window.__slidesInitRunning = window.__slidesInitRunning || false;
 
-function startPauseOverlayOnce() {
-  if (pauseBooted) return;
-  cleanupPauseOverlay = setupPauseScreen();
-  pauseBooted = true;
+async function loadPauseModule() {
+  if (!pauseModulePromise) {
+    pauseModulePromise = import("./modules/pauseModul.js");
+  }
+  return pauseModulePromise;
 }
-function restartPauseOverlay() {
+
+async function loadSubtitleCustomizerModule() {
+  if (!subtitleCustomizerModulePromise) {
+    subtitleCustomizerModulePromise = import("./modules/subtitleCustomizer.js");
+  }
+  return subtitleCustomizerModulePromise;
+}
+
+async function loadOsdHeaderRatingsModule() {
+  if (!osdHeaderRatingsModulePromise) {
+    osdHeaderRatingsModulePromise = import("./modules/osdHeaderRatings.js");
+  }
+  return osdHeaderRatingsModulePromise;
+}
+
+function destroyPauseOverlay() {
   if (cleanupPauseOverlay) {
     try {
       cleanupPauseOverlay();
     } catch {}
   }
+  cleanupPauseOverlay = null;
   pauseBooted = false;
-  startPauseOverlayOnce();
+  try {
+    window.__jmsPauseOverlay?.destroy?.();
+  } catch {}
+}
+
+function destroySubtitleCustomizer() {
+  if (cleanupSubtitleCustomizer) {
+    try {
+      cleanupSubtitleCustomizer();
+    } catch {}
+  }
+  cleanupSubtitleCustomizer = null;
+  subtitleCustomizerBooted = false;
+  try {
+    window.cleanupSubtitleCustomizer = null;
+  } catch {}
+}
+
+function destroyOsdHeaderRatings() {
+  if (cleanupOsdHeaderRatings) {
+    try {
+      cleanupOsdHeaderRatings();
+    } catch {}
+  }
+  cleanupOsdHeaderRatings = null;
+  osdHeaderRatingsBooted = false;
+  try {
+    window.__jmsOsdHeaderRatings?.destroy?.();
+  } catch {}
+  try {
+    window.cleanupOsdHeaderRatings = null;
+  } catch {}
+}
+
+async function startPauseOverlayOnce() {
+  if (!shouldBootPauseModule()) {
+    destroyPauseOverlay();
+    return false;
+  }
+  if (pauseBooted) return true;
+
+  pauseBooted = true;
+  try {
+    const mod = await loadPauseModule();
+    if (!shouldBootPauseModule()) {
+      pauseBooted = false;
+      return false;
+    }
+    cleanupPauseOverlay = mod?.setupPauseScreen?.() || null;
+    return true;
+  } catch (e) {
+    pauseBooted = false;
+    console.warn("startPauseOverlayOnce hata:", e);
+    return false;
+  }
+}
+
+async function restartPauseOverlay() {
+  destroyPauseOverlay();
+  return startPauseOverlayOnce();
+}
+
+async function refreshSubtitleCustomizer() {
+  if (!isSubtitleCustomizerModuleEnabled(getMainConfig())) {
+    destroySubtitleCustomizer();
+    return false;
+  }
+  if (subtitleCustomizerBooted) return true;
+
+  subtitleCustomizerBooted = true;
+  try {
+    const mod = await loadSubtitleCustomizerModule();
+    if (!isSubtitleCustomizerModuleEnabled(getMainConfig())) {
+      subtitleCustomizerBooted = false;
+      return false;
+    }
+    cleanupSubtitleCustomizer = mod?.initSubtitleCustomizer?.() || null;
+    window.cleanupSubtitleCustomizer = cleanupSubtitleCustomizer;
+    return true;
+  } catch (e) {
+    subtitleCustomizerBooted = false;
+    console.warn("refreshSubtitleCustomizer hata:", e);
+    return false;
+  }
+}
+
+async function refreshPauseOsdHeaderRatings({ force = false } = {}) {
+  if (!shouldBootPauseOsdHeaderRatings()) {
+    destroyOsdHeaderRatings();
+    return false;
+  }
+  if (osdHeaderRatingsBooted && !force) return true;
+
+  destroyOsdHeaderRatings();
+  osdHeaderRatingsBooted = true;
+  try {
+    const mod = await loadOsdHeaderRatingsModule();
+    if (!shouldBootPauseOsdHeaderRatings()) {
+      osdHeaderRatingsBooted = false;
+      return false;
+    }
+    cleanupOsdHeaderRatings = mod?.initOsdHeaderRatings?.() || null;
+    window.cleanupOsdHeaderRatings = cleanupOsdHeaderRatings;
+    return true;
+  } catch (e) {
+    osdHeaderRatingsBooted = false;
+    console.warn("refreshPauseOsdHeaderRatings hata:", e);
+    return false;
+  }
+}
+
+async function refreshOptionalModules({ forcePause = false } = {}) {
+  const tasks = [
+    refreshSubtitleCustomizer(),
+    forcePause ? restartPauseOverlay() : startPauseOverlayOnce(),
+    refreshPauseOsdHeaderRatings({ force: forcePause })
+  ];
+
+  const results = await Promise.allSettled(tasks);
+  try {
+    window.__jmsQueueFeatureCssSync?.();
+  } catch {}
+  return results;
 }
 
 const shuffleArray = (array) => {
@@ -1095,10 +1338,10 @@ forceSkinHeaderPointerEvents();
 forceHomeSectionsTop();
 const cleanupAvatarPicker = initUserProfileAvatarPicker();
 window.cleanupAvatarPicker = cleanupAvatarPicker;
-const cleanupSubtitleCustomizer = initSubtitleCustomizer();
-window.cleanupSubtitleCustomizer = cleanupSubtitleCustomizer;
-const cleanupOsdHeaderRatings = initOsdHeaderRatings();
-window.cleanupOsdHeaderRatings = cleanupOsdHeaderRatings;
+window.__jmsRefreshOptionalModules = (options = {}) => {
+  return refreshOptionalModules(options);
+};
+void refreshOptionalModules();
 
 const NOTIF_ENABLED = getMainConfig().enableNotifications !== false;
 forcejfNotifBtnPointerEvents();
@@ -1143,15 +1386,15 @@ function schedulePersonalRecsReinit(delayMs = 10000) {
     try {
       const cfg = (typeof getConfig === 'function' ? getConfig() : {}) || {};
 
-      if (cfg.enablePersonalRecommendations || cfg.enableGenreHubs) {
+      if (shouldRenderPersonalRecommendationUi(cfg)) {
         renderPersonalRecommendations();
       }
 
-      if (cfg.enableDirectorRows && typeof mountDirectorRowsLazy === 'function') {
+      if (shouldRenderDirectorRowsUi(cfg) && typeof mountDirectorRowsLazy === 'function') {
         mountDirectorRowsLazy();
       }
 
-      if (cfg.enableRecentRows && typeof mountRecentRowsLazy === 'function') {
+      if (shouldRenderRecentRowsUi(cfg) && typeof mountRecentRowsLazy === 'function') {
         mountRecentRowsLazy();
       }
 
@@ -2599,16 +2842,16 @@ function initializeSliderOnHome() {
     try {
       const cfg = (typeof getConfig === 'function' ? getConfig() : {}) || {};
 
-      if (cfg.enablePersonalRecommendations || cfg.enableGenreHubs) {
+      if (shouldRenderPersonalRecommendationUi(cfg)) {
         renderPersonalRecommendations();
       }
-      if (cfg.enableDirectorRows && typeof mountDirectorRowsLazy === 'function') {
+      if (shouldRenderDirectorRowsUi(cfg) && typeof mountDirectorRowsLazy === 'function') {
         mountDirectorRowsLazy();
       }
-      if (cfg.enableRecentRows && typeof mountRecentRowsLazy === 'function') {
+      if (shouldRenderRecentRowsUi(cfg) && typeof mountRecentRowsLazy === 'function') {
         mountRecentRowsLazy();
       }
-      if (cfg.enableStudioHubs) {
+      if (shouldRenderStudioHubsUi(cfg)) {
         ensureStudioHubsMounted({ eager: true });
       }
     } catch {}
@@ -2629,21 +2872,21 @@ function initializeSliderOnHome() {
   if (!indexPage) return;
 
   let __recsBooted = false;
-  const onAllReady = () => {
-    if (__recsBooted) return;
-    __recsBooted = true;
-    const cfg = (typeof getConfig === 'function' ? getConfig() : {}) || {};
+    const onAllReady = () => {
+      if (__recsBooted) return;
+      __recsBooted = true;
+      const cfg = (typeof getConfig === 'function' ? getConfig() : {}) || {};
 
-    try {
-      if (cfg.enablePersonalRecommendations || cfg.enableGenreHubs) {
+      try {
+      if (shouldRenderPersonalRecommendationUi(cfg)) {
         renderPersonalRecommendations();
       }
 
-      if (cfg.enableDirectorRows && typeof mountDirectorRowsLazy === 'function') {
+      if (shouldRenderDirectorRowsUi(cfg) && typeof mountDirectorRowsLazy === 'function') {
         mountDirectorRowsLazy();
       }
 
-      if (cfg.enableRecentRows && typeof mountRecentRowsLazy === 'function') {
+      if (shouldRenderRecentRowsUi(cfg) && typeof mountRecentRowsLazy === 'function') {
         mountRecentRowsLazy();
       }
 
@@ -2703,7 +2946,7 @@ function initializeSliderOnHome() {
     slidesInit();
   })();
 
-  if (config.enableStudioHubs) {
+  if (shouldRenderStudioHubsUi(getMainConfig())) {
     ensureStudioHubsMounted({ eager:true });
   }
 }
@@ -3047,7 +3290,7 @@ function observeWhenHomeReady(cb, maxMs = 20000) {
 
     setupNavigationObserver();
     installHomeTabSliderOnlyGate();
-    idle(() => { if (config.enableStudioHubs) ensureStudioHubsMounted(); });
+    idle(() => { if (shouldRenderStudioHubsUi(getMainConfig())) ensureStudioHubsMounted(); });
   } catch (e) {
     console.warn("robustBoot (fast) hata:", e);
   }

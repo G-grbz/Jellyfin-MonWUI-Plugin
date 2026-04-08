@@ -4,7 +4,6 @@ import { updateSlidePosition } from '../positionUtils.js';
 import { createCheckbox, createImageTypeSelect, bindCheckboxKontrol, bindTersCheckboxKontrol, updateConfig } from "../settings.js";
 import { updateHeaderUserAvatar, updateAvatarStyles, clearAvatarCache } from "../userAvatar.js";
 import { showNotification } from "../player/ui/notification.js";
-import { initOsdHeaderRatings } from "../osdHeaderRatings.js";
 import { updateJmsPluginConfig } from "../jmsPluginConfig.js";
 import { saveStudioHubVisibility } from "../studioHubsShared.js";
 
@@ -250,6 +249,10 @@ const USER_ONLY_KEYS = [
             enableRenderResume: formData.get('enableRenderResume') === 'on',
             toastGroupThreshold: parseInt(formData.get('toastGroupThreshold'), 10),
             enableCounterSystem: formData.get('enableCounterSystem') === 'on',
+            enableHomeSectionsMaster: formData.get('enableHomeSectionsMaster') === 'on',
+            enablePauseFeaturesMaster: formData.get('enablePauseFeaturesMaster') === 'on',
+            enableSubtitleCustomizerModule: formData.get('enableSubtitleCustomizerModule') === 'on',
+            enableParentalPinModule: formData.get('enableParentalPinModule') === 'on',
 
             enableDirectorRows: formData.get('enableDirectorRows') === 'on',
             showDirectorRowsHeroCards: formData.get('showDirectorRowsHeroCards') === 'on',
@@ -485,6 +488,7 @@ const USER_ONLY_KEYS = [
             watchlistTabsSliderEnabled: formData.get('watchlistTabsSliderEnabled') === 'on',
             watchlistAutoRemovePlayed: formData.get('watchlistAutoRemovePlayed') === 'on',
             watchlistAutoRemovePlayedFromFavorites: formData.get('watchlistAutoRemovePlayedFromFavorites') === 'on',
+            watchlistImportFavoritesOnStartup: formData.get('watchlistImportFavoritesOnStartup') === 'on',
             showPlayedButton: formData.get('showPlayedButton') === 'on',
             playedBackgroundImageType: formData.get('playedBackgroundImageType'),
             buttonBackgroundBlur: parseInt(formData.get('buttonBackgroundBlur')),
@@ -731,8 +735,10 @@ const USER_ONLY_KEYS = [
           const watchlistModule = await import("../watchlist.js");
           watchlistModule?.refreshWatchlistUi?.();
         } catch {}
-        try { window.__jmsOsdHeaderRatings?.destroy?.(); } catch {}
-        try { initOsdHeaderRatings(); } catch {}
+        try {
+          await window.__jmsRefreshOptionalModules?.({ forcePause: true });
+        } catch {}
+        try { window.__jmsQueueFeatureCssSync?.(); } catch {}
 
         const forcedAdminPublish = !!(cfgGuard?.forceGlobalUserSettings && isAdmin);
         let publishResult = { attempted: false, forced: false, ok: true };
@@ -771,6 +777,29 @@ const USER_ONLY_KEYS = [
         updateHeaderUserAvatar();
     } else {
         updateAvatarStyles();
+    }
+
+    if (!reload) {
+      setTimeout(async () => {
+        try {
+          const [
+            { ensureStudioHubsMounted },
+            { renderPersonalRecommendations },
+            { mountDirectorRowsLazy },
+            { mountRecentRowsLazy }
+          ] = await Promise.all([
+            import("../studioHubs.js"),
+            import("../personalRecommendations.js"),
+            import("../directorRows.js"),
+            import("../recentRows.js")
+          ]);
+
+          try { renderPersonalRecommendations?.(); } catch {}
+          try { mountDirectorRowsLazy?.(); } catch {}
+          try { mountRecentRowsLazy?.(); } catch {}
+          try { ensureStudioHubsMounted?.({ eager: true }); } catch {}
+        } catch {}
+      }, 0);
     }
 
     if (forcedAdminPublish && publishResult?.attempted && !publishResult.ok) {

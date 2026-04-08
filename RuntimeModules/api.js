@@ -1,7 +1,6 @@
-import { getConfig, getServerAddress } from "/slider/modules/config.js";
+import { getConfig, getServerAddress, isParentalPinModuleEnabled } from "/slider/modules/config.js";
 import { clearCredentials, getWebClientHints, getStoredServerBase } from "/Plugins/JMSFusion/runtime/auth.js";
 import { withServer, withServerSrcset, invalidateServerBaseCache, resolveServerBase } from "/slider/modules/jfUrl.js";
-import { ensureParentalPinBeforePlayback } from "/slider/modules/parentalPinRuntime.js";
 
 const config = getConfig();
 const SERVER_ADDR_KEY = "jf_serverAddress";
@@ -67,6 +66,31 @@ function showPlayNowSuccessNotification(duration = 3000) {
       }, 300);
     }, duration);
   } catch {}
+}
+
+let __parentalPinRuntimePromise = null;
+
+async function maybeEnsureParentalPinBeforePlayback(item, options = {}) {
+  try {
+    const liveConfig = (typeof getConfig === "function" ? getConfig() : null) || config || {};
+    if (!isParentalPinModuleEnabled(liveConfig)) {
+      return true;
+    }
+
+    if (!__parentalPinRuntimePromise) {
+      __parentalPinRuntimePromise = import("/slider/modules/parentalPinRuntime.js");
+    }
+
+    const mod = await __parentalPinRuntimePromise;
+    if (typeof mod?.ensureParentalPinBeforePlayback !== "function") {
+      return true;
+    }
+
+    return !!(await mod.ensureParentalPinBeforePlayback(item, options));
+  } catch (e) {
+    console.warn("maybeEnsureParentalPinBeforePlayback hata:", e);
+    return true;
+  }
 }
 
 async function __getGmmp() {
@@ -1850,7 +1874,7 @@ export async function playNow(itemId) {
         };
       }
     }
-    const isPlaybackAllowed = await ensureParentalPinBeforePlayback(parentalGateItem, {
+    const isPlaybackAllowed = await maybeEnsureParentalPinBeforePlayback(parentalGateItem, {
       bypassItemId: normalizedItemId
     });
     if (!isPlaybackAllowed) {

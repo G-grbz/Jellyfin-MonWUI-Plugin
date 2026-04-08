@@ -1,5 +1,5 @@
 import { getSessionInfo, makeApiRequest, getCachedUserTopGenres } from "/Plugins/JMSFusion/runtime/api.js";
-import { getConfig } from "./config.js";
+import { getConfig, getHomeSectionsRuntimeConfig } from "./config.js";
 import { getLanguageLabels } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";
 import { openDirectorExplorer } from "./genreExplorer.js";
@@ -1995,7 +1995,8 @@ async function loadDirectorsFromDbOrApi(userId) {
 
 export async function warmDirectorRowsDb({ force = false } = {}) {
   const cfg = getConfig?.() || config || {};
-  if (!cfg.enableDirectorRows) {
+  const homeSectionsConfig = getHomeSectionsRuntimeConfig(cfg);
+  if (!homeSectionsConfig.enableDirectorRows) {
     return { directors: [], fromCache: false, skipped: true };
   }
 
@@ -2426,7 +2427,8 @@ function startDirectorBackfillLoop() {
 function waitForGenreHubsDone(timeoutMs = 0) {
   try {
     const cfg = getConfig?.() || config || {};
-    if (!cfg.enableGenreHubs) return Promise.resolve();
+    const homeSectionsConfig = getHomeSectionsRuntimeConfig(cfg);
+    if (!homeSectionsConfig.enableGenreHubs) return Promise.resolve();
   } catch {}
 
   if (window.__jmsGenreHubsDone) return Promise.resolve();
@@ -2450,7 +2452,13 @@ function waitForGenreHubsDone(timeoutMs = 0) {
 
 export function mountDirectorRowsLazy() {
   const cfg = getConfig();
-  if (!cfg.enableDirectorRows) return;
+  const homeSectionsConfig = getHomeSectionsRuntimeConfig(cfg);
+  if (!homeSectionsConfig.enableDirectorRows) {
+    try { cleanupDirectorRows(); } catch {}
+    const existing = document.getElementById('director-rows');
+    if (existing) { try { existing.remove(); } catch {} }
+    return;
+  }
   if (!isHomeRoute()) {
     try { cleanupDirectorRows(); } catch {}
     const existing = document.getElementById('director-rows');
@@ -2458,7 +2466,7 @@ export function mountDirectorRowsLazy() {
     return;
   }
 
-  if (cfg.enableGenreHubs && !window.__jmsGenreHubsDone) {
+  if (homeSectionsConfig.enableGenreHubs && !window.__jmsGenreHubsDone) {
     if (!window.__dirRowsWaitGenreDoneBound) {
       window.__dirRowsWaitGenreDoneBound = true;
       document.addEventListener("jms:genre-hubs-done", () => {
@@ -2502,8 +2510,8 @@ export function mountDirectorRowsLazy() {
     return;
   }
   parent.appendChild(wrap);
-  try { ensureIntoHomeSections(wrap, null, { placeAfterId: cfg.enableGenreHubs ? "genre-hubs" : null }); } catch {}
-  if (!IS_MOBILE && !cfg.enableGenreHubs) { try { pinDirectorRowsToBottom(wrap); } catch {} }
+  try { ensureIntoHomeSections(wrap, null, { placeAfterId: homeSectionsConfig.enableGenreHubs ? "genre-hubs" : null }); } catch {}
+  if (!IS_MOBILE && !homeSectionsConfig.enableGenreHubs) { try { pinDirectorRowsToBottom(wrap); } catch {} }
 
   const start = async () => {
     try {

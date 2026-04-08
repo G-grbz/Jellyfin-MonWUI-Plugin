@@ -86,6 +86,10 @@ function shouldAutoRemovePlayedFromFavorites() {
   return shouldAutoRemovePlayedFromWatchlist() && cfg()?.watchlistAutoRemovePlayedFromFavorites === true;
 }
 
+function shouldImportFavoritesOnStartup() {
+  return cfg()?.watchlistImportFavoritesOnStartup === true;
+}
+
 function labels() {
   return cfg()?.languageLabels || {};
 }
@@ -570,6 +574,80 @@ function queueFavoriteMirror(mutation) {
   });
 }
 
+async function fetchAllFavoriteItemsForUser(userId) {
+  const cleanUserId = text(userId);
+  if (!cleanUserId) return [];
+
+  const limit = 200;
+  let startIndex = 0;
+  const out = [];
+
+  while (true) {
+    const result = await makeApiRequest(
+      `/Users/${encodeURIComponent(cleanUserId)}/Items?Filters=IsFavorite&Recursive=true&IncludeItemTypes=Movie,Series,Season,Episode,Audio,MusicAlbum,MusicVideo,BoxSet,CollectionFolder,Playlist,Folder,AudioBook&SortBy=DateCreated&SortOrder=Descending&StartIndex=${startIndex}&Limit=${limit}`
+    ).catch(() => null);
+
+    const items = Array.isArray(result?.Items) ? result.Items : [];
+    if (!items.length) break;
+
+    out.push(...items);
+
+    if (items.length < limit) break;
+    startIndex += items.length;
+  }
+
+  return out;
+}
+
+async function syncFavoritesOnStartup() {
+  if (!shouldImportFavoritesOnStartup()) return;
+
+  const { userId } = getCurrentUserContext();
+  const serverId = getCurrentServerIdSafe();
+  const storageKey = `monwui:watchlist:favorites-bootstrap:${serverId || "default"}:${userId || "anonymous"}`;
+
+  if (!userId) return;
+
+  try {
+    if (sessionStorage.getItem(storageKey) === "done") return;
+  } catch {}
+
+  try {
+    await ensureWatchlistLoaded();
+
+    const favoriteItems = await fetchAllFavoriteItemsForUser(userId);
+    if (!favoriteItems.length) {
+      try {
+        sessionStorage.setItem(storageKey, "done");
+      } catch {}
+      return;
+    }
+
+    for (const item of favoriteItems) {
+      const itemId = text(item?.Id);
+      if (!itemId) continue;
+      if (getCachedWatchlistMembership(itemId, false)) continue;
+
+      try {
+        suppressFavoriteMirrorOnce(itemId, true);
+        await addToWatchlist(itemId, {
+          item,
+          __favoriteMirror: true,
+          __startupImport: true
+        });
+      } catch (error) {
+        console.debug("watchlist startup favorite import failed:", itemId, error);
+      }
+    }
+
+    try {
+      sessionStorage.setItem(storageKey, "done");
+    } catch {}
+  } catch (error) {
+    console.debug("watchlist favorite bootstrap sync failed:", error);
+  }
+}
+
 function installJellyfinFavoriteMirror() {
   if (favoriteMirrorInstalled) return;
   favoriteMirrorInstalled = true;
@@ -618,6 +696,9 @@ function installJellyfinFavoriteMirror() {
       return nativeSend.call(this, body);
     };
   }
+  scheduleFavoriteMirrorTask(() => {
+    syncFavoritesOnStartup();
+  });
 }
 
 function buildWatchlistHeaders(extra = {}) {

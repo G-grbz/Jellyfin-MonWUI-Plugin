@@ -1,5 +1,5 @@
 import { getSessionInfo, getAuthHeader } from "/Plugins/JMSFusion/runtime/api.js";
-import { getConfig } from "./config.js";
+import { getConfig, getPauseFeaturesRuntimeConfig } from "./config.js";
 import { getTomatoIconHtml } from "./customIcons.js";
 
 const HOST_ID = "jms-osd-header-ratings-v4";
@@ -19,11 +19,14 @@ function getOsdHeaderRatingsState(cfg = {}) {
   const pauseCfg = cfg?.pauseOverlay || {};
   const hasPauseKey = (key) =>
     Object.prototype.hasOwnProperty.call(pauseCfg, key);
+  const pauseRuntime = getPauseFeaturesRuntimeConfig(cfg);
 
   return {
-    enabled: hasPauseKey("showOsdHeaderRatings")
-      ? pauseCfg.showOsdHeaderRatings !== false
-      : cfg?.showRatingInfo !== false,
+    enabled: pauseRuntime.enablePauseOsdHeaderRatings && (
+      hasPauseKey("showOsdHeaderRatings")
+        ? pauseCfg.showOsdHeaderRatings !== false
+        : cfg?.showRatingInfo !== false
+    ),
     showCommunity: hasPauseKey("showOsdHeaderCommunityRating")
       ? pauseCfg.showOsdHeaderCommunityRating !== false
       : cfg?.showCommunityRating !== false,

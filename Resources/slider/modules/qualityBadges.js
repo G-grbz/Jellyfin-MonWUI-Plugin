@@ -369,8 +369,8 @@ function ensureBadgeStyle() {
     .quality-badge img.quality-icon,
     .quality-badge img.range-icon,
     .quality-badge img.codec-icon {
-      width: 24px !important;
-      height: 18px !important;
+      width: clamp(20px, 1.8vw, 40px) !important;
+      height: clamp(14px, 1.5vw, 30px) !important;
       background: rgba(28,28,46,.9);
       border-radius: 4px;
       padding: 1px;
