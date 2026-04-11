@@ -1,19 +1,21 @@
-<h1 align="center">Jellyfin MonWUI Plugin</h1>
+# Jellyfin MonWUI Plugin
 
 <p align="center">
   <img width="180" height="180" alt="Jellyfin MonWUI Plugin" src="https://github.com/user-attachments/assets/29947627-b2ff-4ecd-8a2b-4df932aca657" />
 </p>
 
 <p align="center">
-  A modular UI upgrade for Jellyfin that brings a cinematic home slider, richer metadata, hover previews,
-  profile personalization, GMMP music playback, Netflix-style pause and details views, studio hubs,
-  notifications, and a centralized settings experience.
+  A modular UI upgrade for Jellyfin that introduces a cinematic home slider, richer metadata,
+  hover previews, profile personalization, GMMP music playback, Netflix-style pause and details views,
+  studio hubs, notifications, parental PIN control, and a centralized settings experience.
 </p>
 
 <p align="center">
-  <img alt="Plugin name JMSFusion" src="https://img.shields.io/badge/Install%20Name-JMSFusion-0ea5e9?style=for-the-badge" />
-  <img alt="MIT license" src="https://img.shields.io/badge/License-MIT-7c3aed?style=for-the-badge" />
+  <img alt="Install Name" src="https://img.shields.io/badge/Install%20Name-JMSFusion-0ea5e9?style=for-the-badge" />
+  <img alt="Version" src="https://img.shields.io/github/v/release/G-grbz/Jellyfin-MonWUI-Plugin?style=for-the-badge" />
+  <img alt="License" src="https://img.shields.io/badge/License-MIT-7c3aed?style=for-the-badge" />
 </p>
+
 
 <p align="center">
   <a href="#overview">Overview</a> •
@@ -24,13 +26,17 @@
   <a href="#license">License</a>
 </p>
 
+---
+
 ## Overview
 
-Jellyfin MonWUI Plugin, installed in Jellyfin as **JMSFusion**, is an all-in-one frontend enhancement layer built around the modular slider system in `Resources/slider/`.
+**Jellyfin MonWUI Plugin** appears in Jellyfin as **JMSFusion** and acts as an all-in-one frontend enhancement layer built around a modular slider system located in `Resources/slider/`.
 
-Instead of adding a single visual tweak, it upgrades the full browsing experience: home screen presentation, metadata density, hover interactions, profile flow, music playback, pause behavior, library discovery, and settings management.
+Rather than applying a single visual tweak, it enhances the entire browsing experience — including home screen presentation, metadata depth, hover interactions, profile flow, music playback, pause behavior, library discovery, and settings management.
 
-The goal is simple: make Jellyfin feel more polished, more personal, and more premium without turning the interface into a mess.
+The goal is simple: make Jellyfin feel more polished, more personal, and more premium — without cluttering the interface.
+
+---
 
 ## Screenshots
 
@@ -57,68 +63,74 @@ The goal is simple: make Jellyfin feel more polished, more personal, and more pr
 
 ## Highlights
 
-| Area | What it adds |
-| --- | --- |
-| Home screen | User-specific slider lists, automatic row refresh, custom Jellyfin API query control, manual positioning, and four slider layouts: Compact, Normal, Full Screen, and Peak |
-| Discovery | Details overlay, hover trailers, lighter popover previews, personal recommendations, genre/director/recent rows, and Disney+-style studio hubs |
-| Metadata | Quality badges on cards, ratings, maturity badges, richer info blocks, cast/director data, subtitle and language info, and provider links |
-| Profiles | Netflix-style "Who's Watching?" chooser, desktop/mobile profile targeting, DiceBear avatar generation, and 635 built-in avatar options |
-| Playback | GMMP music player, lyrics support, subtitle customizer, Netflix-style pause screen, and Smart Pause behavior |
-| Control | A 24-tab settings panel with backup/restore, watchlist controls, notifications, trailer helpers, profile-aware settings, and admin-friendly global publishing options |
+| Area        | What it adds                                                                                                                                                     |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Home screen | User-specific slider lists, automatic row refresh, custom API query control, manual positioning, and four slider layouts: Compact, Normal, Full Screen, and Peak |
+| Discovery   | Details overlay, hover trailers, compact popover previews, personal recommendations, genre/director/recent rows, and studio hubs                                 |
+| Metadata    | Quality badges, ratings, maturity indicators, richer info blocks, cast/director data, subtitle and language info, and provider links                             |
+| Profiles    | Netflix-style profile chooser, avatar generation, and built-in avatar selection                                                                                  |
+| Playback    | GMMP music player, lyrics support, subtitle customization, Netflix-style pause screen, parental PIN control, and Smart Pause                                     |
+
+---
 
 ## Core Modules
 
-- **Slider engine** with per-profile list control, random or manual content sourcing, query-string tuning, balancing rules, and refresh logic that keeps rows up to date.
-- **Visual layouts** including Compact, Normal, Full Screen, and Peak mode, with optional diagonal presentation and manual positioning controls for theme compatibility.
-- **Home screen enhancements** such as hero cards, enhanced details modal, personal recommendations, recent rows, director rows, and quality-aware card treatment.
-- **Hover preview system** with Netflix-like trailer behavior plus a lighter popover alternative when a full preview is not desired.
-- **Pause and playback upgrades** including Smart Pause, maturity indicators, metadata-rich pause overlays, GMMP music playback, lyrics tools, and subtitle customization.
-- **Profile personalization** with avatar generation, built-in avatar picking, and a dedicated "Who's Watching?" flow for fast profile switching.
-- **Library and notification tools** including Studio Hubs, watchlist integration, newly added notifications, update notices, and continue-watching style surfaces.
-- **Advanced utilities** including trailer and theme video helper workflows, NFO support, backup/restore, multilingual UI labels, and admin-only global settings control.
+* **Slider engine** with per-profile list control, random or manual content sourcing, API query customization, balancing rules, and automatic refresh logic
+* **Visual layouts** including Compact, Normal, Full Screen, and Peak mode, with optional diagonal layout and manual positioning
+* **Home enhancements** such as hero cards, enhanced details modal, recommendations, and metadata-rich UI elements
+* **Hover preview system** with trailer playback and lightweight popover previews
+* **Playback upgrades** including Smart Pause, metadata overlays, GMMP music playback, subtitle tools, and **parental PIN control**
+* **Profile personalization** with avatar systems and fast profile switching
+* **Library & notifications** including studio hubs, watchlist integration, and notification system
+* **Trailer utilities** including trailer downloading via **yt-dlp** and trailer integration through **NFO files**
+* **Advanced utilities** such as backup/restore, multilingual UI, and admin-level controls
+
+---
 
 ## Installation
 
-This repository is **Jellyfin MonWUI Plugin**, but the plugin appears inside Jellyfin as **JMSFusion**.
+1. Open **Jellyfin Dashboard**
+2. Go to **Plugins → Repositories**
+3. Add:
 
-1. Open your **Jellyfin Dashboard**.
-2. Go to **Plugins -> Repositories**.
-3. Add this repository URL:
-
-```text
 https://raw.githubusercontent.com/G-grbz/Jellyfin-MonWUI-Plugin/main/manifest.json
-```
 
-4. Go to **Plugins -> Available**.
-5. Find and install **JMSFusion**.
-6. Restart Jellyfin.
+4. Go to **Plugins → Available**
+5. Install **JMSFusion**
+6. Restart Jellyfin
+
+---
 
 ## Uninstall
 
-1. Open **Jellyfin -> Plugins**.
-2. Uninstall **JMSFusion**.
-3. Restart Jellyfin.
-4. Return to the home page.
-5. Hard refresh the browser a few times with **Ctrl + F5**.
+1. Open **Jellyfin → Plugins**
+2. Uninstall **JMSFusion**
+3. Restart Jellyfin
+4. Hard refresh (**Ctrl + F5**)
+
+---
 
 ## Notes
 
-- After install, update, or uninstall, a hard refresh with **Ctrl + F5** is recommended to clear cached assets.
-- The slider may need a couple of refresh attempts before every UI asset is fully replaced.
-- Some advanced automation modules are optional and may require admin access, API keys, or additional server-side tools depending on your setup.
+* After install/update, perform a hard refresh (**Ctrl + F5**)
+* You may need to refresh a few times for all UI assets to fully update
+* Some advanced modules are optional and may require admin access, API keys, or server-side tools
 - If you use Watchlist and want to hide the default Jellyfin Favorites tab, add the following CSS to the Jellyfin custom CSS area:
 ```text
-  
+
   button.emby-tab-button.emby-button[data-index="1"] {
     display: none !important;
 }
 ```
+---
 
 ## Acknowledgment
 
-The original idea behind the JMS slider and its integration approach inside Jellyfin's web UI was conceived by **BobHasNoSoul**. The JMS concept is built on that foundation.
+The original idea behind the JMS slider concept — which influenced parts of JMSFusion — was created by **BobHasNoSoul**.
 
 https://github.com/BobHasNoSoul
+
+---
 
 ## License
 
