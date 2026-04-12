@@ -26,21 +26,37 @@ export function setupVisibilityHandler() {
 }
 
 export function attachMouseEvents() {
-  const indexPage = document.querySelector("#indexPage:not(.hide)");
-  if (!indexPage) return;
+  const activePage =
+    document.querySelector("#indexPage:not(.hide)") ||
+    document.querySelector("#homePage:not(.hide)");
+  if (!activePage) return;
 
-  const slidesContainer = indexPage.querySelector("#monwui-slides-container");
-  if (slidesContainer) {
-    slidesContainer.addEventListener("mouseenter", () => {
-      pauseSlideTimer(); pauseProgressBar();
-    }, { passive: true });
-    slidesContainer.addEventListener("mouseleave", () => {
-      resumeSlideTimer(); resumeProgressBar();
-    }, { passive: true });
-
+  const slidesContainer = activePage.querySelector("#monwui-slides-container");
+  if (!slidesContainer) return;
+  if (slidesContainer.__jmsHoverPauseBound) {
     if (slidesContainer.matches(":hover")) {
       pauseSlideTimer();
       pauseProgressBar();
     }
+    return;
+  }
+
+  const onMouseEnter = () => {
+    pauseSlideTimer();
+    pauseProgressBar();
+  };
+  const onMouseLeave = () => {
+    resumeSlideTimer();
+    resumeProgressBar();
+  };
+
+  slidesContainer.addEventListener("mouseenter", onMouseEnter, { passive: true });
+  slidesContainer.addEventListener("mouseleave", onMouseLeave, { passive: true });
+  slidesContainer.__jmsHoverPauseBound = true;
+  slidesContainer.__jmsHoverPauseEnter = onMouseEnter;
+  slidesContainer.__jmsHoverPauseLeave = onMouseLeave;
+
+  if (slidesContainer.matches(":hover")) {
+    onMouseEnter();
   }
 }

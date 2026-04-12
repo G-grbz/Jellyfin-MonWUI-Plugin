@@ -2,9 +2,10 @@ import { makeApiRequest, getSessionInfo, fetchItemDetails, getVideoStreamUrl, pl
 import { getConfig, getServerAddress } from "./config.js";
 import { getVideoQualityText } from "./containerUtils.js";
 import { getCurrentVersionFromEnv, compareSemver } from "./update.js";
+import { resolveSliderAssetHref } from "./assetLinks.js";
 import { withServer } from "./jfUrl.js";
 import { faIconHtml } from "./faIcons.js";
-import { openDetailsModal } from "./detailsModal.js";
+import { openDetailsModal } from "./detailsModalLoader.js";
 
 const config = getConfig();
 
@@ -398,10 +399,10 @@ function loadThemePreference() {
 function setTheme(themeNumber) {
   const link = ensureNotifStylesheet();
   const href =
-    themeNumber === '1' ? './slider/src/notifications.css'  :
-    themeNumber === '2' ? './slider/src/notifications2.css' :
-    themeNumber === '3' ? './slider/src/notifications3.css' :
-                          './slider/src/notifications4.css';
+    themeNumber === '1' ? resolveSliderAssetHref("/slider/src/notifications.css")  :
+    themeNumber === '2' ? resolveSliderAssetHref("/slider/src/notifications2.css") :
+    themeNumber === '3' ? resolveSliderAssetHref("/slider/src/notifications3.css") :
+                          resolveSliderAssetHref("/slider/src/notifications4.css");
   let settled = false;
   const finish = () => {
     if (settled) return;
@@ -415,8 +416,7 @@ function setTheme(themeNumber) {
   requestAnimationFrame(() => { if (!settled) link.disabled = false; });
   setTimeout(() => { if (!settled) link.disabled = false; }, 50);
   link.disabled = true;
-  const absHref = new URL(href, location.href).href;
-  if (link.href !== absHref) {
+  if (link.href !== href) {
     link.href = href;
   } else {
     finish();
@@ -816,6 +816,7 @@ document.addEventListener(
 );
 
 export function forcejfNotifBtnPointerEvents() {
+   let rafId = 0;
    const apply = () => {
      document.querySelectorAll('html .skinHeader').forEach(el => {
        el.style.setProperty('pointer-events', 'all', 'important');
@@ -830,6 +831,14 @@ export function forcejfNotifBtnPointerEvents() {
      }
    };
 
+  const queueApply = () => {
+    if (rafId) return;
+    rafId = requestAnimationFrame(() => {
+      rafId = 0;
+      apply();
+    });
+  };
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', apply);
   } else {
@@ -837,11 +846,11 @@ export function forcejfNotifBtnPointerEvents() {
   }
 
   if (!__forcePEObs) {
-    __forcePEObs = new MutationObserver(apply);
-    __forcePEObs.observe(document.documentElement, {
+    const root = document.body || document.documentElement;
+    __forcePEObs = new MutationObserver(queueApply);
+    __forcePEObs.observe(root, {
       subtree: true,
-      childList: true,
-      attributes: true
+      childList: true
     });
     window.addEventListener('pagehide', () => { try { __forcePEObs.disconnect(); } catch {} __forcePEObs = null; }, { once: true });
   }
@@ -1087,7 +1096,7 @@ function getDetailFor(n) {
         closeModal();
         await openPromise;
       } catch (err) {
-        console.warn("notification details modal open error:", err);
+        console.error("notification details modal open error:", err);
       }
     });
   }
@@ -1642,7 +1651,6 @@ function migrateNouserToUser() {
     const v = localStorage.getItem(src);
     if (v && !localStorage.getItem(dst)) {
       localStorage.setItem(dst, v);
-      console.log(`[notif] migrated ${p} from nouser -> ${uid}`);
     }
   }
 }
@@ -2028,7 +2036,7 @@ window.jfNotifyUpdateAvailable = ({ latest, url, remindMs }) => {
       setUpdateToastInfo({ latest, shownAt: now });
     }
   } catch (e) {
-    console.warn("jfNotifyUpdateAvailable error:", e);
+    console.error("jfNotifyUpdateAvailable error:", e);
   }
 };
 
@@ -2397,13 +2405,11 @@ function formatEpisodeHeading({
       if (typeof opts.bypassDedup === 'boolean') S.bypassDedup = opts.bypassDedup;
       if (opts.panel) ensurePanel();
       bindImgObserver(); bindToastObserver(); bindModalGuards(); startDedupRelax();
-      console.log('[notif:test] enabled', { ...S });
       return this;
     },
     disable() {
       S.enabled = false;
       stopDedupRelax();
-      console.log('[notif:test] disabled');
       return this;
     },
     openPanel(){ ensurePanel(); return this; },
@@ -2426,7 +2432,4 @@ function formatEpisodeHeading({
       p ? p.remove() : ensurePanel();
     }
   });
-
-  console.log('%c[notif:test] hazir — jfNotifTest.enable({panel:true}) ile aç',
-    'color:#6cf;font-weight:bold;');
 })();

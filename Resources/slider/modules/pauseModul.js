@@ -1696,7 +1696,7 @@ export function setupPauseScreen() {
     return () => {};
   }
 
-  console.log("[PO] setupPauseScreen called", { active: window.__jmsPauseOverlay?.active });
+  dlog("[PO] setupPauseScreen called", { active: window.__jmsPauseOverlay?.active });
   let _badgeCtx = "first";
 
   const config = getConfig();

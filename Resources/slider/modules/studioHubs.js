@@ -2,8 +2,13 @@ import { getSessionInfo, getEmbyHeaders, makeApiRequest, updateFavoriteStatus } 
 import { getConfig, getDeviceProfileAuto, getHomeSectionsRuntimeConfig } from './config.js';
 import { getLanguageLabels } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";
-import { openDetailsModal } from "./detailsModal.js";
-import { waitForAnyVisible } from "../main.js";
+import { openDetailsModal } from "./detailsModalLoader.js";
+import { waitForAnyVisible } from "./domVisibility.js";
+import {
+  bindManagedSectionsBelowNative,
+  getLastNativeHomeSection
+} from "./homeSectionNative.js";
+import { resolveSliderAssetHref } from "./assetLinks.js";
 import { withServer } from "./jfUrl.js";
 import { ensureWatchlistLoaded, getCachedWatchlistMembership, getWatchlistButtonText } from "./watchlist.js";
 import {
@@ -18,6 +23,9 @@ import {
 } from "./studioHubsShared.js";
 
 const config = getConfig();
+const PLACEHOLDER_URL = resolveSliderAssetHref(
+  config.placeholderImage || "/slider/src/images/placeholder.png"
+);
 const ALIASES = {
   "Marvel Studios": ["marvel studios","marvel","marvel entertainment","marvel studios llc"],
   "Pixar": ["pixar","pixar animation studios","disney pixar"],
@@ -80,6 +88,17 @@ let __fetchAbort = null;
 let __studioHubsMounting = false;
 let __studioHubsMountedOnce = false;
 let __studioHubsRetryTo = null;
+
+function getActiveHomePage() {
+  return document.querySelector("#indexPage:not(.hide)") || document.querySelector("#homePage:not(.hide)");
+}
+
+function hasMountedStudioHubsSection() {
+  const page = getActiveHomePage();
+  const section = page?.querySelector?.("#studio-hubs");
+  const row = section?.querySelector?.(".hub-row");
+  return !!section && !!row;
+}
 
 function upsertImg(card, className) {
   let img = card.querySelector('img.hub-img');
@@ -287,7 +306,7 @@ function setPopoverContent(studioName, items) {
     const favAddText = getWatchlistButtonText(item, false);
     const favRemoveText = getWatchlistButtonText(item, true);
     itemEl.innerHTML = `
-      <img class="hub-preview-poster" src="${posterUrl || withServer('/css/images/placeholder.png')}" alt="${item.Name}" loading="lazy">
+      <img class="hub-preview-poster" src="${posterUrl || PLACEHOLDER_URL}" alt="${item.Name}" loading="lazy">
       <div class="hub-preview-info">
         <div class="hub-preview-item-title">${item.Name}</div>
         <div class="hub-preview-rating">
@@ -859,22 +878,29 @@ function createBackdropCardShell(title, studio, serverId) {
 function cleanupStudioHubsSection() {
   clearTimeout(__studioHubsRetryTo);
   __studioHubsRetryTo = null;
+  __studioHubBusy = false;
+  __studioHubsMounting = false;
+  __studioHubsMountedOnce = false;
 
   if (__fetchAbort) {
     try { __fetchAbort.abort(); } catch {}
   }
+  __fetchAbort = null;
 
-  const section = document.getElementById("studio-hubs");
-  if (!section) return;
+  document.querySelectorAll("#studio-hubs").forEach((section) => {
+    try {
+      section.querySelectorAll('video.hub-video').forEach(v => {
+        try { v.pause(); } catch {}
+        try { v.removeAttribute('src'); v.load?.(); } catch {}
+      });
+    } catch {}
 
-  try {
-    section.querySelectorAll('video.hub-video').forEach(v => {
-      try { v.pause(); } catch {}
-      try { v.removeAttribute('src'); v.load?.(); } catch {}
-    });
-  } catch {}
+    try { section.remove(); } catch {}
+  });
+}
 
-  try { section.remove(); } catch {}
+export function cleanupStudioHubs() {
+  cleanupStudioHubsSection();
 }
 
 export async function renderStudioHubs() {
@@ -902,6 +928,7 @@ export async function renderStudioHubs() {
       return;
     }
      setupScroller(row);
+     resetHubRowScrollPosition(row);
      row.innerHTML = "";
      let { serverId, userId } = getSessionInfo();
      serverId = serverId || localStorage.getItem("serverId") || sessionStorage.getItem("serverId") || null;
@@ -1007,6 +1034,12 @@ export async function renderStudioHubs() {
       }
     }));
 
+    requestAnimationFrame(() => {
+      try {
+        row.__updateButtons?.();
+      } catch {}
+    });
+
     if (!resolved.length) {
     }
   } catch (e) {
@@ -1024,20 +1057,42 @@ window.addEventListener("jms:studio-hubs-visibility-updated", () => {
 });
 
 function ensureContainer(indexPage) {
-  const all = indexPage.querySelectorAll("#studio-hubs");
+  const all = document.querySelectorAll("#studio-hubs");
   if (all.length > 1) {
-    for (let i = 1; i < all.length; i++) {
+    const keep = indexPage.querySelector("#studio-hubs") || all[0];
+    for (let i = 0; i < all.length; i++) {
+     if (all[i] === keep) continue;
      all[i].querySelectorAll('video.hub-video').forEach(v => {
        try { v.pause(); } catch {}
        try { v.removeAttribute('src'); v.load?.(); } catch {}
      });
      all[i].remove();
-   }
+    }
   }
   const homeSections = indexPage.querySelector(".homeSectionsContainer");
   if (!homeSections) return null;
+  bindManagedSectionsBelowNative(homeSections);
+  const moveSectionIntoPlace = (section) => {
+    const personal = homeSections.querySelector("#personal-recommendations");
+    if (personal && personal.parentElement === homeSections) {
+      homeSections.insertBefore(section, personal);
+      return;
+    }
+    const nativeAnchor = getLastNativeHomeSection(homeSections);
+    if (nativeAnchor && nativeAnchor.parentElement === homeSections) {
+      homeSections.insertBefore(section, nativeAnchor);
+    } else if (section.parentElement !== homeSections) {
+      if (homeSections.firstElementChild) {
+        homeSections.insertBefore(section, homeSections.firstElementChild);
+      } else {
+        homeSections.appendChild(section);
+      }
+    } else if (homeSections.firstElementChild !== section) {
+      homeSections.insertBefore(section, homeSections.firstElementChild);
+    }
+  };
 
-  let section = indexPage.querySelector("#studio-hubs");
+  let section = indexPage.querySelector("#studio-hubs") || document.getElementById("studio-hubs");
   if (!section) {
     section = document.createElement("div");
     section.id = "studio-hubs";
@@ -1056,17 +1111,44 @@ function ensureContainer(indexPage) {
         </button>
       </div>
     `;
-    const firstChild = homeSections.firstElementChild;
-    if (firstChild) homeSections.insertBefore(section, firstChild);
-    else homeSections.appendChild(section);
+    moveSectionIntoPlace(section);
+  } else if (section.parentElement !== homeSections) {
+    moveSectionIntoPlace(section);
+  } else {
+    moveSectionIntoPlace(section);
   }
   return section.querySelector(".hub-row");
+}
+
+function resetHubRowScrollPosition(row) {
+  if (!(row instanceof HTMLElement)) return;
+  row.style.overflowAnchor = "none";
+  if (Math.abs(Number(row.scrollLeft) || 0) <= 1) {
+    try {
+      row.__updateButtons?.();
+    } catch {}
+    return;
+  }
+
+  const previousInlineBehavior = row.style.scrollBehavior;
+  row.style.scrollBehavior = "auto";
+  row.scrollLeft = 0;
+
+  requestAnimationFrame(() => {
+    if (!row.isConnected) return;
+    row.style.scrollBehavior = previousInlineBehavior;
+    try {
+      row.__updateButtons?.();
+    } catch {}
+  });
 }
 
 function setupScroller(row) {
   if (row.dataset.scrollerMounted === "1") {
     requestAnimationFrame(() => {
-      row.dispatchEvent(new Event('scroll'));
+      try {
+        row.__updateButtons?.();
+      } catch {}
     });
     return;
   }
@@ -1083,6 +1165,7 @@ function setupScroller(row) {
     if (btnL) btnL.setAttribute("aria-disabled", atStart ? "true" : "false");
     if (btnR) btnR.setAttribute("aria-disabled", atEnd   ? "true" : "false");
   };
+  row.__updateButtons = updateButtons;
   const blurAfterPointerClick = (btn, e) => {
     if (!btn) return;
     if ((e?.detail || 0) <= 0) return;
@@ -1140,11 +1223,15 @@ async function searchStudiosByAliases(desired, signal) {
   return { Id: best.Id, Name: best.Name, ImageTags: best.ImageTags || {}, PrimaryImageTag: best.PrimaryImageTag || (best.ImageTags?.Primary) || null };
 }
 
-export function ensureStudioHubsMounted({ eager=false } = {}) {
+export function ensureStudioHubsMounted({ eager=false, force=false } = {}) {
   const runtimeConfig = getConfig?.() || config || {};
   const homeSectionsConfig = getHomeSectionsRuntimeConfig(runtimeConfig);
   if (!homeSectionsConfig.enableStudioHubs) {
     cleanupStudioHubsSection();
+    return;
+  }
+
+  if (!force && __studioHubsMountedOnce && hasMountedStudioHubsSection()) {
     return;
   }
 
@@ -1160,8 +1247,11 @@ export function ensureStudioHubsMounted({ eager=false } = {}) {
         scheduleRetry(1200);
         return;
       }
-      const section = ensureContainer(document.querySelector("#indexPage:not(.hide)") || document.querySelector("#homePage:not(.hide)"));
-      if (!section) { scheduleRetry(800); return; }
+      const row = ensureContainer(document.querySelector("#indexPage:not(.hide)") || document.querySelector("#homePage:not(.hide)"));
+      if (!row) { scheduleRetry(800); return; }
+      if (!force && __studioHubsMountedOnce && hasMountedStudioHubsSection()) {
+        return;
+      }
       await renderStudioHubs();
       __studioHubsMountedOnce = true;
     } finally {

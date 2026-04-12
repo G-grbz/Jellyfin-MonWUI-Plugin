@@ -8,7 +8,7 @@ import { positionModalRelativeToDot, centerActiveDot } from "./navigation.js";
 import { modalState, set, get, resetModalRefs } from './modalState.js';
 import { applyDotPosterAnimation } from "./animations.js";
 import { getCurrentIndex } from "./sliderState.js";
-import { openDetailsModal } from "./detailsModal.js";
+import { openDetailsModal } from "./detailsModalLoader.js";
 import { withServer } from "./jfUrl.js";
 import { getWatchlistButtonTitle, hydrateWatchlistState } from "./watchlist.js";
 import { cleanupImageResourceRefs } from "./imageResourceCleanup.js";

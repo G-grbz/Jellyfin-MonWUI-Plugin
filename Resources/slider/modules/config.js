@@ -297,7 +297,7 @@ export function getConfig() {
     showWatchedInfo: localStorage.getItem('showWatchedInfo') !== 'false',
     showRuntimeInfo: localStorage.getItem('showRuntimeInfo') !== 'false',
     showQualityInfo: localStorage.getItem('showQualityInfo') !== 'false',
-    showProgressBar: localStorage.getItem('showProgressBar') !== 'false',
+    showProgressBar: false,
     showProgressAsSeconds: localStorage.getItem('showProgressAsSeconds') === 'true',
     showQualityDetail: localStorage.getItem('showQualityDetail') !== 'false',
     showActorInfo: localStorage.getItem('showActorInfo') === 'true',
@@ -335,6 +335,11 @@ export function getConfig() {
     enableTrailerPlayback: localStorage.getItem('enableTrailerPlayback') === 'true',
     enableVideoPlayback: localStorage.getItem('enableVideoPlayback') === 'true',
     dotBackgroundImageType: localStorage.getItem('dotBackgroundImageType') || 'none',
+    dotVisibleCount: (() => {
+      const v = localStorage.getItem('dotVisibleCount');
+      const n = parseInt(v, 10);
+      return Number.isFinite(n) ? Math.max(0, n) : 0;
+    })(),
     trailerBackgroundImageType: localStorage.getItem('trailerBackgroundImageType') || 'trailerBgImage',
     watchBackgroundImageType: localStorage.getItem('watchBackgroundImageType') || 'watchBgImage',
     favoriteBackgroundImageType: localStorage.getItem('favoriteBackgroundImageType') || 'favoriBgImage',
@@ -345,7 +350,7 @@ export function getConfig() {
     useRandomContent: localStorage.getItem('useRandomContent') !== 'false',
     fullscreenMode: localStorage.getItem('fullscreenMode') === 'true' ? true : false,
     listLimit: 20,
-    version: "v2.5.0",
+    version: "v2.5.1",
     historySize: 20,
     updateInterval: 300000,
     nextTracksSource: localStorage.getItem('nextTracksSource') || 'playlist',
@@ -435,6 +440,8 @@ export function getConfig() {
     enablePauseFeaturesMaster: (localStorage.getItem('enablePauseFeaturesMaster') || 'true') !== 'false',
     enableSubtitleCustomizerModule: (localStorage.getItem('enableSubtitleCustomizerModule') || 'true') !== 'false',
     enableParentalPinModule: (localStorage.getItem('enableParentalPinModule') || 'true') !== 'false',
+    enableCustomSplashScreen: (localStorage.getItem('enableCustomSplashScreen') || 'true') !== 'false',
+    customSplashTitle: (localStorage.getItem('customSplashTitle') || '').trim(),
 
     enableDirectorRows: localStorage.getItem('enableDirectorRows') !== 'false',
     showDirectorRowsHeroCards: localStorage.getItem('showDirectorRowsHeroCards') !== 'false',
@@ -483,6 +490,16 @@ export function getConfig() {
     recentEpisodesCardCount: parseInt(localStorage.getItem('recentEpisodesCardCount'), 10) || 10,
 
     recentRowsSplitTvLibs: (localStorage.getItem('recentRowsSplitTvLibs') || 'true') !== 'false',
+    recentRowsSplitMovieLibs: localStorage.getItem('recentRowsSplitMovieLibs') === 'true',
+
+    recentMoviesLibIds: (() => {
+      try {
+        const raw = localStorage.getItem('recentMoviesLibIds');
+        if (!raw || raw === '[object Object]') return [];
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr.map(x=>String(x||'').trim()).filter(Boolean) : [];
+      } catch { return []; }
+    })(),
 
     recentSeriesTvLibIds: (() => {
       try {

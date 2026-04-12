@@ -313,28 +313,12 @@ export function createSliderPanel(config, labels) {
   sliderDesc.textContent = labels.sliderDurationDescription || 'Bu ayar, ms cinsinden olmalıdır.';
   sliderDiv.append(sliderLabel, sliderDesc, sliderInput);
 
-  const showProgressCheckbox = createCheckbox(
-    'showProgressBar',
-    labels.progressBar || "ProgressBar'ı Göster",
-    config.showProgressBar
-  );
-  sliderDiv.appendChild(showProgressCheckbox);
   const showSecondsCheckbox = createCheckbox(
     'showProgressAsSeconds',
     (labels.showProgressAsSeconds || "İlerlemeyi Saniye Olarak Göster"),
     config.showProgressAsSeconds || false
   );
   sliderDiv.appendChild(showSecondsCheckbox);
-  const spInput = showProgressCheckbox.querySelector('input');
-  const ssInput = showSecondsCheckbox.querySelector('input');
-
-  function syncSecondsAvailability() {
-    const enabled = !!spInput.checked;
-    ssInput.disabled = !enabled;
-    showSecondsCheckbox.style.opacity = enabled ? 1 : 0.6;
-  }
-  spInput.addEventListener('change', syncSecondsAvailability);
-  requestAnimationFrame(syncSecondsAvailability);
 
   const playbackOptionsDiv = document.createElement('div');
   playbackOptionsDiv.className = 'fsetting-item';
@@ -659,6 +643,28 @@ export function createSliderPanel(config, labels) {
   );
   sliderDiv.appendChild(posterDotsCheckbox);
 
+  const dotVisibleCountDiv = document.createElement('div');
+  dotVisibleCountDiv.className = 'setting-item dot-visible-count-container';
+
+  const dotVisibleCountLabel = document.createElement('label');
+  dotVisibleCountLabel.textContent = labels.dotVisibleCount || 'Görünür dot sayısı:';
+  dotVisibleCountLabel.htmlFor = 'dotVisibleCount';
+
+  const dotVisibleCountInput = document.createElement('input');
+  dotVisibleCountInput.type = 'number';
+  dotVisibleCountInput.min = '0';
+  dotVisibleCountInput.step = '1';
+  dotVisibleCountInput.value = Math.max(0, Number(config.dotVisibleCount ?? 0));
+  dotVisibleCountInput.name = 'dotVisibleCount';
+  dotVisibleCountInput.id = 'dotVisibleCount';
+
+  const dotVisibleCountDesc = document.createElement('div');
+  dotVisibleCountDesc.className = 'description-text';
+  dotVisibleCountDesc.textContent = labels.dotVisibleCountDescription || '0 = tüm dotlar görünür. Daha düşük değerlerde uzaktaki dotlar hidden sınıfı alır.';
+
+  dotVisibleCountDiv.append(dotVisibleCountLabel, dotVisibleCountDesc, dotVisibleCountInput);
+  sliderDiv.appendChild(dotVisibleCountDiv);
+
   const previewModalCheckbox = createCheckbox(
     'previewModal',
     labels.previewModal || 'Netflix Tarzı Önizleme Modalı',
@@ -734,6 +740,7 @@ export function createSliderPanel(config, labels) {
   sliderDiv.appendChild(dotBgDiv);
 
   bindCheckboxKontrol('#showDotNavigation', '.dot-bg-container', 0.6, [dotBgSelect, dotBgLabel]);
+  bindCheckboxKontrol('#showDotNavigation', '.dot-visible-count-container', 0.6, [dotVisibleCountInput, dotVisibleCountLabel]);
 
   const dotblurDiv = document.createElement('div');
   dotblurDiv.className = 'setting-item';

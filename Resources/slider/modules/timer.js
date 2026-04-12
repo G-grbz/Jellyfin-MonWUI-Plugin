@@ -13,8 +13,57 @@ export const SLIDE_DURATION = getConfig().sliderDuration;
 let autoSlideTimeout = null;
 let slideStartTime = 0;
 let remainingTime = 0;
+let progressStartRafA = 0;
+let progressStartRafB = 0;
+
+function getActiveSlidesContainer() {
+  return document.querySelector(
+    "#indexPage:not(.hide) #monwui-slides-container, #homePage:not(.hide) #monwui-slides-container, #monwui-slides-container"
+  );
+}
+
+function shouldPauseForActiveHover() {
+  try {
+    return !!getActiveSlidesContainer()?.matches?.(":hover");
+  } catch {
+    return false;
+  }
+}
+
+function isCustomSplashBlocking() {
+  try {
+    const root = document.documentElement;
+    return !!root?.hasAttribute("data-jms-custom-splash")
+      && !root?.hasAttribute("data-jms-custom-splash-hidden");
+  } catch {
+    return false;
+  }
+}
+
+function cancelPendingProgressStart() {
+  if (progressStartRafA) {
+    cancelAnimationFrame(progressStartRafA);
+    progressStartRafA = 0;
+  }
+  if (progressStartRafB) {
+    cancelAnimationFrame(progressStartRafB);
+    progressStartRafB = 0;
+  }
+}
+
+function scheduleProgressStart(duration) {
+  cancelPendingProgressStart();
+  progressStartRafA = requestAnimationFrame(() => {
+    progressStartRafA = 0;
+    progressStartRafB = requestAnimationFrame(() => {
+      progressStartRafB = 0;
+      startProgressBarWithDuration(duration);
+    });
+  });
+}
 
 export function clearAllTimers() {
+  cancelPendingProgressStart();
   try {
     if (autoSlideTimeout) {
       clearTimeout(autoSlideTimeout);
@@ -50,17 +99,24 @@ if (!window.__sliderVisibilityBound) {
 export function startSlideTimer() {
   clearAllTimers();
   remainingTime = SLIDE_DURATION;
-  slideStartTime = Date.now();
-
   resetProgressBar();
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      startProgressBarWithDuration(remainingTime);
-    });
-  });
+
+  if (isCustomSplashBlocking()) {
+    window.mySlider = window.mySlider || {};
+    window.mySlider.autoSlideTimeout = null;
+    return;
+  }
+
+  slideStartTime = Date.now();
+  scheduleProgressStart(remainingTime);
   autoSlideTimeout = setTimeout(handleAutoAdvance, remainingTime);
   window.mySlider = window.mySlider || {};
   window.mySlider.autoSlideTimeout = autoSlideTimeout;
+
+  if (shouldPauseForActiveHover()) {
+    pauseSlideTimer();
+    pauseProgressBar();
+  }
 }
 
 function handleAutoAdvance() {
@@ -73,10 +129,12 @@ function handleAutoAdvance() {
 }
 
 export function stopSlideTimer() {
+  cancelPendingProgressStart();
   clearAllTimers();
 }
 
 export function pauseSlideTimer() {
+  cancelPendingProgressStart();
   if (autoSlideTimeout) {
     clearTimeout(autoSlideTimeout);
     autoSlideTimeout = null;
@@ -90,6 +148,8 @@ export function pauseSlideTimer() {
 }
 
 export function resumeSlideTimer() {
+  if (isCustomSplashBlocking()) return;
+  if (shouldPauseForActiveHover()) return;
   if (!autoSlideTimeout && remainingTime > 0) {
     slideStartTime = Date.now();
     resumeProgressBar();

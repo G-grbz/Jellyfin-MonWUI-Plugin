@@ -106,7 +106,7 @@ const __mo = new MutationObserver((muts) => {
     });
   }
 });
-__mo.observe(document.documentElement, { childList: true, subtree: true });
+__mo.observe(document.body || document.documentElement, { childList: true, subtree: true });
 
 function cleanupTree(root) {
   if (root.nodeType !== 1) return;

@@ -26,13 +26,6 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
             _logger = logger;
         }
 
-        private void NoCache()
-        {
-            Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
-            Response.Headers["Pragma"] = "no-cache";
-            Response.Headers["Expires"] = "0";
-        }
-
         [HttpGet("{name}.js")]
         public IActionResult GetScript(string name)
         {
@@ -43,6 +36,11 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
 
             try
             {
+                if (AssetVersioning.TryHandleConditionalGet(HttpContext, $"runtime:{name}"))
+                {
+                    return StatusCode(304);
+                }
+
                 var asm = typeof(JMSFusionPlugin).Assembly;
                 var ns = typeof(JMSFusionPlugin).Namespace;
                 var resourceName = $"{ns}.{resourceSuffix}";
@@ -57,7 +55,6 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
                 using var ms = new MemoryStream();
                 stream.CopyTo(ms);
 
-                NoCache();
                 return File(ms.ToArray(), "application/javascript; charset=utf-8");
             }
             catch (Exception ex)

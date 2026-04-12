@@ -2,6 +2,89 @@ import { getConfig } from './config.js';
 
 let homeTopObserver = null;
 let skinHeaderObserver = null;
+let applyHomeTop = null;
+let applySkinHeader = null;
+let homeTopLifecycleBound = false;
+let skinHeaderLifecycleBound = false;
+
+const OBSERVER_OPTIONS = {
+  subtree: true,
+  childList: true,
+  attributes: false
+};
+
+function scheduleBurst(fn) {
+  if (typeof fn !== 'function') return;
+  const delays = [0, 60, 180, 420];
+  for (const delay of delays) {
+    setTimeout(() => {
+      try { fn(); } catch {}
+    }, delay);
+  }
+}
+
+function reconnectObserver(observer) {
+  const root = document.body || document.documentElement;
+  if (!observer || !root || document.visibilityState === 'hidden') return;
+  try { observer.disconnect(); } catch {}
+  try { observer.observe(root, OBSERVER_OPTIONS); } catch {}
+}
+
+function bindHomeTopLifecycle() {
+  if (homeTopLifecycleBound) return;
+  homeTopLifecycleBound = true;
+
+  const reapply = () => {
+    scheduleBurst(() => {
+      try { applyHomeTop?.(); } catch {}
+      reconnectObserver(homeTopObserver);
+    });
+  };
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      try { homeTopObserver?.disconnect(); } catch {}
+      return;
+    }
+    reapply();
+  });
+
+  window.addEventListener('pageshow', reapply);
+  window.addEventListener('pagehide', () => {
+    try { homeTopObserver?.disconnect(); } catch {}
+  });
+  window.addEventListener('hashchange', reapply);
+  window.addEventListener('popstate', reapply);
+  window.addEventListener('focus', reapply);
+}
+
+function bindSkinHeaderLifecycle() {
+  if (skinHeaderLifecycleBound) return;
+  skinHeaderLifecycleBound = true;
+
+  const reapply = () => {
+    scheduleBurst(() => {
+      try { applySkinHeader?.(); } catch {}
+      reconnectObserver(skinHeaderObserver);
+    });
+  };
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      try { skinHeaderObserver?.disconnect(); } catch {}
+      return;
+    }
+    reapply();
+  });
+
+  window.addEventListener('pageshow', reapply);
+  window.addEventListener('pagehide', () => {
+    try { skinHeaderObserver?.disconnect(); } catch {}
+  });
+  window.addEventListener('hashchange', reapply);
+  window.addEventListener('popstate', reapply);
+  window.addEventListener('focus', reapply);
+}
 
 function isMobileDevice() {
   const widthNarrow = window.matchMedia?.('(max-width: 768px)')?.matches;
@@ -151,41 +234,23 @@ export function forceHomeSectionsTop() {
     }
   };
 
+  applyHomeTop = applyAlways;
+  bindHomeTopLifecycle();
+
   if (!homeTopObserver) {
     if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', applyAlways, { once: true });
+      document.addEventListener('DOMContentLoaded', () => scheduleBurst(applyAlways), { once: true });
     } else {
-      applyAlways();
+      scheduleBurst(applyAlways);
     }
 
-    homeTopObserver = new MutationObserver(applyAlways);
-    homeTopObserver.observe(document.documentElement, {
-      subtree: true,
-      childList: true,
-      attributes: false
+    homeTopObserver = new MutationObserver(() => {
+      try { applyHomeTop?.(); } catch {}
     });
-
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') {
-        try { homeTopObserver.disconnect(); } catch {}
-      } else {
-        try {
-          homeTopObserver.observe(document.documentElement, {
-            subtree: true,
-            childList: true,
-            attributes: false
-          });
-          applyAlways();
-        } catch {}
-      }
-    });
-
-    window.addEventListener('pagehide', () => {
-      try { homeTopObserver.disconnect(); } catch {}
-      homeTopObserver = null;
-    }, { once: true });
+    reconnectObserver(homeTopObserver);
   } else {
-    applyAlways();
+    scheduleBurst(applyAlways);
+    reconnectObserver(homeTopObserver);
   }
 }
 
@@ -207,40 +272,22 @@ export function forceSkinHeaderPointerEvents() {
     }
   };
 
+  applySkinHeader = apply;
+  bindSkinHeaderLifecycle();
+
   if (!skinHeaderObserver) {
     if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', apply, { once: true });
+      document.addEventListener('DOMContentLoaded', () => scheduleBurst(apply), { once: true });
     } else {
-      apply();
+      scheduleBurst(apply);
     }
 
-    skinHeaderObserver = new MutationObserver(apply);
-    skinHeaderObserver.observe(document.documentElement, {
-      subtree: true,
-      childList: true,
-      attributes: false
+    skinHeaderObserver = new MutationObserver(() => {
+      try { applySkinHeader?.(); } catch {}
     });
-
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') {
-        try { skinHeaderObserver.disconnect(); } catch {}
-      } else {
-        try {
-          skinHeaderObserver.observe(document.documentElement, {
-            subtree: true,
-            childList: true,
-            attributes: false
-          });
-          apply();
-        } catch {}
-      }
-    });
-
-    window.addEventListener('pagehide', () => {
-      try { skinHeaderObserver.disconnect(); } catch {}
-      skinHeaderObserver = null;
-    }, { once: true });
+    reconnectObserver(skinHeaderObserver);
   } else {
-    apply();
+    scheduleBurst(apply);
+    reconnectObserver(skinHeaderObserver);
   }
 }

@@ -70,6 +70,29 @@ function showPlayNowSuccessNotification(duration = 3000) {
 
 let __parentalPinRuntimePromise = null;
 
+function warmParentalPinRuntimeIfEnabled() {
+  try {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    const liveConfig = (typeof getConfig === "function" ? getConfig() : null) || config || {};
+    if (!isParentalPinModuleEnabled(liveConfig)) {
+      return;
+    }
+
+    if (!__parentalPinRuntimePromise) {
+      __parentalPinRuntimePromise = import("/slider/modules/parentalPinRuntime.js");
+    }
+
+    __parentalPinRuntimePromise.catch((error) => {
+      console.warn("ParentalPin runtime preload failed:", error);
+    });
+  } catch (error) {
+    console.warn("ParentalPin runtime preload error:", error);
+  }
+}
+
 async function maybeEnsureParentalPinBeforePlayback(item, options = {}) {
   try {
     const liveConfig = (typeof getConfig === "function" ? getConfig() : null) || config || {};
@@ -92,6 +115,8 @@ async function maybeEnsureParentalPinBeforePlayback(item, options = {}) {
     return true;
   }
 }
+
+warmParentalPinRuntimeIfEnabled();
 
 async function __getGmmp() {
   try {

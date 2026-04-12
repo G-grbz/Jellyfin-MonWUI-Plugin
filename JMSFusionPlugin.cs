@@ -158,13 +158,12 @@ namespace Jellyfin.Plugin.JMSFusion
 
         public string BuildScriptsHtml(string? pathBase = null)
         {
-            var ver = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
             var sb = new StringBuilder();
             sb.AppendLine("<!-- SL-INJECT BEGIN -->");
-            sb.AppendLine($@"<script type=""module"" src=""../Plugins/JMSFusion/runtime/storage-preload.js?v={ver}""></script>");
-            sb.AppendLine($@"<script type=""module"" src=""../slider/main.js?v={ver}""></script>");
-            sb.AppendLine($@"<script type=""module"" src=""../slider/modules/player/main.js?v={ver}""></script>");
+            sb.AppendLine(AssetVersioning.BuildBootstrapScript());
+            sb.AppendLine($@"<script type=""module"" src=""{AssetVersioning.AppendVersionQuery("../Plugins/JMSFusion/runtime/storage-preload.js")}""></script>");
+            sb.AppendLine($@"<script type=""module"" src=""{AssetVersioning.AppendVersionQuery("../slider/main.js")}""></script>");
+            sb.AppendLine($@"<script type=""module"" src=""{AssetVersioning.AppendVersionQuery("../slider/modules/player/main.js")}""></script>");
             sb.AppendLine("<!-- SL-INJECT END -->");
             return sb.ToString();
         }

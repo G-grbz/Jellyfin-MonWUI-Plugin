@@ -3,7 +3,7 @@ import { withServer } from "./jfUrl.js";
 import { getConfig } from "./config.js";
 import { getLanguageLabels } from "../language/index.js";
 import { CollectionCacheDB } from "./collectionCacheDb.js";
-import { getYoutubeEmbedUrl } from "./utils.js";
+import { formatOfficialRatingLabel, getYoutubeEmbedUrl } from "./utils.js";
 import { getGlobalTmdbApiKey, sanitizeTmdbApiKey } from "./jmsPluginConfig.js";
 import { ensureStudioHubLogoFromTmdb, ensureStudioHubManualEntry, JMS_STUDIO_HUB_MANUAL_ENTRY_ADDED_EVENT } from "./studioHubsShared.js";
 import { showNotification } from "./player/ui/notification.js";
@@ -2978,7 +2978,7 @@ export async function openDetailsModal({ itemId, serverId = "", preferBackdropIn
 
   const overview = safeText(displayItem.Overview, config.languageLabels.noDescription || "Açıklama yok.");
   const year = displayItem.ProductionYear ? String(displayItem.ProductionYear) : "";
-  const rating = safeText(displayItem.OfficialRating, "");
+  const rating = formatOfficialRatingLabel(displayItem.OfficialRating) || "";
   const community = displayItem.CommunityRating ? String(displayItem.CommunityRating.toFixed?.(1) ?? displayItem.CommunityRating) : "";
   const runtime = fmtRuntime(
     baseItem?.RunTimeTicks ||

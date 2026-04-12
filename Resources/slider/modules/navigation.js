@@ -862,21 +862,119 @@ export function changeSlide(direction) {
   startSlideTimer();
 }
 
+function clearManagedDotStateClasses(dot) {
+  if (!dot) return;
+
+  dot.classList.remove(
+    "active",
+    "monwui-dot-prev",
+    "monwui-dot-next",
+    "monwui-dot-hidden",
+    "monwui-dot-hidden-prev",
+    "monwui-dot-hidden-next"
+  );
+
+  Array.from(dot.classList).forEach((className) => {
+    if (/^monwui-dot-(prev|next)-\d+$/.test(className)) {
+      dot.classList.remove(className);
+    }
+  });
+
+  delete dot.dataset.dotState;
+  delete dot.dataset.dotDirection;
+  delete dot.dataset.dotDistance;
+}
+
+function getDotWindowBounds(totalDots, currentIndex, rawVisibleCount) {
+  if (!Number.isFinite(totalDots) || totalDots <= 0) {
+    return { start: 0, end: -1, visibleCount: 0 };
+  }
+
+  const requestedVisibleCount = Number.parseInt(rawVisibleCount, 10);
+  const visibleCount =
+    Number.isFinite(requestedVisibleCount) && requestedVisibleCount > 0
+      ? Math.max(1, Math.min(totalDots, requestedVisibleCount))
+      : totalDots;
+
+  if (visibleCount >= totalDots) {
+    return { start: 0, end: totalDots - 1, visibleCount };
+  }
+
+  const safeCurrentIndex = Math.max(0, Math.min(totalDots - 1, currentIndex));
+  const visibleBefore = Math.floor((visibleCount - 1) / 2);
+  const visibleAfter = visibleCount - visibleBefore - 1;
+
+  let start = safeCurrentIndex - visibleBefore;
+  let end = safeCurrentIndex + visibleAfter;
+
+  if (start < 0) {
+    end = Math.min(totalDots - 1, end - start);
+    start = 0;
+  }
+
+  if (end > totalDots - 1) {
+    start = Math.max(0, start - (end - (totalDots - 1)));
+    end = totalDots - 1;
+  }
+
+  return { start, end, visibleCount };
+}
+
+function applyDotStateClasses(dots, currentIndex, config, lowPower = false) {
+  const dotArray = Array.from(dots || []);
+  if (!dotArray.length) return;
+  const maxStyledDistance = 5;
+
+  const safeCurrentIndex = Math.max(0, Math.min(dotArray.length - 1, currentIndex));
+  const { start, end } = getDotWindowBounds(
+    dotArray.length,
+    safeCurrentIndex,
+    config?.dotVisibleCount
+  );
+
+  dotArray.forEach((dot, arrayIndex) => {
+    const wasActive = dot.classList.contains("active");
+    const parsedIndex = Number(dot.dataset.index);
+    const dotIndex = Number.isFinite(parsedIndex) ? parsedIndex : arrayIndex;
+    const isActive = dotIndex === safeCurrentIndex;
+
+    clearManagedDotStateClasses(dot);
+
+    if (isActive) {
+      dot.classList.add("active");
+      dot.dataset.dotState = "active";
+      dot.dataset.dotDirection = "current";
+      dot.dataset.dotDistance = "0";
+    } else {
+      const distance = Math.abs(dotIndex - safeCurrentIndex);
+      const styledDistance = Math.min(distance, maxStyledDistance);
+      const direction = dotIndex < safeCurrentIndex ? "prev" : "next";
+      const isHidden = dotIndex < start || dotIndex > end;
+
+      dot.dataset.dotState = isHidden ? "hidden" : direction;
+      dot.dataset.dotDirection = direction;
+      dot.dataset.dotDistance = String(distance);
+
+      if (isHidden) {
+        dot.classList.add("monwui-dot-hidden", `monwui-dot-hidden-${direction}`);
+      } else {
+        dot.classList.add(`monwui-dot-${direction}`, `monwui-dot-${direction}-${styledDistance}`);
+      }
+    }
+
+    if (config.dotPosterMode && config.enableDotPosterAnimations && !lowPower) {
+      if (wasActive !== isActive) applyDotPosterAnimation(dot, isActive);
+    }
+  });
+}
+
 export function updateActiveDot() {
   const currentIndex = getCurrentIndex();
   const dots = document.querySelectorAll(".monwui-dot");
   const config = getConfig();
   const lowPower = isLowPowerPeakRuntime();
 
-  dots.forEach(dot => {
-    const wasActive = dot.classList.contains("active");
-    const dotIndex = Number(dot.dataset.index);
-    const isActive = dotIndex === currentIndex;
-    dot.classList.toggle("active", isActive);
-    if (config.dotPosterMode && config.enableDotPosterAnimations && !lowPower) {
-      if (wasActive !== isActive) applyDotPosterAnimation(dot, isActive);
-    }
-  });
+  applyDotStateClasses(dots, currentIndex, config, lowPower);
 
   if (config.dotPosterMode) centerActiveDot({ smooth: !lowPower, force: true });
 }
@@ -1149,6 +1247,8 @@ export function createDotNavigation() {
       }
   }, lowPower ? 350 : 0);
 
+    applyDotStateClasses(dotElements, currentIndex, config, lowPower);
+
     const leftArrow = document.createElement("button");
     leftArrow.className = "monwui-dot-arrow monwui-dot-arrow-left";
     leftArrow.innerHTML = "&#10094;";
@@ -1204,6 +1304,8 @@ export function createDotNavigation() {
 
     dotContainer.appendChild(dot);
   });
+
+  applyDotStateClasses(dotContainer.querySelectorAll(".monwui-dot"), currentDotIndex, config, lowPower);
 }
 
 async function openModalForDot(dot, itemId, signal) {

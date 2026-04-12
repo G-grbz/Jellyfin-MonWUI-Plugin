@@ -1,8 +1,10 @@
 import { makeApiRequest, getSessionInfo, getCachedUserTopGenres } from "/Plugins/JMSFusion/runtime/api.js";
 import { getConfig } from "./config.js";
 import { withServer } from "./jfUrl.js";
-import { openDetailsModal } from "./detailsModal.js";
+import { openDetailsModal } from "./detailsModalLoader.js";
 import { faIconHtml } from "./faIcons.js";
+import { resolveSliderAssetHref } from "./assetLinks.js";
+import { formatOfficialRatingLabel } from "./utils.js";
 
 const IS_MOBILE = (navigator.maxTouchPoints > 0) || (window.innerWidth <= 820);
 
@@ -139,21 +141,6 @@ function formatRuntime(ticks) {
   const remainingMinutes = minutes % 60;
   return remainingMinutes > 0 ? `${hours}s ${remainingMinutes}d` : `${hours}s`;
 }
-function normalizeAgeChip(rating) {
-  if (!rating) return null;
-  const r = String(rating).toUpperCase().trim();
-  if (/(18\+|R18|ADULT|NC-17|X-RATED|XXX|ADULTS ONLY|AO)/.test(r)) return "18+";
-  if (/(17\+|R|TV-MA)/.test(r)) return "17+";
-  if (/(16\+|R16|M|MATURE)/.test(r)) return "16+";
-  if (/(15\+|TV-15)/.test(r)) return "15+";
-  if (/(13\+|TV-14|PG-13|TEEN)/.test(r)) return "13+";
-  if (/(12\+|TV-12)/.test(r)) return "12+";
-  if (/(10\+|TV-Y10)/.test(r)) return "10+";
-  if (/(7\+|TV-Y7|E10\+|E10)/.test(r)) return "7+";
-  if (/(G|PG|TV-G|TV-PG|E|EVERYONE|U|UC|UNIVERSAL)/.test(r)) return "7+";
-  if (/(ALL AGES|ALL|TV-Y|KIDS|Y)/.test(r)) return "0+";
-  return r;
-}
 function getRuntimeWithIcons(runtime) {
   const cfg = getConfig() || {};
   if (!runtime) return '';
@@ -162,7 +149,9 @@ function getRuntimeWithIcons(runtime) {
     .replace(/(\d+)d/g, `$1${cfg.languageLabels?.dk || 'dk'}`);
 }
 
-const PLACEHOLDER_URL = (getConfig()?.placeholderImage) || './slider/src/images/placeholder.png';
+const PLACEHOLDER_URL = resolveSliderAssetHref(
+  getConfig()?.placeholderImage || "/slider/src/images/placeholder.png"
+);
 
 let __scrollActive = false;
 let __scrollIdleTimer = 0;
@@ -731,7 +720,7 @@ function createCardFor(item) {
     : ((cfg.languageLabels && cfg.languageLabels.film) || "Film");
   const typeIcon = isSeries ? 'tv' : 'film';
 
-  const ageChip = normalizeAgeChip(item.OfficialRating || "");
+  const ageChip = formatOfficialRatingLabel(item.OfficialRating || "");
   const year = item.ProductionYear || "";
   const runtimeTicks = isSeries ? item.CumulativeRunTimeTicks : item.RunTimeTicks;
   const runtime = formatRuntime(runtimeTicks);

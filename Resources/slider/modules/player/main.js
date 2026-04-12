@@ -6,7 +6,9 @@ import { loadJSMediaTags } from "./lyrics/id3Reader.js";
 import { getConfig } from "../config.js";
 import { initializeControlStates } from "./ui/controls.js";
 import { faIconHtml } from "../faIcons.js";
-import { loadCSS } from "../../main.js";
+import { loadCSS } from "../playerStyles.js";
+
+export { isMobileDevice } from "../playerStyles.js";
 
 const config = getConfig();
 
@@ -149,10 +151,6 @@ function waitForElement(selector, timeout = 5000) {
     };
     resolve = ((orig) => (v) => orig(cleanupResolve(v)))(resolve);
   });
-}
-
-export function isMobileDevice() {
-  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 }
 
 function createPlayerButton() {

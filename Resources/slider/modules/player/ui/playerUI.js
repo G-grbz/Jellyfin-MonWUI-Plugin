@@ -6,7 +6,7 @@ import { setupProgressControls } from "../player/progress.js";
 import { toggleLyrics } from "../lyrics/lyrics.js";
 import { toggleRepeatMode, toggleShuffle, toggleMute, toggleRemoveOnPlayMode } from "./controls.js";
 import { refreshPlaylist } from "../core/playlist.js";
-import { initSettings, updateConfig } from '../../settings.js';
+import { updateConfig } from "../../configPersistence.js";
 import { showJellyfinPlaylistsModal } from "../core/jellyfinPlaylists.js";
 import { togglePlayerVisibility } from "../utils/mainIndex.js";
 import { readID3Tags } from "../lyrics/id3Reader.js";
@@ -15,8 +15,8 @@ import { showGenreFilterModal } from "./genreFilterModal.js";
 import { showTopTracksModal } from "./topModal.js";
 import { getAuthToken } from "../core/auth.js";
 import { showNotification } from "./notification.js";
-import { loadCSS } from "../../../main.js";
-import { isMobileDevice } from "../main.js";
+import { openSettings } from "../../settingsLoader.js";
+import { loadCSS, isMobileDevice } from "../../playerStyles.js";
 import { makeCleanupBag, addEvent, trackTimeout, trackObserver } from "../utils/cleanup.js";
 import { withServer, withParams } from "../../jfUrl.js";
 import { showRadioModal } from "./radioModal.js";
@@ -199,10 +199,9 @@ export function createModernPlayerUI() {
       className: "settingsLink",
       iconClass: "fas fa-cog",
       title: config.languageLabels.ayarlar || "Ayarlar",
-      onClick: (e) => {
+      onClick: async (e) => {
         e.preventDefault();
-        const settings = initSettings();
-        settings.open('music');
+        await openSettings("music");
       }
     },
     { className: "kapat-btn", iconClass: "fas fa-times", title: config.languageLabels.close || "Close", onClick: togglePlayerVisibility },

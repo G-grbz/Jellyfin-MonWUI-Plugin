@@ -68,12 +68,18 @@ export function updateSlidePosition() {
   const progressSeconds = document.querySelector(".monwui-slide-progress-seconds");
   if (progressSeconds) applyContainerStyles(progressSeconds, 'progressSeconds');
 
-  const homeSectionsContainer = document.querySelector(".homeSectionsContainer");
-  if (homeSectionsContainer) {
-    setImportantStyle(
-      homeSectionsContainer,
-      'top',
-      config.homeSectionsTop ? `${config.homeSectionsTop}vh` : ''
-    );
+  const homeSectionsContainers = document.querySelectorAll(".homeSectionsContainer");
+  if (homeSectionsContainers.length) {
+    const explicitHomeTop = Number(config.homeSectionsTop);
+    if (Number.isFinite(explicitHomeTop) && explicitHomeTop !== 0) {
+      homeSectionsContainers.forEach(container => {
+        setImportantStyle(container, 'top', `${explicitHomeTop}vh`);
+      });
+    } else {
+      homeSectionsContainers.forEach(container => {
+        setImportantStyle(container, 'top', '');
+      });
+      try { forceHomeSectionsTop(); } catch {}
+    }
   }
 }

@@ -138,9 +138,35 @@ function ensureStudioHubsSpinnerStyles() {
     @keyframes jmsStudioHubsSpin {
       to { transform: rotate(360deg); }
     }
+    .dnd-item.dnd-item-studio {
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+    .dnd-main {
+      align-items: flex-start;
+      display: flex;
+      flex: 1 1 240px;
+      gap: 8px;
+      max-width: 100%;
+      min-width: min(240px, 100%);
+    }
+    .dnd-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      justify-content: flex-end;
+      margin-left: auto;
+    }
+    .dnd-handle {
+      touch-action: none;
+    }
     .dnd-name {
-     text-decoration-color: var(--accent, #ff6b6b);
-   }
+      line-height: 1.35;
+      min-width: 0;
+      overflow-wrap: anywhere;
+      text-decoration-color: var(--accent, #ff6b6b);
+      word-break: normal;
+    }
   `;
   document.head.appendChild(style);
 }
@@ -414,12 +440,55 @@ function createDraggableList(id, items, labels, options = {}) {
   });
 
   let dragEl = null;
+  let touchDrag = null;
+  let restoreUserSelect = "";
+
+  const setDragActive = (li, active) => {
+    if (!li) return;
+    li.style.opacity = active ? "0.6" : "";
+  };
+
+  const moveDraggedItem = (clientY) => {
+    if (!dragEl) return;
+
+    const listRect = list.getBoundingClientRect();
+    const scrollEdge = 44;
+    if (clientY < listRect.top + scrollEdge) {
+      list.scrollTop -= Math.max(8, Math.ceil((listRect.top + scrollEdge - clientY) / 3));
+    } else if (clientY > listRect.bottom - scrollEdge) {
+      list.scrollTop += Math.max(8, Math.ceil((clientY - (listRect.bottom - scrollEdge)) / 3));
+    }
+
+    const siblings = [...list.querySelectorAll(".dnd-item")].filter(item => item !== dragEl);
+    let nextSibling = null;
+    for (const item of siblings) {
+      const rect = item.getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) {
+        nextSibling = item;
+        break;
+      }
+    }
+    list.insertBefore(dragEl, nextSibling);
+  };
+
+  const finishTouchDrag = (notify = false) => {
+    if (!touchDrag) return;
+    setDragActive(touchDrag.li, false);
+    document.body.style.userSelect = restoreUserSelect;
+    restoreUserSelect = "";
+    dragEl = null;
+    const moved = touchDrag.moved;
+    touchDrag = null;
+    if (notify && moved) {
+      list.dispatchEvent(new CustomEvent("dnd:reorder"));
+    }
+  };
 
   list.addEventListener("dragstart", (e) => {
     const li = e.target.closest(".dnd-item");
     if (!li) return;
     dragEl = li;
-    li.style.opacity = "0.6";
+    setDragActive(li, true);
     e.dataTransfer?.setData?.("text/plain", li.dataset.name || "");
     e.dataTransfer.effectAllowed = "move";
   });
@@ -427,20 +496,63 @@ function createDraggableList(id, items, labels, options = {}) {
   list.addEventListener("dragend", (e) => {
     const li = e.target.closest(".dnd-item");
     if (!li) return;
-    li.style.opacity = "";
+    setDragActive(li, false);
     dragEl = null;
   });
 
   list.addEventListener("dragover", (e) => {
     e.preventDefault();
-    const over = e.target.closest(".dnd-item");
-    if (!dragEl || !over || over === dragEl) return;
-    const rect = over.getBoundingClientRect();
-    const before = (e.clientY - rect.top) < rect.height / 2;
-    list.insertBefore(dragEl, before ? over : over.nextSibling);
+    if (!dragEl) return;
+    moveDraggedItem(e.clientY);
   });
 
-  const __cleanup = () => { };
+  list.addEventListener("touchstart", (e) => {
+    const handle = e.target.closest(".dnd-handle");
+    if (!handle) return;
+    const li = handle.closest(".dnd-item");
+    const touch = e.touches?.[0];
+    if (!li || !touch) return;
+
+    e.preventDefault();
+    finishTouchDrag(false);
+    dragEl = li;
+    restoreUserSelect = document.body.style.userSelect;
+    document.body.style.userSelect = "none";
+    touchDrag = {
+      li,
+      touchId: touch.identifier,
+      moved: false
+    };
+    setDragActive(li, true);
+  }, { passive: false });
+
+  const onTouchMove = (e) => {
+    if (!touchDrag) return;
+    const touch = [...(e.touches || [])].find(item => item.identifier === touchDrag.touchId);
+    if (!touch) return;
+    e.preventDefault();
+    touchDrag.moved = true;
+    moveDraggedItem(touch.clientY);
+  };
+
+  const onTouchEnd = (e) => {
+    if (!touchDrag) return;
+    const ended = [...(e.changedTouches || [])].some(item => item.identifier === touchDrag.touchId);
+    if (!ended) return;
+    e.preventDefault();
+    finishTouchDrag(true);
+  };
+
+  window.addEventListener("touchmove", onTouchMove, { passive: false });
+  window.addEventListener("touchend", onTouchEnd, { passive: false });
+  window.addEventListener("touchcancel", onTouchEnd, { passive: false });
+
+  const __cleanup = () => {
+    finishTouchDrag(false);
+    window.removeEventListener("touchmove", onTouchMove);
+    window.removeEventListener("touchend", onTouchEnd);
+    window.removeEventListener("touchcancel", onTouchEnd);
+  };
   wrap.addEventListener('jms:cleanup', __cleanup, { once:true });
 
   list.addEventListener("click", (e) => {
@@ -516,7 +628,7 @@ function createDnDItem(name, labels, options = {}) {
   }
 
   const li = document.createElement("li");
-  li.className = "dnd-item";
+  li.className = "dnd-item dnd-item-studio";
   li.draggable = true;
   li.dataset.name = name;
   li.dataset.hidden = options.hidden ? "1" : "0";
@@ -524,7 +636,7 @@ function createDnDItem(name, labels, options = {}) {
   li.dataset.studioId = String(options.studioId || "").trim();
   li.dataset.visibilityDisabled = options.visibilityDisabled ? "1" : "0";
   li.style.display = "flex";
-  li.style.alignItems = "center";
+  li.style.alignItems = "flex-start";
   li.style.gap = "8px";
   li.style.padding = "8px 10px";
   li.style.flexWrap = "wrap";
@@ -539,25 +651,29 @@ function createDnDItem(name, labels, options = {}) {
   handle.style.userSelect = "none";
   handle.style.fontWeight = "700";
 
+  const main = document.createElement("div");
+  main.className = "dnd-main";
+
   const content = document.createElement("div");
   content.style.display = "flex";
-  content.style.flex = "1";
+  content.style.flex = "1 1 auto";
   content.style.minWidth = "0";
+  content.style.maxWidth = "100%";
   content.style.flexDirection = "column";
   content.style.gap = "4px";
 
   const txt = document.createElement("span");
   txt.className = "dnd-name";
   txt.textContent = name;
-  txt.style.flex = "1";
+  txt.style.flex = "1 1 auto";
   txt.style.fontWeight = "600";
-  txt.style.wordBreak = "break-word";
   txt.style.textDecorationColor = "var(--accent-color, #ff6b6b)";
 
   const meta = document.createElement("div");
   meta.style.display = "flex";
   meta.style.gap = "6px";
   meta.style.flexWrap = "wrap";
+  meta.style.minWidth = "0";
   meta.style.fontSize = "12px";
 
   const manualBadge = document.createElement("span");
@@ -586,10 +702,7 @@ function createDnDItem(name, labels, options = {}) {
   content.appendChild(meta);
 
   const btns = document.createElement("div");
-  btns.style.display = "flex";
-  btns.style.gap = "6px";
-  btns.style.flexWrap = "wrap";
-  btns.style.justifyContent = "flex-end";
+  btns.className = "dnd-actions";
 
   const toggleVisibility = document.createElement("button");
   toggleVisibility.type = "button";
@@ -654,8 +767,9 @@ function createDnDItem(name, labels, options = {}) {
   btns.appendChild(up);
   btns.appendChild(down);
 
-  li.appendChild(handle);
-  li.appendChild(content);
+  main.appendChild(handle);
+  main.appendChild(content);
+  li.appendChild(main);
   li.appendChild(btns);
   applyDnDItemState(li, labels, {
     visibilityDisabled: options.visibilityDisabled,
@@ -683,6 +797,13 @@ export function createStudioHubsPanel(config, labels) {
     config.enableStudioHubs
   );
   section.appendChild(enableCheckbox);
+
+  const enableHoverVideo = createCheckbox(
+    'studioHubsHoverVideo',
+    labels?.studioHubsHoverVideo || 'Hoverda video oynat',
+    config.studioHubsHoverVideo
+  );
+  section.appendChild(enableHoverVideo);
 
   const countWrap = createNumberInput(
     'studioHubsCardCount',
@@ -1368,6 +1489,7 @@ export function createStudioHubsPanel(config, labels) {
 
   list.addEventListener("dragend", refreshListState);
   list.addEventListener("drop", refreshListState);
+  list.addEventListener("dnd:reorder", refreshListState);
   list.addEventListener("click", (e) => {
     if (e.target.closest(".dnd-btn-up") || e.target.closest(".dnd-btn-down")) refreshListState();
   });
@@ -1407,13 +1529,6 @@ export function createStudioHubsPanel(config, labels) {
       console.warn("studioHubsPage: shared data alınamadı:", e);
     }
   })();
-
-  const enableHoverVideo = createCheckbox(
-    'studioHubsHoverVideo',
-    labels?.studioHubsHoverVideo || 'Hoverda video oynat',
-    config.studioHubsHoverVideo
-  );
-  section.appendChild(enableHoverVideo);
 
   const subheading = document.createElement('h3');
   subheading.textContent = labels?.personalRecommendations || 'Kişisel Öneriler';
@@ -1485,6 +1600,13 @@ export function createStudioHubsPanel(config, labels) {
   );
   recentSubWrap.appendChild(enableRecentMoviesRow);
 
+  const splitMovieLibRows = createCheckbox(
+    'recentRowsSplitMovieLibs',
+    labels?.recentRowsSplitMovieLibs || 'Film Kütüphanelerini Ayrı Bölümlerde Göster',
+    config.recentRowsSplitMovieLibs === true
+  );
+  recentSubWrap.appendChild(splitMovieLibRows);
+
   const recentMoviesCountWrap = createNumberInput(
     'recentMoviesCardCount',
     labels?.recentMoviesCardCount || 'Son eklenen filmler kart sayısı',
@@ -1500,6 +1622,13 @@ export function createStudioHubsPanel(config, labels) {
     config.enableRecentSeriesRow !== false
   );
   recentSubWrap.appendChild(enableRecentSeriesRow);
+
+  const splitTvLibRows = createCheckbox(
+    'recentRowsSplitTvLibs',
+    labels?.recentRowsSplitTvLibs || 'Dizi Kütüphanelerini Ayrı Bölümle',
+    config.recentRowsSplitTvLibs !== false
+  );
+  recentSubWrap.appendChild(splitTvLibRows);
 
   const recentSeriesCountWrap = createNumberInput(
     'recentSeriesCardCount',
@@ -1603,12 +1732,26 @@ export function createStudioHubsPanel(config, labels) {
   );
   section.appendChild(continueSeriesCountWrap);
 
-  const splitTvLibRows = createCheckbox(
-    'recentRowsSplitTvLibs',
-    labels?.recentRowsSplitTvLibs || 'Dizi Kütüphanelerini Ayrı Bölümle',
-    config.recentRowsSplitTvLibs !== false
-  );
-  section.appendChild(splitTvLibRows);
+  const movieLibBox = document.createElement("div");
+  movieLibBox.className = "setting-item movies";
+  movieLibBox.style.paddingLeft = "8px";
+  movieLibBox.style.borderLeft = "2px solid #0002";
+  movieLibBox.style.marginBottom = "10px";
+  section.appendChild(movieLibBox);
+
+  const splitMovieCb = splitMovieLibRows?.querySelector?.('input[type="checkbox"]');
+  function syncMovieLibBoxVisibility() {
+    const splitOn = !!splitMovieCb?.checked;
+    movieLibBox.style.display = splitOn ? "" : "none";
+  }
+  syncMovieLibBoxVisibility();
+  splitMovieLibRows.addEventListener("change", syncMovieLibBoxVisibility, { passive: true });
+
+  const movieLibTitle = document.createElement("div");
+  movieLibTitle.style.fontWeight = "700";
+  movieLibTitle.style.margin = "6px 0";
+  movieLibTitle.textContent = labels?.movieLibSelectHeading || "Gösterilecek Film Kütüphaneleri";
+  movieLibBox.appendChild(movieLibTitle);
 
   const tvLibBox = document.createElement("div");
   tvLibBox.className = "setting-item tvshows";
@@ -1651,12 +1794,27 @@ export function createStudioHubsPanel(config, labels) {
     return inp;
   }
 
+  const hiddenRecentMovies   = mkHidden("recentMoviesLibIds",    readJsonArr("recentMoviesLibIds"));
   const hiddenRecentSeries   = mkHidden("recentSeriesTvLibIds",   readJsonArr("recentSeriesTvLibIds"));
   const hiddenRecentEpisodes = mkHidden("recentEpisodesTvLibIds", readJsonArr("recentEpisodesTvLibIds"));
   const hiddenContinueSeries = mkHidden("continueSeriesTvLibIds", readJsonArr("continueSeriesTvLibIds"));
+  movieLibBox.appendChild(hiddenRecentMovies);
   tvLibBox.appendChild(hiddenRecentSeries);
   tvLibBox.appendChild(hiddenRecentEpisodes);
   tvLibBox.appendChild(hiddenContinueSeries);
+
+  const movieLibHint = document.createElement("div");
+  movieLibHint.style.opacity = "0.85";
+  movieLibHint.style.fontSize = "0.95em";
+  movieLibHint.style.marginBottom = "6px";
+  movieLibHint.textContent = labels?.movieLibSelectHint || "Boş bırakırsan: tüm Film kütüphaneleri aktif sayılır.";
+  movieLibBox.appendChild(movieLibHint);
+
+  const movieLibGrid = document.createElement("div");
+  movieLibGrid.style.display = "grid";
+  movieLibGrid.style.gridTemplateColumns = "1fr";
+  movieLibGrid.style.gap = "8px";
+  movieLibBox.appendChild(movieLibGrid);
 
   const tvLibHint = document.createElement("div");
   tvLibHint.style.opacity = "0.85";
@@ -1686,16 +1844,33 @@ export function createStudioHubsPanel(config, labels) {
     try { localStorage.setItem(k, JSON.stringify((arr||[]).filter(Boolean))); } catch {}
   }
 
+  let allViewsPromise = null;
+
+  function getAllViews() {
+    if (!allViewsPromise) {
+      allViewsPromise = fetchAllViews();
+    }
+    return allViewsPromise;
+  }
+
   async function fetchTvLibs() {
     try {
-      const me = await makeApiRequest(`/Users/Me`);
-      const uid = me?.Id;
-      if (!uid) return [];
-      const v = await makeApiRequest(`/Users/${uid}/Views`);
-      const items = Array.isArray(v?.Items) ? v.Items : [];
-      return items.filter(x => x?.CollectionType === "tvshows" && x?.Id).map(x => ({
+      const all = await getAllViews();
+      return all.filter(x => x?.CollectionType === "tvshows" && x?.Id).map(x => ({
         Id: x.Id,
         Name: x.Name || (labels?.studioHubTvLibraryFallbackName || "TV")
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  async function fetchMovieLibs() {
+    try {
+      const all = await getAllViews();
+      return all.filter(x => x?.CollectionType === "movies" && x?.Id).map(x => ({
+        Id: x.Id,
+        Name: x.Name || (labels?.studioHubMovieLibraryFallbackName || "Movies")
       }));
     } catch {
       return [];
@@ -1718,6 +1893,96 @@ export function createStudioHubsPanel(config, labels) {
         }));
     } catch { return []; }
   }
+
+  (async () => {
+    const libs = await fetchMovieLibs();
+    if (!libs.length) {
+      const warn = document.createElement("div");
+      warn.style.opacity = "0.85";
+      warn.textContent = labels?.movieLibSelectNoLibs || "Film kütüphanesi bulunamadı.";
+      movieLibGrid.appendChild(warn);
+      return;
+    }
+
+    const box = document.createElement("div");
+    box.style.border = "1px solid #0002";
+    box.style.borderRadius = "8px";
+    box.style.padding = "8px";
+
+    const h = document.createElement("div");
+    h.style.fontWeight = "700";
+    h.style.marginBottom = "6px";
+    h.textContent = labels?.movieLibRowRecentMovies || "Görüntülemek istediğiniz son eklenen filmler için kütüphane seçin";
+    box.appendChild(h);
+
+    const selected = new Set(readJsonArr("recentMoviesLibIds"));
+    const list = document.createElement("div");
+    list.style.display = "grid";
+    list.style.gridTemplateColumns = "1fr";
+    list.style.gap = "6px";
+
+    const sync = () => {
+      const arr = Array.from(selected);
+      hiddenRecentMovies.value = JSON.stringify(arr);
+      writeJsonArr("recentMoviesLibIds", arr);
+    };
+
+    for (const lib of libs) {
+      const line = document.createElement("label");
+      line.style.display = "flex";
+      line.style.alignItems = "center";
+      line.style.gap = "8px";
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = selected.has(lib.Id);
+      cb.addEventListener("change", () => {
+        if (cb.checked) selected.add(lib.Id);
+        else selected.delete(lib.Id);
+        sync();
+      }, { passive: true });
+
+      const t = document.createElement("span");
+      t.textContent = lib.Name;
+
+      line.appendChild(cb);
+      line.appendChild(t);
+      list.appendChild(line);
+    }
+
+    const actions = document.createElement("div");
+    actions.style.display = "flex";
+    actions.style.gap = "8px";
+    actions.style.marginTop = "8px";
+
+    const btnAll = document.createElement("button");
+    btnAll.type = "button";
+    btnAll.textContent = labels?.selectAll || "Hepsini seç";
+    btnAll.addEventListener("click", () => {
+      selected.clear();
+      libs.forEach(l => selected.add(l.Id));
+      [...list.querySelectorAll("input[type=checkbox]")].forEach(i => i.checked = true);
+      sync();
+    });
+
+    const btnNone = document.createElement("button");
+    btnNone.type = "button";
+    btnNone.textContent = labels?.selectNone || "Hepsini kaldır";
+    btnNone.addEventListener("click", () => {
+      selected.clear();
+      [...list.querySelectorAll("input[type=checkbox]")].forEach(i => i.checked = false);
+      sync();
+    });
+
+    actions.appendChild(btnAll);
+    actions.appendChild(btnNone);
+
+    box.appendChild(list);
+    box.appendChild(actions);
+    movieLibGrid.appendChild(box);
+
+    sync();
+  })();
 
   (async () => {
     const libs = await fetchTvLibs();
@@ -1926,7 +2191,7 @@ export function createStudioHubsPanel(config, labels) {
   enableOtherLibRows.addEventListener("change", syncOtherBoxVisibility, { passive: true });
 
   (async () => {
-    const all = await fetchAllViews();
+    const all = await getAllViews();
     const others = all.filter(v => {
       const ct = (v.CollectionType || "").toLowerCase();
       return !OTHER_CT_EXCLUDE.has(ct);
@@ -2094,6 +2359,7 @@ export function createStudioHubsPanel(config, labels) {
   };
   genreList.addEventListener("dragend", refreshGenreHidden);
   genreList.addEventListener("drop", refreshGenreHidden);
+  genreList.addEventListener("dnd:reorder", refreshGenreHidden);
   genreList.addEventListener("click", (e) => {
     if (e.target.closest(".dnd-btn-up") || e.target.closest(".dnd-btn-down")) refreshGenreHidden();
   });

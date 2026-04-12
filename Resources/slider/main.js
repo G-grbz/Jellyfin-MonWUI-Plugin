@@ -19,23 +19,99 @@ import { initAvatarSystem } from "./modules/userAvatar.js";
 import { initializeQualityBadges, primeQualityFromItems, annotateDomWithQualityHints } from "./modules/qualityBadges.js";
 import { initNotifications, forcejfNotifBtnPointerEvents } from "./modules/notifications.js";
 import { startUpdatePolling } from "./modules/update.js";
-import { ensureStudioHubsMounted } from "./modules/studioHubs.js";
 import { updateSlidePosition } from "./modules/positionUtils.js";
-import { renderPersonalRecommendations } from "./modules/personalRecommendations.js";
-import { mountDirectorRowsLazy } from "./modules/directorRows.js";
-import { setupHoverForAllItems  } from "./modules/hoverTrailerModal.js";
 import { teardownAnimations, hardCleanupSlide } from "./modules/animations.js";
-import { mountRecentRowsLazy, cleanupRecentRows } from "./modules/recentRows.js";
+import { isVisible, waitForAnyVisible } from "./modules/domVisibility.js";
+import { resolveSliderAssetHref } from "./modules/assetLinks.js";
 import { withServer } from "./modules/jfUrl.js";
 import { initUserProfileAvatarPicker } from "./modules/avatarPicker.js";
 import { startBackgroundCollectionIndexer, getBackgroundCollectionIndexerStatus } from "./modules/collectionIndexer.js";
 import { initProfileChooser, syncProfileChooserHeaderButtonVisibility } from "./modules/profileChooser.js";
-import { openDetailsModal } from "./modules/detailsModal.js";
+export { loadCSS } from "./modules/playerStyles.js";
+export { waitForAnyVisible };
 const idle = window.requestIdleCallback || ((cb) => setTimeout(cb, 0));
 const MATERIAL_ICONS_REPAIR_STYLE_ID = "jms-material-icons-utf8-repair";
 const MATERIAL_ICONS_PROBE_CLASS = "_10k";
 const MATERIAL_ICONS_PROBE_CONTENT = "\ue951";
+const CUSTOM_SPLASH_ACTIVE_ATTR = "data-jms-custom-splash";
+const CUSTOM_SPLASH_HIDDEN_ATTR = "data-jms-custom-splash-hidden";
+const CUSTOM_SPLASH_TITLE_ATTR = "data-jms-custom-splash-title";
+const CUSTOM_SPLASH_CAPTION_ATTR = "data-jms-custom-splash-caption";
+const CUSTOM_SPLASH_LAYER_ID = "jms-boot-splash-layer";
+const CUSTOM_SPLASH_LOGO_ID = "jms-boot-splash-logo";
+const CUSTOM_SPLASH_STORAGE_KEY = "enableCustomSplashScreen";
+const CUSTOM_SPLASH_TITLE_VAR = "--jms-custom-splash-title";
+const CUSTOM_SPLASH_CAPTION_VAR = "--jms-custom-splash-caption";
+const CUSTOM_SPLASH_PROGRESS_KEY = "__JMS_CUSTOM_SPLASH_PROGRESS__";
+const CUSTOM_SPLASH_TIMEOUT_MS = 12_000;
+const CUSTOM_SPLASH_CLEANUP_MS = 420;
+const CUSTOM_SPLASH_EXIT_SYNC_MS = 120;
 let materialIconsRepairPromise = null;
+let __detailsModalLoaderPromise = null;
+let __hoverTrailerModulePromise = null;
+let __personalRecommendationsModulePromise = null;
+let __directorRowsModulePromise = null;
+let __recentRowsModulePromise = null;
+let __studioHubsModulePromise = null;
+let __customSplashObserver = null;
+let __customSplashCleanupTimer = 0;
+let __customSplashHideTimer = 0;
+let __customSplashHardTimer = 0;
+const __customSplashProgressState = {
+  authReady: false,
+  dataPoolReady: false,
+  selectionReady: false,
+  firstSlideReady: false,
+  allSlidesReady: false,
+  uiReady: false,
+  totalSlides: 0,
+  createdSlides: 0,
+  poolCount: 0
+};
+
+function getDomObserveRoot() {
+  return document.body || document.documentElement;
+}
+
+function isElementNode(node) {
+  return !!node && node.nodeType === 1;
+}
+
+function nodeTouchesSelectors(node, selectors = "") {
+  const selectorText = Array.isArray(selectors) ? selectors.join(",") : String(selectors || "");
+  if (!isElementNode(node) || !selectorText) return false;
+
+  try {
+    if (node.matches?.(selectorText)) return true;
+  } catch {}
+
+  try {
+    return !!node.querySelector?.(selectorText);
+  } catch {
+    return false;
+  }
+}
+
+function mutationsTouchSelectors(mutations, selectors = "") {
+  const selectorText = Array.isArray(selectors) ? selectors.join(",") : String(selectors || "");
+  if (!Array.isArray(mutations) || !selectorText) return false;
+
+  for (const mutation of mutations) {
+    if (nodeTouchesSelectors(mutation.target, selectorText)) return true;
+
+    const addedNodes = Array.from(mutation.addedNodes || []);
+    for (const node of addedNodes) {
+      if (nodeTouchesSelectors(node, selectorText)) return true;
+    }
+
+    const removedNodes = Array.from(mutation.removedNodes || []);
+    for (const node of removedNodes) {
+      if (nodeTouchesSelectors(node, selectorText)) return true;
+    }
+  }
+
+  return false;
+}
 
 function stripComputedContentQuotes(value) {
   return String(value || "").replace(/^['"]|['"]$/g, "");
@@ -182,6 +258,29 @@ function installMaterialIconsUtf8Guard() {
   if (window.__jmsMaterialIconsUtf8GuardInstalled) return;
   window.__jmsMaterialIconsUtf8GuardInstalled = true;
 
+  const mayAffectMaterialIcons = (node) => {
+    if (!node || node.nodeType !== 1) return false;
+    if (node.id === MATERIAL_ICONS_REPAIR_STYLE_ID) return true;
+    if (node.matches?.('link[rel="stylesheet"][href]')) return true;
+    return !!node.querySelector?.('link[rel="stylesheet"][href]');
+  };
+
+  const shouldScheduleCheck = (mutations) => {
+    for (const mutation of mutations || []) {
+      if (mutation.type === "attributes") {
+        if (mutation.target?.matches?.('link[rel="stylesheet"][href]')) return true;
+        continue;
+      }
+      for (const node of mutation.addedNodes || []) {
+        if (mayAffectMaterialIcons(node)) return true;
+      }
+      for (const node of mutation.removedNodes || []) {
+        if (mayAffectMaterialIcons(node)) return true;
+      }
+    }
+    return false;
+  };
+
   const scheduleCheck = (delay = 0) => {
     setTimeout(() => {
       ensureMaterialIconsUtf8Integrity().catch(() => {});
@@ -194,7 +293,8 @@ function installMaterialIconsUtf8Guard() {
   try {
     const head = document.head || document.documentElement;
     if (!head) return;
-    const observer = new MutationObserver(() => {
+    const observer = new MutationObserver((mutations) => {
+      if (!shouldScheduleCheck(mutations)) return;
       clearTimeout(window.__jmsMaterialIconsUtf8GuardTimer);
       window.__jmsMaterialIconsUtf8GuardTimer = setTimeout(() => {
         ensureMaterialIconsUtf8Integrity().catch(() => {});
@@ -212,46 +312,755 @@ function installMaterialIconsUtf8Guard() {
 
 installMaterialIconsUtf8Guard();
 
-function isPlayerCssMobileDevice() {
-  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+function getCustomSplashRoot() {
+  return document.documentElement;
 }
 
-export function loadCSS() {
-  const { playerTheme: theme = "dark", playerStyle = "player" } = getConfig();
-  const expected = new Map([
-    ["base", `./slider/src/${playerStyle}-${theme}.css`],
-    ["settings", "./slider/src/settings.css"],
-  ]);
+function getCustomSplashProgressApi() {
+  try {
+    return window[CUSTOM_SPLASH_PROGRESS_KEY] || null;
+  } catch {
+    return null;
+  }
+}
 
-  document.documentElement?.setAttribute?.("data-jellyfin-player-theme", theme);
-  document.documentElement?.setAttribute?.("data-jellyfin-player-style", playerStyle);
-  document.body?.setAttribute?.("data-jellyfin-player-theme", theme);
-  document.body?.setAttribute?.("data-jellyfin-player-style", playerStyle);
+function setCustomSplashProgress(value, options = {}) {
+  try {
+    return getCustomSplashProgressApi()?.set?.(value, options) ?? null;
+  } catch {
+    return null;
+  }
+}
 
-  if (isPlayerCssMobileDevice()) {
-    expected.set("fullscreen", "./slider/src/fullscreen.css");
+function completeCustomSplashProgress(options = {}) {
+  try {
+    return getCustomSplashProgressApi()?.complete?.(options) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function resetCustomSplashProgressState() {
+  __customSplashProgressState.authReady = false;
+  __customSplashProgressState.dataPoolReady = false;
+  __customSplashProgressState.selectionReady = false;
+  __customSplashProgressState.firstSlideReady = false;
+  __customSplashProgressState.allSlidesReady = false;
+  __customSplashProgressState.uiReady = false;
+  __customSplashProgressState.totalSlides = 0;
+  __customSplashProgressState.createdSlides = 0;
+  __customSplashProgressState.poolCount = 0;
+}
+
+function formatSplashLabel(template, values = {}) {
+  return String(template || "").replace(/\{(\w+)\}/g, (_, key) => String(values[key] ?? ""));
+}
+
+function splashLabel(key, fallback, values = {}) {
+  try {
+    return formatSplashLabel(__getLabelsSafe?.()?.[key] || fallback, values);
+  } catch {
+    return formatSplashLabel(fallback, values);
+  }
+}
+
+function syncCustomSplashProgress(patch = {}) {
+  const root = getCustomSplashRoot();
+  if (!root?.hasAttribute(CUSTOM_SPLASH_ACTIVE_ATTR)) {
+    return null;
   }
 
-  expected.forEach((href, key) => {
-    let link = document.querySelector(`link[data-jellyfin-player-css="${key}"]`);
+  const { stage: stageOverride, detail: detailOverride, ...statePatch } = patch || {};
+  Object.assign(__customSplashProgressState, statePatch);
 
-    if (!link) {
-      link = document.createElement("link");
-      link.rel = "stylesheet";
-      link.setAttribute("data-jellyfin-player-css", key);
-      document.head.appendChild(link);
-    }
+  const state = __customSplashProgressState;
+  const totalSlides = Math.max(0, Number(state.totalSlides) || 0);
+  const createdSlides = Math.max(
+    0,
+    Math.min(totalSlides || Number.MAX_SAFE_INTEGER, Number(state.createdSlides) || 0)
+  );
+  const poolCount = Math.max(0, Number(state.poolCount) || 0);
 
-    if (link.getAttribute("href") !== href) {
-      link.href = href;
+  let progress = 0.06;
+  let stage = splashLabel("customSplashStageLock", "KILIT");
+  let detail = splashLabel("customSplashDetailLock", "Kabuk katmanı sabitleniyor");
+
+  if (document.readyState !== "loading") {
+    progress = Math.max(progress, 0.12);
+    stage = splashLabel("customSplashStageStructure", "OMURGA");
+    detail = splashLabel("customSplashDetailStructure", "Arayüz omurgası senkrona girdi");
+  }
+
+  if (state.authReady) {
+    progress = Math.max(progress, 0.24);
+    stage = splashLabel("customSplashStageAuth", "YETKI");
+    detail = splashLabel("customSplashDetailAuth", "Oturum anahtarı doğrulandı");
+  }
+
+  if (state.dataPoolReady) {
+    progress = Math.max(progress, 0.38);
+    stage = splashLabel("customSplashStagePool", "HAVUZ");
+    detail = poolCount > 0
+      ? splashLabel("customSplashDetailPool", "{count} içerik havuza alındı", { count: poolCount })
+      : splashLabel("customSplashDetailPoolEmpty", "İçerik havuzu bağlandı");
+  }
+
+  if (state.selectionReady) {
+    progress = Math.max(progress, 0.48);
+    stage = splashLabel("customSplashStageCompose", "KURGU");
+    detail = totalSlides > 0
+      ? splashLabel("customSplashDetailSelection", "{count} sahne sıraya alındı", { count: totalSlides })
+      : splashLabel("customSplashDetailSelectionEmpty", "Sahne akışı hazırlandı");
+  }
+
+  if (totalSlides > 0) {
+    progress = Math.max(progress, 0.48 + (createdSlides / totalSlides) * 0.34);
+    stage = splashLabel("customSplashStageRender", "RENDER");
+    detail = splashLabel("customSplashDetailRender", "{current}/{total} katman örülüyor", {
+      current: createdSlides,
+      total: totalSlides
+    });
+  }
+
+  if (state.firstSlideReady) {
+    progress = Math.max(progress, 0.9);
+    stage = splashLabel("customSplashStageFrame", "KADRAJ");
+    detail = totalSlides > 0
+      ? splashLabel("customSplashDetailFrame", "{current}/{total} katman canlı", {
+        current: createdSlides,
+        total: totalSlides
+      })
+      : splashLabel("customSplashDetailFrameEmpty", "İlk kadraj ışığa çıktı");
+  }
+
+  if (state.allSlidesReady) {
+    progress = Math.max(progress, 0.96);
+    stage = splashLabel("customSplashStageSurface", "YUZEY");
+    detail = splashLabel("customSplashDetailSurface", "Son katmanlar hizalanıyor");
+  }
+
+  if (state.uiReady) {
+    progress = 1;
+    stage = splashLabel("customSplashStageReady", "HAZIR");
+    detail = splashLabel("customSplashDetailReady", "MonWui çevrimiçi");
+  }
+
+  return setCustomSplashProgress(progress, {
+    stage: stageOverride || stage,
+    detail: detailOverride || detail
+  });
+}
+
+function readCustomSplashEnabled(defaultValue = true) {
+  try {
+    const raw = localStorage.getItem(CUSTOM_SPLASH_STORAGE_KEY);
+    if (raw === "true") return true;
+    if (raw === "false") return false;
+  } catch {}
+  return defaultValue;
+}
+
+function splashTextValue(value, fallback = "") {
+  const out = String(value ?? "").trim();
+  return out || String(fallback ?? "").trim();
+}
+
+function getCustomSplashCurrentHour() {
+  try {
+    const hour = Number(new Date().getHours());
+    if (Number.isFinite(hour) && hour >= 0 && hour <= 23) return hour;
+  } catch {}
+  return 9;
+}
+
+function resolveCustomSplashGreetingPart(hour = getCustomSplashCurrentHour()) {
+  const safeHour = Number(hour);
+  if (!Number.isFinite(safeHour)) return "Morning";
+  if (safeHour >= 5 && safeHour < 12) return "Morning";
+  if (safeHour >= 12 && safeHour < 18) return "Afternoon";
+  if (safeHour >= 18 && safeHour < 22) return "Evening";
+  return "Night";
+}
+
+function getCustomSplashGreetingFallback(lang = "tur", part = "Morning") {
+  const greetings = {
+    tur: {
+      Morning: "Günaydın",
+      Afternoon: "Tünaydın",
+      Evening: "İyi akşamlar",
+      Night: "İyi geceler"
+    },
+    eng: {
+      Morning: "Good morning",
+      Afternoon: "Good afternoon",
+      Evening: "Good evening",
+      Night: "Hello"
+    },
+    deu: {
+      Morning: "Guten Morgen",
+      Afternoon: "Guten Tag",
+      Evening: "Guten Abend",
+      Night: "Hallo"
+    },
+    fre: {
+      Morning: "Bonjour",
+      Afternoon: "Bon après-midi",
+      Evening: "Bonsoir",
+      Night: "Bonsoir"
+    },
+    spa: {
+      Morning: "Buenos días",
+      Afternoon: "Buenas tardes",
+      Evening: "Buenas noches",
+      Night: "Buenas noches"
+    },
+    rus: {
+      Morning: "Доброе утро",
+      Afternoon: "Добрый день",
+      Evening: "Добрый вечер",
+      Night: "Здравствуйте"
     }
+  };
+
+  return splashTextValue(greetings?.[lang]?.[part] || greetings?.eng?.[part]);
+}
+
+function getCurrentCustomSplashUserName() {
+  try {
+    const api =
+      window.ApiClient ||
+      window.apiClient ||
+      window.MediaBrowser?.ApiClient ||
+      null;
+    const sessionInfo = getSessionInfo?.() || {};
+
+    return splashTextValue(
+      sessionInfo?.UserName ||
+      sessionInfo?.userName ||
+      sessionInfo?.User?.Name ||
+      sessionInfo?.User?.Username ||
+      api?._currentUser?.Name ||
+      api?._currentUser?.Username ||
+      api?._currentUser?.userName ||
+      api?._serverInfo?.User?.Name ||
+      api?._serverInfo?.User?.Username ||
+      api?._serverInfo?.UserName ||
+      sessionStorage.getItem("currentUserName")
+    );
+  } catch {
+    return "";
+  }
+}
+
+function getCustomSplashLoadingFallback(title) {
+  const safeTitle = String(title || "MonWui").trim() || "MonWui";
+  const lang = (typeof getDefaultLanguage === "function" ? getDefaultLanguage() : null) || "tur";
+
+  switch (lang) {
+    case "eng":
+      return `${safeTitle} is starting`;
+    case "deu":
+      return `${safeTitle} wird vorbereitet`;
+    case "fre":
+      return `${safeTitle} se prepare`;
+    case "spa":
+      return `${safeTitle} se esta preparando`;
+    case "rus":
+      return `${safeTitle} подготавливается`;
+    case "tur":
+    default:
+      return `${safeTitle} hazırlanıyor`;
+  }
+}
+
+function resolveCustomSplashDefaults(labels = {}) {
+  const defaultTitle = String(labels.customSplashTitle || "MonWui").trim() || "MonWui";
+  const fallbackCaption = getCustomSplashLoadingFallback(defaultTitle);
+  const defaultCaption = String(labels.customSplashLoadingText || fallbackCaption).trim()
+    || fallbackCaption;
+  return { defaultTitle, defaultCaption };
+}
+
+function buildCustomSplashCaption(title, labels = {}) {
+  const { defaultTitle, defaultCaption } = resolveCustomSplashDefaults(labels);
+  const safeTitle = String(title || "").trim() || defaultTitle;
+
+  if (defaultCaption.includes(defaultTitle)) {
+    return defaultCaption.replace(defaultTitle, safeTitle);
+  }
+
+  return defaultCaption;
+}
+
+function buildCustomSplashDisplayTitle(title, labels = {}, lang = "tur") {
+  const safeTitle = splashTextValue(title, "MonWui");
+  const userName = getCurrentCustomSplashUserName();
+  if (!userName) return safeTitle;
+
+  const greetingPart = resolveCustomSplashGreetingPart();
+  const greetingKey = `customSplashGreeting${greetingPart}`;
+  const greeting = splashTextValue(
+    labels?.[greetingKey],
+    getCustomSplashGreetingFallback(lang, greetingPart)
+  );
+
+  return splashTextValue(`${greeting} ${userName}`, safeTitle);
+}
+
+function getCustomSplashCopy() {
+  const cfg = (typeof getConfig === "function" ? getConfig() : {}) || {};
+  const lang = cfg.defaultLanguage || getDefaultLanguage?.();
+  const labels = cfg.languageLabels || getLanguageLabels(lang) || {};
+  const { defaultTitle } = resolveCustomSplashDefaults(labels);
+  const title = String(cfg.customSplashTitle || "").trim() || defaultTitle;
+  return {
+    title,
+    displayTitle: buildCustomSplashDisplayTitle(title, labels, lang),
+    caption: buildCustomSplashCaption(title, labels)
+  };
+}
+
+function applyCustomSplashCopy() {
+  const root = getCustomSplashRoot();
+  if (!root) return;
+  const copy = getCustomSplashCopy();
+  root.setAttribute(CUSTOM_SPLASH_TITLE_ATTR, copy.displayTitle || copy.title);
+  root.setAttribute(CUSTOM_SPLASH_CAPTION_ATTR, copy.caption);
+  root.style.setProperty(CUSTOM_SPLASH_TITLE_VAR, JSON.stringify(copy.displayTitle || copy.title));
+  root.style.setProperty(CUSTOM_SPLASH_CAPTION_VAR, JSON.stringify(copy.caption));
+  const logo = document.getElementById(CUSTOM_SPLASH_LOGO_ID);
+  if (logo) {
+    logo.setAttribute("aria-label", copy.title);
+    logo.setAttribute("title", copy.title);
+  }
+  try {
+    getCustomSplashProgressApi()?.syncCopy?.(copy);
+  } catch {}
+}
+
+function cleanupCustomSplashAttrs() {
+  const root = getCustomSplashRoot();
+  if (__customSplashHideTimer) {
+    clearTimeout(__customSplashHideTimer);
+    __customSplashHideTimer = 0;
+  }
+  if (!root) return;
+  root.removeAttribute(CUSTOM_SPLASH_ACTIVE_ATTR);
+  root.removeAttribute(CUSTOM_SPLASH_HIDDEN_ATTR);
+  root.removeAttribute(CUSTOM_SPLASH_TITLE_ATTR);
+  root.removeAttribute(CUSTOM_SPLASH_CAPTION_ATTR);
+  root.style.removeProperty(CUSTOM_SPLASH_TITLE_VAR);
+  root.style.removeProperty(CUSTOM_SPLASH_CAPTION_VAR);
+  document.getElementById(CUSTOM_SPLASH_LAYER_ID)?.remove();
+  document.getElementById(CUSTOM_SPLASH_LOGO_ID)?.remove();
+}
+
+function hasCustomSplashVisibleShell() {
+  return !!document.querySelector(
+    "#indexPage:not(.hide), #homePage:not(.hide), .skinHeader, .mainDrawer, .mainDrawerButton, [data-role='page']:not(.hide)"
+  );
+}
+
+function getCustomSplashVisiblePage() {
+  return document.querySelector(
+    "#reactRoot [data-role='page']:not(.hide), [data-role='page']:not(.hide), #reactRoot #indexPage:not(.hide), #reactRoot #homePage:not(.hide)"
+  );
+}
+
+function isCustomSplashHomePageElement(page) {
+  if (!page) return false;
+
+  const pageId = String(page.id || "").toLowerCase();
+  if (pageId === "indexpage" || pageId === "homepage") {
+    return true;
+  }
+
+  const routeHint = String(
+    page.getAttribute?.("data-url") ||
+    page.getAttribute?.("data-page") ||
+    page.dataset?.url ||
+    ""
+  ).toLowerCase();
+
+  return /(?:^|\/)(?:index|home)(?:\.html)?(?:[?#/]|$)/i.test(routeHint);
+}
+
+function hasCustomSplashVisibleNonHomePage() {
+  const page = getCustomSplashVisiblePage();
+  if (!page) return false;
+  if (isCustomSplashHomePageElement(page)) return false;
+
+  const pageId = String(page.id || "").trim();
+  const routeHint = String(
+    page.getAttribute?.("data-url") ||
+    page.getAttribute?.("data-page") ||
+    page.dataset?.url ||
+    ""
+  ).trim();
+
+  return !!(pageId || routeHint);
+}
+
+function hasCustomSplashFirstSlideReady() {
+  try {
+    if (!window.__jmsFirstSlideReady) return false;
+    return !!document.querySelector(
+      "#indexPage .monwui-slide, #homePage .monwui-slide, #monwui-slides-container .monwui-slide"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isCustomSplashReady() {
+  const root = getCustomSplashRoot();
+  if (!root?.hasAttribute(CUSTOM_SPLASH_ACTIVE_ATTR)) return true;
+  if (isCustomSplashSliderDisabled()) return true;
+  if (hasCustomSplashFirstSlideReady()) return true;
+  if (hasCustomSplashVisibleNonHomePage()) return true;
+  return false;
+}
+
+function isCustomSplashSliderDisabled() {
+  try {
+    return (typeof getConfig === "function" ? getConfig()?.enableSlider : true) === false;
+  } catch {
+    return false;
+  }
+}
+
+function stopCustomSplashWatchers() {
+  if (__customSplashObserver) {
+    try { __customSplashObserver.disconnect(); } catch {}
+    __customSplashObserver = null;
+  }
+  if (__customSplashHardTimer) {
+    clearTimeout(__customSplashHardTimer);
+    __customSplashHardTimer = 0;
+  }
+}
+
+function finalizeCustomSplashHide(reason = "ready") {
+  const root = getCustomSplashRoot();
+  if (!root?.hasAttribute(CUSTOM_SPLASH_ACTIVE_ATTR)) return false;
+  if (root.hasAttribute(CUSTOM_SPLASH_HIDDEN_ATTR)) return true;
+
+  if (__customSplashCleanupTimer) {
+    clearTimeout(__customSplashCleanupTimer);
+  }
+
+  root.setAttribute(CUSTOM_SPLASH_HIDDEN_ATTR, "1");
+  root.setAttribute("data-jms-custom-splash-reason", reason);
+
+  const hasSlides = !!document.querySelector(
+    "#indexPage:not(.hide) .monwui-slide, #homePage:not(.hide) .monwui-slide"
+  );
+  if (hasSlides) {
+    if (!hasStartedCycleClock()) {
+      startNewCycleClock();
+    }
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        try { restartSlideTimerDeterministic(); } catch {}
+      });
+    });
+  }
+
+  __customSplashCleanupTimer = window.setTimeout(() => {
+    cleanupCustomSplashAttrs();
+    try {
+      getCustomSplashRoot()?.removeAttribute("data-jms-custom-splash-reason");
+    } catch {}
+    __customSplashCleanupTimer = 0;
+  }, CUSTOM_SPLASH_CLEANUP_MS);
+
+  return true;
+}
+
+function hideCustomSplash(reason = "ready") {
+  const root = getCustomSplashRoot();
+  if (!root?.hasAttribute(CUSTOM_SPLASH_ACTIVE_ATTR)) return false;
+  if (root.hasAttribute(CUSTOM_SPLASH_HIDDEN_ATTR)) return true;
+
+  stopCustomSplashWatchers();
+  if (__customSplashCleanupTimer) {
+    clearTimeout(__customSplashCleanupTimer);
+  }
+  if (__customSplashHideTimer) {
+    return true;
+  }
+
+  const readyStage = splashLabel("customSplashStageReady", "HAZIR");
+  const closingDetail = reason === "timeout"
+    ? splashLabel("customSplashDetailForcedExit", "Zorunlu geçiş devreye alınıyor")
+    : splashLabel("customSplashDetailReady", "MonWui çevrimiçi");
+
+  syncCustomSplashProgress({
+    uiReady: true,
+    stage: readyStage,
+    detail: closingDetail
+  });
+  completeCustomSplashProgress({
+    stage: readyStage,
+    detail: closingDetail
   });
 
-  document.querySelectorAll('link[data-jellyfin-player-css]').forEach((link) => {
-    if (!expected.has(link.getAttribute("data-jellyfin-player-css"))) {
-      link.remove();
+  root.setAttribute("data-jms-custom-splash-reason", reason);
+  const delay = (reason === "config-disabled" || reason === "slider-disabled") ? 0 : CUSTOM_SPLASH_EXIT_SYNC_MS;
+  __customSplashHideTimer = window.setTimeout(() => {
+    __customSplashHideTimer = 0;
+    finalizeCustomSplashHide(reason);
+  }, delay);
+  return true;
+}
+
+function scheduleCustomSplashCheck(delay = 0) {
+  window.setTimeout(() => {
+    if (isCustomSplashReady()) {
+      hideCustomSplash("ui-ready");
+    }
+  }, Math.max(0, delay | 0));
+}
+
+function initCustomSplash() {
+  const root = getCustomSplashRoot();
+  const api = {
+    hide: hideCustomSplash,
+    isBlocking() {
+      return !!root?.hasAttribute(CUSTOM_SPLASH_ACTIVE_ATTR) && !root?.hasAttribute(CUSTOM_SPLASH_HIDDEN_ATTR);
+    },
+    syncFromConfig(forceEnabled) {
+      const sliderDisabled = isCustomSplashSliderDisabled();
+      const enabled = typeof forceEnabled === "boolean"
+        ? forceEnabled
+        : ((typeof getConfig === "function" ? getConfig()?.enableCustomSplashScreen : true) !== false);
+
+      if (!enabled) {
+        hideCustomSplash("config-disabled");
+        cleanupCustomSplashAttrs();
+        return false;
+      }
+
+      if (sliderDisabled) {
+        hideCustomSplash("slider-disabled");
+        return false;
+      }
+
+      if (!root?.hasAttribute(CUSTOM_SPLASH_ACTIVE_ATTR)) return true;
+      applyCustomSplashCopy();
+      scheduleCustomSplashCheck(0);
+      return true;
+    }
+  };
+
+  try {
+    window.__JMS_CUSTOM_SPLASH__ = api;
+  } catch {}
+
+  if (!root) return api;
+  if (!readCustomSplashEnabled(true)) {
+    cleanupCustomSplashAttrs();
+    return api;
+  }
+  if (!root.hasAttribute(CUSTOM_SPLASH_ACTIVE_ATTR)) {
+    return api;
+  }
+
+  resetCustomSplashProgressState();
+  applyCustomSplashCopy();
+  syncCustomSplashProgress();
+
+  if (isCustomSplashSliderDisabled()) {
+    hideCustomSplash("slider-disabled");
+    return api;
+  }
+
+  if (isCustomSplashReady()) {
+    requestAnimationFrame(() => hideCustomSplash("already-ready"));
+    return api;
+  }
+
+  if (typeof MutationObserver === "function") {
+    __customSplashObserver = new MutationObserver(() => {
+      if (isCustomSplashReady()) {
+        hideCustomSplash("mutation-ready");
+      }
+    });
+    __customSplashObserver.observe(document.body || document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["class", "style", "hidden", "aria-hidden"]
+    });
+  }
+
+  document.addEventListener("readystatechange", () => {
+    if (document.readyState !== "loading") {
+      scheduleCustomSplashCheck(0);
     }
   });
+  if (window.__jmsFirstSlideReady) {
+    scheduleCustomSplashCheck(0);
+  } else {
+    document.addEventListener("jms:first-slide-ready", () => {
+      hideCustomSplash("first-slide-ready");
+    }, { once: true });
+  }
+  window.addEventListener("load", () => scheduleCustomSplashCheck(180), { once: true });
+  window.addEventListener("pageshow", () => scheduleCustomSplashCheck(0), { passive: true });
+
+  __customSplashHardTimer = window.setTimeout(() => {
+    hideCustomSplash("timeout");
+  }, CUSTOM_SPLASH_TIMEOUT_MS);
+
+  scheduleCustomSplashCheck(1500);
+  return api;
+}
+
+initCustomSplash();
+document.addEventListener("readystatechange", () => {
+  syncCustomSplashProgress();
+});
+syncCustomSplashProgress();
+
+function loadDetailsModalLoader() {
+  return __detailsModalLoaderPromise || (__detailsModalLoaderPromise = import("./modules/detailsModalLoader.js"));
+}
+
+async function openDetailsModalLazy(options = {}) {
+  const { openDetailsModal } = await loadDetailsModalLoader();
+  return openDetailsModal(options);
+}
+
+function loadHoverTrailerModule() {
+  return __hoverTrailerModulePromise || (__hoverTrailerModulePromise = import("./modules/hoverTrailerModal.js"));
+}
+
+function queueHoverModuleBoot() {
+  idle(() => {
+    loadHoverTrailerModule()
+      .then(({ setupHoverForAllItems }) => {
+        try { setupHoverForAllItems?.(); } catch {}
+      })
+      .catch(() => {});
+  });
+}
+
+function loadPersonalRecommendationsModule() {
+  return __personalRecommendationsModulePromise || (__personalRecommendationsModulePromise = import("./modules/personalRecommendations.js"));
+}
+
+function loadDirectorRowsModule() {
+  return __directorRowsModulePromise || (__directorRowsModulePromise = import("./modules/directorRows.js"));
+}
+
+function loadRecentRowsModule() {
+  return __recentRowsModulePromise || (__recentRowsModulePromise = import("./modules/recentRows.js"));
+}
+
+function loadStudioHubsModule() {
+  return __studioHubsModulePromise || (__studioHubsModulePromise = import("./modules/studioHubs.js"));
+}
+
+function renderPersonalRecommendationsLazy(options = {}) {
+  return loadPersonalRecommendationsModule()
+    .then(({ renderPersonalRecommendations }) => renderPersonalRecommendations?.(options))
+    .catch(() => {});
+}
+
+function mountDirectorRowsLazyModule(options = {}) {
+  return loadDirectorRowsModule()
+    .then(({ mountDirectorRowsLazy }) => mountDirectorRowsLazy?.(options))
+    .catch(() => {});
+}
+
+function mountRecentRowsLazyModule(options = {}) {
+  return loadRecentRowsModule()
+    .then(({ mountRecentRowsLazy }) => mountRecentRowsLazy?.(options))
+    .catch(() => {});
+}
+
+function cleanupRecentRowsLazy() {
+  return loadRecentRowsModule()
+    .then(({ cleanupRecentRows }) => cleanupRecentRows?.())
+    .catch(() => {});
+}
+
+function cleanupDirectorRowsLazy() {
+  return loadDirectorRowsModule()
+    .then(({ cleanupDirectorRows }) => cleanupDirectorRows?.())
+    .catch(() => {});
+}
+
+function resetPersonalRecommendationsLazy() {
+  return loadPersonalRecommendationsModule()
+    .then(({ resetPersonalRecsAndGenreState }) => resetPersonalRecsAndGenreState?.())
+    .catch(() => {});
+}
+
+function ensureStudioHubsMountedLazy(options = {}) {
+  return loadStudioHubsModule()
+    .then(({ ensureStudioHubsMounted }) => ensureStudioHubsMounted?.(options))
+    .catch(() => {});
+}
+
+function cleanupStudioHubsLazy() {
+  return loadStudioHubsModule()
+    .then(({ cleanupStudioHubs }) => cleanupStudioHubs?.())
+    .catch(() => {});
+}
+
+let homeSectionMountSeq = 0;
+const homeSectionMountTimers = new Set();
+
+function clearHomeSectionMountTimers() {
+  for (const timer of homeSectionMountTimers) {
+    clearTimeout(timer);
+  }
+  homeSectionMountTimers.clear();
+}
+
+function scheduleHomeSectionMount(seq, fn, delayMs = 0) {
+  const timer = window.setTimeout(() => {
+    homeSectionMountTimers.delete(timer);
+    if (homeSectionMountSeq !== seq) return;
+    try { fn?.(); } catch (e) { console.warn("scheduleHomeSectionMount hata:", e); }
+  }, Math.max(0, delayMs | 0));
+
+  homeSectionMountTimers.add(timer);
+}
+
+function bootHomeSections(cfg, { eagerStudioHubs = false, forceManagedSections = false } = {}) {
+  homeSectionMountSeq += 1;
+  const seq = homeSectionMountSeq;
+  clearHomeSectionMountTimers();
+  let delayMs = 0;
+
+  if (shouldRenderStudioHubsUi(cfg)) {
+    scheduleHomeSectionMount(seq, () => {
+      void ensureStudioHubsMountedLazy({ eager: eagerStudioHubs });
+    }, delayMs);
+    delayMs += 180;
+  }
+
+  if (shouldRenderPersonalRecommendationUi(cfg)) {
+    scheduleHomeSectionMount(seq, () => {
+      void renderPersonalRecommendationsLazy({ force: forceManagedSections });
+    }, delayMs);
+    delayMs += 180;
+  }
+  if (shouldRenderRecentRowsUi(cfg)) {
+    scheduleHomeSectionMount(seq, () => {
+      void mountRecentRowsLazyModule({ force: forceManagedSections });
+    }, delayMs);
+    delayMs += 180;
+  }
+  if (shouldRenderDirectorRowsUi(cfg)) {
+    scheduleHomeSectionMount(seq, () => {
+      void mountDirectorRowsLazyModule({ force: forceManagedSections });
+    }, delayMs);
+    delayMs += 180;
+  }
 }
 
 function installHomeTabSliderOnlyGate() {
@@ -321,7 +1130,7 @@ function installHomeTabSliderOnlyGate() {
   apply();
 
   const mo = new MutationObserver(() => apply());
-  mo.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["class"] });
+  mo.observe(getDomObserveRoot(), { subtree: true, childList: true, attributes: true, attributeFilter: ["class"] });
 
   const tick = () => apply();
   window.addEventListener("popstate", tick);
@@ -373,6 +1182,7 @@ window.__jmsMusicSchedulerBooted = window.__jmsMusicSchedulerBooted || false;
 function markFirstSlideReady() {
   if (window.__jmsFirstSlideReady) return;
   window.__jmsFirstSlideReady = true;
+  syncCustomSplashProgress({ firstSlideReady: true });
   try {
     document.dispatchEvent(new CustomEvent("jms:first-slide-ready"));
   } catch {}
@@ -427,13 +1237,6 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
     HEAD.prepend(s);
   }
 
-  function normalizeCssHref(href) {
-    if (!href) return href;
-    return (typeof href === 'string' && href.startsWith('/slider/'))
-      ? (`/web${href}`)
-      : href;
-  }
-
   function syncCSS(href, id, enabled = true) {
     const existing = D.getElementById(id);
     if (!enabled) {
@@ -442,9 +1245,7 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
     }
     if (!href) return;
 
-    const normalized = normalizeCssHref(href);
-    const resolved =
-      (typeof withServer === 'function') ? withServer(normalized) : normalized;
+    const resolved = resolveSliderAssetHref(href);
 
     if (existing) {
       if (existing.href !== resolved) existing.href = resolved;
@@ -640,6 +1441,54 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
     ]);
   }
 
+  const FEATURE_CSS_SYNC_SELECTOR_TEXT = [
+    '#indexPage',
+    '#homePage',
+    '.homeSectionsContainer',
+    '#monwui-slides-container',
+    '.monwui-slide-progress-bar',
+    '.monwui-dot-navigation-container',
+    '#jfNotifBtn',
+    '#jfNotifModal',
+    '.jf-notif-panel',
+    '#personal-recommendations',
+    '#genre-hubs',
+    '#director-rows',
+    '#recent-rows',
+    '#because-you-watched',
+    '[id^="because-you-watched--"]',
+    '#studio-hubs',
+    '.hub-preview-popover',
+    '#jms-details-modal-root',
+    '.jmsdm-backdrop',
+    '.jmsdm-card',
+    '.mini-poster-popover',
+    '.mini-trailer-popover',
+    '.jms-avatarBackdrop',
+    '.jms-avatarModal',
+    '.jms-avatarPickBtn',
+    '#jfProfileChooserOverlay',
+    '#jfProfileChooserBtn',
+    '.jf-profile-overlay',
+    '.jf-profile-header-btn',
+    '#jms-pause-overlay',
+    '#jms-overlay-progress',
+    '#pause-status-bottom-right',
+    '#jms-reco-panel',
+    '.rating-genre-overlay',
+    '.rating-icons-overlay',
+    '.videoOsdBottom.videoOsdBottom-maincontrols .buttons',
+    '.btnJmsSubtitleCustomizer',
+    '[data-jms-subtitle-dialog]',
+    '#jms-subtitle-dialog',
+    '.jms-subtitle-dialog'
+  ].join(',');
+  const FEATURE_CSS_SYNC_MIN_DELAY_MS = 160;
+
+  function shouldQueueFeatureCssSyncFromMutations(mutations) {
+    return mutationsTouchSelectors(mutations, FEATURE_CSS_SYNC_SELECTOR_TEXT);
+  }
+
   const vmap = {
     peakslider: '/slider/src/peakslider.css',
     fullslider: '/slider/src/fullslider.css',
@@ -663,8 +1512,6 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
     const sliderCssEnabled = isSliderCssActive(cfg);
 
     syncCSS('/slider/src/fontawesome/all.min.css', 'jms-css-fontawesome', true);
-    // Notification themes are owned by modules/notifications.js via #jfNotifCss.
-    // Keep cleaning the legacy synced link so it cannot pin theme 1 in the DOM.
     D.getElementById('jms-css-notifications')?.remove();
     syncCSS('/slider/src/pauseModul.css', 'jms-css-pause', pauseFeatureCssEnabled);
     syncCSS('/slider/src/personalRecommendations.css', 'jms-css-recs', recommendationCssEnabled);
@@ -725,13 +1572,30 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
   }
 
   let cssSyncQueued = false;
-  function queueFeatureCssSync() {
+  let cssSyncTimer = 0;
+  let cssLastSyncAt = 0;
+  function queueFeatureCssSync(options = {}) {
+    const force = options?.force === true;
     if (cssSyncQueued) return;
-    cssSyncQueued = true;
-    raf(() => {
-      cssSyncQueued = false;
-      applyFeatureCss();
-    });
+    if (cssSyncTimer) {
+      if (!force) return;
+      clearTimeout(cssSyncTimer);
+      cssSyncTimer = 0;
+    }
+
+    const elapsed = Date.now() - cssLastSyncAt;
+    const delay = force ? 0 : Math.max(0, FEATURE_CSS_SYNC_MIN_DELAY_MS - elapsed);
+
+    cssSyncTimer = window.setTimeout(() => {
+      cssSyncTimer = 0;
+      if (cssSyncQueued) return;
+      cssSyncQueued = true;
+      raf(() => {
+        cssSyncQueued = false;
+        cssLastSyncAt = Date.now();
+        applyFeatureCss();
+      });
+    }, delay);
   }
 
   try {
@@ -740,15 +1604,18 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
 
   applyFeatureCss();
 
-  D.addEventListener('DOMContentLoaded', queueFeatureCssSync, { once: true });
-  window.addEventListener('hashchange', queueFeatureCssSync, { passive: true });
-  window.addEventListener('popstate', queueFeatureCssSync, { passive: true });
-  window.addEventListener('pageshow', queueFeatureCssSync, { passive: true });
-  window.addEventListener('jms:globalPreviewModeChanged', queueFeatureCssSync, { passive: true });
+  D.addEventListener('DOMContentLoaded', () => queueFeatureCssSync({ force: true }), { once: true });
+  window.addEventListener('hashchange', () => queueFeatureCssSync({ force: true }), { passive: true });
+  window.addEventListener('popstate', () => queueFeatureCssSync({ force: true }), { passive: true });
+  window.addEventListener('pageshow', () => queueFeatureCssSync({ force: true }), { passive: true });
+  window.addEventListener('jms:globalPreviewModeChanged', () => queueFeatureCssSync({ force: true }), { passive: true });
 
   if (typeof MutationObserver === 'function') {
-    const mo = new MutationObserver(() => queueFeatureCssSync());
-    mo.observe(D.documentElement, {
+    const mo = new MutationObserver((mutations) => {
+      if (!shouldQueueFeatureCssSyncFromMutations(mutations)) return;
+      queueFeatureCssSync();
+    });
+    mo.observe(getDomObserveRoot(), {
       childList: true,
       subtree: true
     });
@@ -838,8 +1705,28 @@ function startNewCycleClock() {
   armCycleReset();
 }
 
+function hasStartedCycleClock() {
+  return Number(window.__cycleStartAt || 0) > 0;
+}
+
+function isCustomSplashBlockingNow() {
+  try {
+    const root = getCustomSplashRoot();
+    return !!root?.hasAttribute(CUSTOM_SPLASH_ACTIVE_ATTR) && !root?.hasAttribute(CUSTOM_SPLASH_HIDDEN_ATTR);
+  } catch {
+    return false;
+  }
+}
+
 function markSlideCreated() {
   window.__slidesCreated = (window.__slidesCreated || 0) + 1;
+  const totalSlides = Math.max(0, Number(window.__totalSlidesPlanned) || 0);
+  const createdSlides = Math.max(0, Number(window.__slidesCreated) || 0);
+  syncCustomSplashProgress({
+    totalSlides,
+    createdSlides,
+    allSlidesReady: totalSlides > 0 && createdSlides >= totalSlides
+  });
   if (window.__totalSlidesPlanned > 0 && window.__slidesCreated >= window.__totalSlidesPlanned) {
     try {
       document.dispatchEvent(new CustomEvent("jms:all-slides-ready"));
@@ -1251,6 +2138,11 @@ function isHomeVisible() {
   return !!document.querySelector("#indexPage:not(.hide), #homePage:not(.hide)");
 }
 
+function isHomeRouteActive() {
+  const hash = String(window.location.hash || "").toLowerCase().trim();
+  return hash.startsWith("#/home") || hash.startsWith("#/index") || hash === "" || hash === "#";
+}
+
 function uniqueByIdStable(arr) {
   const seen = new Set();
   const out = [];
@@ -1282,7 +2174,9 @@ async function mapLimit(arr, limit, mapper) {
 }
 
 function setupGlobalModalInit() {
-  setupHoverForAllItems();
+  whenFirstSlideReadyOrTimeout(() => {
+    queueHoverModuleBoot();
+  }, 2500);
   idle(() => {
     if (!window.hls) loadHls().catch(() => {});
   });
@@ -1380,30 +2274,6 @@ window.__jmsIndexerAutoStartTimer = window.__jmsIndexerAutoStartTimer || null;
 window.__jmsIndexerAutoStartReady = window.__jmsIndexerAutoStartReady || false;
 window.__jmsIndexerAutoStartPending = window.__jmsIndexerAutoStartPending || false;
 
-function schedulePersonalRecsReinit(delayMs = 10000) {
-  try { clearTimeout(window.__recsRebuildTimer); } catch {}
-  window.__recsRebuildTimer = setTimeout(() => {
-    try {
-      const cfg = (typeof getConfig === 'function' ? getConfig() : {}) || {};
-
-      if (shouldRenderPersonalRecommendationUi(cfg)) {
-        renderPersonalRecommendations();
-      }
-
-      if (shouldRenderDirectorRowsUi(cfg) && typeof mountDirectorRowsLazy === 'function') {
-        mountDirectorRowsLazy();
-      }
-
-      if (shouldRenderRecentRowsUi(cfg) && typeof mountRecentRowsLazy === 'function') {
-        mountRecentRowsLazy();
-      }
-
-    } catch (e) {
-      console.warn("schedulePersonalRecsReinit hata:", e);
-    }
-  }, Math.max(0, delayMs|0));
-}
-
 function fullSliderReset() {
   try { teardownAnimations(); } catch {}
   forceSkinHeaderPointerEvents();
@@ -1424,7 +2294,7 @@ function fullSliderReset() {
 
   setCurrentIndex(0);
   stopSlideTimer();
-  cleanupSlider();
+  cleanupSlider({ preserveHomeSections: true });
   clearCycleArm();
   try { window.__peakBooting = true; } catch {}
   window.__jmsFirstSlideReady = false;
@@ -1432,7 +2302,6 @@ function fullSliderReset() {
   window.__cycleExpired = false;
   window.mySlider = {};
   try { delete window.__recsWiresBooted; } catch {}
-  try { schedulePersonalRecsReinit(5000); } catch {}
 }
 
 function extractItemTypesFromQuery(query) {
@@ -1487,9 +2356,7 @@ export async function loadHls() {
   if (window.hls) return;
   return new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = (typeof withServer === 'function')
-      ? withServer(`/web/slider/modules/hlsjs/hls.min.js`)
-      : `/web/slider/modules/hlsjs/hls.min.js`;
+    script.src = resolveSliderAssetHref("/slider/modules/hlsjs/hls.min.js");
     script.onload = resolve;
     script.onerror = () => reject(new Error("hls yüklenemedi"));
     document.head.appendChild(script);
@@ -1503,7 +2370,7 @@ function observeDOMChanges() {
     scheduled = true;
     requestAnimationFrame(() => {
       scheduled = false;
-      try { setupHoverForAllItems(); } catch {}
+      queueHoverModuleBoot();
     });
   };
 
@@ -1606,42 +2473,6 @@ function upsertSlidesContainerAtTop(indexPage) {
     updateSlidePosition();
   } catch {}
   return c;
-}
-
-function isVisible(el) {
-  if (!el) return false;
-  if (el.classList?.contains("hide")) return false;
-  const rect = el.getBoundingClientRect?.();
-  return !!rect && rect.width >= 1 && rect.height >= 1;
-}
-
-export function waitForAnyVisible(selectors, { timeout = 20000 } = {}) {
-  return new Promise((resolve) => {
-    const check = () => {
-      for (const sel of selectors) {
-        const el = document.querySelector(sel);
-        if (el && isVisible(el)) {
-          cleanup();
-          resolve(el);
-          return true;
-        }
-      }
-      return false;
-    };
-    const mo = new MutationObserver(() => {
-      check();
-    });
-    mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
-    const to = setTimeout(() => {
-      cleanup();
-      resolve(null);
-    }, timeout);
-    function cleanup() {
-      clearTimeout(to);
-      mo.disconnect();
-    }
-    if (check()) return;
-  });
 }
 
 async function waitForVisibleIndexPage(timeout = 20000) {
@@ -1749,7 +2580,7 @@ function hydrateFirstSlide(indexPage) {
 
 function primeProgressBar(indexPage) {
   if (!indexPage) return;
-  const pb = indexPage.querySelector(".monwui-slide-progress-bar");
+  const pb = document.querySelector(".monwui-slide-progress-bar");
   if (!pb) return;
   try {
     resetProgressBar?.();
@@ -1922,7 +2753,7 @@ function scheduleVisibleSliderRestoreRepair(options = {}) {
 
 function startTimerAndRevealPB(indexPage) {
   if (!indexPage) return;
-  const pb = indexPage.querySelector(".monwui-slide-progress-bar");
+  const pb = document.querySelector(".monwui-slide-progress-bar");
   startSlideTimer();
   safeRaf(() => {
     if (pb) pb.style.opacity = "1";
@@ -2029,6 +2860,7 @@ export async function slidesInit() {
   try {
     await waitAuthWarmupFallback(5000);
   } catch {}
+  syncCustomSplashProgress({ authReady: true });
   try {
     forceSkinHeaderPointerEvents();
     forceHomeSectionsTop();
@@ -2207,6 +3039,10 @@ export async function slidesInit() {
       if (Array.isArray(listItems) && listItems.length) {
         const details = await fetchItemDetailsCached.many(listItems);
         items = details.filter((x) => x);
+        syncCustomSplashProgress({
+          dataPoolReady: true,
+          poolCount: items.length
+        });
       } else {
         const baseQS = (config.customQueryString || '').replace(/^[?&]+/, '');
         const onlyUnwatched = !!config.onlyUnwatchedRandom;
@@ -2266,6 +3102,10 @@ export async function slidesInit() {
         allowStaleOnError: true,
       });
         let allItems = data.Items || [];
+        syncCustomSplashProgress({
+          dataPoolReady: true,
+          poolCount: Array.isArray(allItems) ? allItems.length : 0
+        });
         if (playingItems.length && allItems.length) {
           const playingIds = new Set(playingItems.map((it) => it && it.Id).filter(Boolean));
           allItems = allItems.filter((it) => it && !playingIds.has(it.Id));
@@ -2487,6 +3327,11 @@ export async function slidesInit() {
   }
   window.__totalSlidesPlanned = items.length;
   window.__slidesCreated = 0;
+  syncCustomSplashProgress({
+    selectionReady: true,
+    totalSlides: items.length,
+    createdSlides: 0
+  });
 
     const peakBatches = config.peakSlider ? buildPeakCreationBatches(items.length, getPeakDisplayOptions()) : [];
     const markSlideReadyWhenVisualSyncOpens = (slideEl) => {
@@ -2626,7 +3471,7 @@ function initializeSlider() {
     let focusedSlide = null;
     let keyboardActive = false;
 
-    const pb = indexPage.querySelector(".monwui-slide-progress-bar");
+    const pb = document.querySelector(".monwui-slide-progress-bar");
     if (pb) {
       pb.style.opacity = "0";
       pb.style.width = "0%";
@@ -2641,22 +3486,31 @@ function queueHardResetNextFrame() {
 }
 
 function startWhenAllReady() {
+  const shouldStartTimer = !hasStartedCycleClock() && !isCustomSplashBlockingNow();
+
   try {
     const oldDots = document.querySelector(".monwui-dot-navigation-container");
     if (oldDots) oldDots.remove();
     createDotNavigation();
   } catch {}
 
-  primeProgressBar(indexPage);
+  if (shouldStartTimer) {
+    primeProgressBar(indexPage);
+  }
   ensureInitialActivation(indexPage);
   hydrateFirstSlide(indexPage);
   initSwipeEvents();
-  startNewCycleClock();
-  safeRaf(() => {
-    hardProgressReset();
-    startSlideTimer();
+  if (shouldStartTimer) {
+    startNewCycleClock();
+    safeRaf(() => {
+      hardProgressReset();
+      startSlideTimer();
+      if (pb) pb.style.opacity = "1";
+    });
+  } else {
+    try { updateProgressBarPosition(); } catch {}
     if (pb) pb.style.opacity = "1";
-  });
+  }
 
     try {
       window.__peakBooting = false;
@@ -2720,7 +3574,7 @@ if (window.__totalSlidesPlanned > 0 && window.__slidesCreated >= window.__totalS
         const preferBackdropIndex = localStorage.getItem("jms_backdrop_index") || "0";
         const originEl = focusedSlide.__backdropImg || focusedSlide.querySelector?.(".monwui-backdrop") || focusedSlide;
         try {
-          await openDetailsModal({
+          await openDetailsModalLazy({
             itemId,
             serverId: getSessionInfo?.()?.serverId || "",
             preferBackdropIndex,
@@ -2774,11 +3628,13 @@ function setupNavigationObserver() {
   navObsBooted = true;
 
   let previousUrl = window.location.href;
-  let isOnHomePage = !!document.querySelector("#indexPage:not(.hide)") || window.location.pathname === "/";
+  let isOnHomePage = isHomeVisible() || isHomeRouteActive();
+  let scheduledTimer = 0;
+  let disposed = false;
 
   const checkPageChange = async () => {
     const currentUrl = window.location.href;
-    const nowOnHomePage = !!document.querySelector("#indexPage:not(.hide)") || window.location.pathname === "/";
+    const nowOnHomePage = isHomeVisible() || isHomeRouteActive();
 
     if (currentUrl !== previousUrl || nowOnHomePage !== isOnHomePage) {
       previousUrl = currentUrl;
@@ -2794,44 +3650,136 @@ function setupNavigationObserver() {
         const ok = await waitForVisibleIndexPage(12000);
         if (ok) {
           window.__initOnHomeOnce = false;
-          initializeSliderOnHome();
+          initializeSliderOnHome({ forceManagedSectionsBoot: true });
         } else {
           const stop = observeWhenHomeReady(() => {
             window.__initOnHomeOnce = false;
-            initializeSliderOnHome();
+            initializeSliderOnHome({ forceManagedSectionsBoot: true });
             stop();
           }, 20000);
         }
       } else {
-        try { cleanupRecentRows?.(); } catch {}
         cleanupSlider();
         window.__initOnHomeOnce = false;
       }
       startPauseOverlayOnce();
+    }
+  };
+
+  const scheduleCheck = (delay = 0) => {
+    if (disposed || scheduledTimer) return;
+    scheduledTimer = window.setTimeout(() => {
+      scheduledTimer = 0;
+      void checkPageChange();
+    }, Math.max(0, delay | 0));
+  };
+
+  const isHomeMutationTarget = (node) => {
+    if (!node || node.nodeType !== 1) return false;
+    if (node.id === "indexPage" || node.id === "homePage") return true;
+    if (node.classList?.contains("homeSectionsContainer")) return true;
+    return !!node.querySelector?.("#indexPage, #homePage, .homeSectionsContainer");
+  };
+
+  const domObserver = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      if (mutation.type === "attributes") {
+        if (isHomeMutationTarget(mutation.target)) {
+          scheduleCheck();
+          return;
         }
-    };
-  setTimeout(checkPageChange, 0);
-  const observerInterval = setInterval(checkPageChange, 300);
+        continue;
+      }
+      for (const node of mutation.addedNodes) {
+        if (isHomeMutationTarget(node)) {
+          scheduleCheck();
+          return;
+        }
+      }
+    }
+  });
+
+  domObserver.observe(document.body || document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["class"]
+  });
+
+  scheduleCheck();
 
   const origPush = history.pushState;
   const origReplace = history.replaceState;
   history.pushState = function () {
     origPush.apply(this, arguments);
-    checkPageChange();
+    scheduleCheck();
   };
   history.replaceState = function () {
     origReplace.apply(this, arguments);
-    checkPageChange();
+    scheduleCheck();
   };
-  window.addEventListener("popstate", checkPageChange);
-  window.addEventListener("pageshow", (e) => {
-    if (e.persisted) checkPageChange();
-  });
 
-  return () => clearInterval(observerInterval);
+  const onPopState = () => scheduleCheck();
+  const onHashChange = () => scheduleCheck();
+  const onPageShow = () => scheduleCheck();
+  const onFocus = () => scheduleCheck(50);
+
+  window.addEventListener("popstate", onPopState);
+  window.addEventListener("hashchange", onHashChange);
+  window.addEventListener("pageshow", onPageShow);
+  window.addEventListener("focus", onFocus, { passive: true });
+
+  return () => {
+    disposed = true;
+    if (scheduledTimer) {
+      clearTimeout(scheduledTimer);
+      scheduledTimer = 0;
+    }
+    try { domObserver.disconnect(); } catch {}
+    history.pushState = origPush;
+    history.replaceState = origReplace;
+    window.removeEventListener("popstate", onPopState);
+    window.removeEventListener("hashchange", onHashChange);
+    window.removeEventListener("pageshow", onPageShow);
+    window.removeEventListener("focus", onFocus);
+  };
 }
 
-function initializeSliderOnHome() {
+let homeSectionsBootTimer = 0;
+let homeSectionsBootSeq = 0;
+
+function queueHomeSectionsBoot({
+  delayMs = 0,
+  eagerStudioHubs = false,
+  requireSliderDisabled = false,
+  forceManagedSections = false
+} = {}) {
+  homeSectionsBootSeq += 1;
+  const seq = homeSectionsBootSeq;
+
+  if (homeSectionsBootTimer) {
+    clearTimeout(homeSectionsBootTimer);
+    homeSectionsBootTimer = 0;
+  }
+
+  homeSectionsBootTimer = window.setTimeout(() => {
+    homeSectionsBootTimer = 0;
+    idle(() => {
+      if (homeSectionsBootSeq !== seq) return;
+      if (!isHomeVisible()) return;
+      if (requireSliderDisabled && isSliderEnabled()) return;
+
+      try {
+        const cfg = (typeof getConfig === "function" ? getConfig() : {}) || {};
+        bootHomeSections(cfg, { eagerStudioHubs, forceManagedSections });
+      } catch (e) {
+        console.warn("queueHomeSectionsBoot hata:", e);
+      }
+    });
+  }, Math.max(0, delayMs | 0));
+}
+
+function initializeSliderOnHome({ forceManagedSectionsBoot = false } = {}) {
   try { window.__jmsHomeTabPaused = false; } catch {}
 
   if (!isSliderEnabled()) {
@@ -2839,22 +3787,11 @@ function initializeSliderOnHome() {
     try { stopSlideTimer?.(); } catch {}
     try { clearCycleArm(); } catch {}
 
-    try {
-      const cfg = (typeof getConfig === 'function' ? getConfig() : {}) || {};
-
-      if (shouldRenderPersonalRecommendationUi(cfg)) {
-        renderPersonalRecommendations();
-      }
-      if (shouldRenderDirectorRowsUi(cfg) && typeof mountDirectorRowsLazy === 'function') {
-        mountDirectorRowsLazy();
-      }
-      if (shouldRenderRecentRowsUi(cfg) && typeof mountRecentRowsLazy === 'function') {
-        mountRecentRowsLazy();
-      }
-      if (shouldRenderStudioHubsUi(cfg)) {
-        ensureStudioHubsMounted({ eager: true });
-      }
-    } catch {}
+    queueHomeSectionsBoot({
+      delayMs: 500,
+      requireSliderDisabled: true,
+      forceManagedSections: forceManagedSectionsBoot
+    });
 
     return;
   }
@@ -2878,22 +3815,11 @@ function initializeSliderOnHome() {
       const cfg = (typeof getConfig === 'function' ? getConfig() : {}) || {};
 
       try {
-      if (shouldRenderPersonalRecommendationUi(cfg)) {
-        renderPersonalRecommendations();
+        bootHomeSections(cfg);
+      } catch (e) {
+        console.warn("bootPersonalRecsWires onAllReady hata:", e);
       }
-
-      if (shouldRenderDirectorRowsUi(cfg) && typeof mountDirectorRowsLazy === 'function') {
-        mountDirectorRowsLazy();
-      }
-
-      if (shouldRenderRecentRowsUi(cfg) && typeof mountRecentRowsLazy === 'function') {
-        mountRecentRowsLazy();
-      }
-
-    } catch (e) {
-      console.warn("bootPersonalRecsWires onAllReady hata:", e);
-    }
-  };
+    };
 
   document.addEventListener("jms:all-slides-ready", onAllReady, { once: true });
     if (window.__totalSlidesPlanned > 0 && window.__slidesCreated >= window.__totalSlidesPlanned) {
@@ -2946,14 +3872,26 @@ function initializeSliderOnHome() {
     slidesInit();
   })();
 
+  queueHomeSectionsBoot({
+    delayMs: 1800,
+    forceManagedSections: forceManagedSectionsBoot
+  });
+
   if (shouldRenderStudioHubsUi(getMainConfig())) {
-    ensureStudioHubsMounted({ eager:true });
+    void ensureStudioHubsMountedLazy({ eager: true });
   }
 }
 
-function cleanupSlider() {
+function cleanupSlider({ preserveHomeSections = false } = {}) {
   try { teardownAnimations(); } catch {}
-  try { cleanupRecentRows?.(); } catch {}
+  clearHomeSectionMountTimers();
+  homeSectionMountSeq += 1;
+  if (!preserveHomeSections) {
+    void cleanupRecentRowsLazy();
+    void cleanupDirectorRowsLazy();
+    void resetPersonalRecommendationsLazy();
+    void cleanupStudioHubsLazy();
+  }
   if (window.mySlider) {
     if (window.mySlider.autoSlideTimeout) {
       clearTimeout(window.mySlider.autoSlideTimeout);
@@ -3000,7 +3938,7 @@ function observeWhenHomeReady(cb, maxMs = 20000) {
       cleanup();
     }
   });
-  mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
+  mo.observe(getDomObserveRoot(), { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
   const to = setTimeout(() => {
     cleanup();
   }, maxMs + 1000);
@@ -3290,7 +4228,11 @@ function observeWhenHomeReady(cb, maxMs = 20000) {
 
     setupNavigationObserver();
     installHomeTabSliderOnlyGate();
-    idle(() => { if (shouldRenderStudioHubsUi(getMainConfig())) ensureStudioHubsMounted(); });
+    idle(() => {
+      if (shouldRenderStudioHubsUi(getMainConfig())) {
+        void ensureStudioHubsMountedLazy();
+      }
+    });
   } catch (e) {
     console.warn("robustBoot (fast) hata:", e);
   }
@@ -3345,6 +4287,15 @@ window.slidesInit = slidesInit;
     transform: none !important;
   }
   `.trim();
+  const CARD_OVERLAY_FIX_TRIGGER_SELECTOR_TEXT = [
+    '.cardOverlayContainer',
+    '.genre-row',
+    '.personal-recs-row',
+    '#genre-hubs',
+    '#personal-recommendations',
+    '.genre-hub-section',
+    '.personal-recs-section'
+  ].join(',');
 
   const injectedRoots = new WeakSet();
   const lockedRows = new WeakSet();
@@ -3420,9 +4371,10 @@ window.slidesInit = slidesInit;
     scanAndInject();
     lockLayoutInlineImportant();
   };
-  const mo = new MutationObserver(() => {
+  const mo = new MutationObserver((mutations) => {
+    if (!mutationsTouchSelectors(mutations, CARD_OVERLAY_FIX_TRIGGER_SELECTOR_TEXT)) return;
     if (__rafLock) return;
     __rafLock = requestAnimationFrame(runPatchPass);
   });
-  mo.observe(document.documentElement, { childList: true, subtree: true });
+  mo.observe(getDomObserveRoot(), { childList: true, subtree: true });
 })();

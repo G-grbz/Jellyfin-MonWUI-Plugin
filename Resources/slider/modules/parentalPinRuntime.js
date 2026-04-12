@@ -13,9 +13,54 @@ import {
 import { showNotification } from "./player/ui/notification.js";
 
 const STYLE_ID = "jms-parental-pin-style";
+const NATIVE_PLAY_CONTEXT_TTL_MS = 20_000;
+const NATIVE_PLAY_ACTION_TEXTS = new Set([
+  "play",
+  "resume",
+  "play now",
+  "watch now",
+  "continue",
+  "continue watching",
+  "oynat",
+  "simdi oynat",
+  "devam et",
+  "izlemeye devam et"
+]);
+const NATIVE_PLAY_ICON_TEXTS = new Set([
+  "play_arrow",
+  "play_circle",
+  "play_circle_filled",
+  "play_circle_outline",
+  "smart_display",
+  "replay"
+]);
+const NATIVE_MENU_ACTION_TEXTS = new Set([
+  "more",
+  "more options",
+  "more actions",
+  "options",
+  "menu",
+  "details",
+  "details menu",
+  "secenekler",
+  "daha fazla",
+  "daha fazla secenek",
+  "menuyu ac"
+]);
+const NATIVE_MENU_ICON_TEXTS = new Set([
+  "more_vert",
+  "more_horiz",
+  "more_horizon",
+  "expand_more",
+  "arrow_drop_down"
+]);
 let nativePlayInterceptorInstalled = false;
 let activePromptPromise = null;
 let lastKnownPolicy = null;
+let lastNativePlayContext = {
+  itemId: "",
+  at: 0
+};
 
 function getLabels() {
   const cfg = getConfig?.() || {};
@@ -685,16 +730,225 @@ function getCurrentRouteItemId() {
   return parseIdFromHref(window.location.hash || window.location.href);
 }
 
+function normalizeActionText(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[.,:;!?]+$/g, "")
+    .trim();
+}
+
+function rememberNativePlayContext(itemId) {
+  const normalized = String(itemId || "").trim();
+  if (!normalized) return "";
+  lastNativePlayContext = {
+    itemId: normalized,
+    at: Date.now()
+  };
+  return normalized;
+}
+
+function getRememberedNativePlayContextItemId() {
+  if (!lastNativePlayContext.itemId) return "";
+  if ((Date.now() - Number(lastNativePlayContext.at || 0)) > NATIVE_PLAY_CONTEXT_TTL_MS) {
+    lastNativePlayContext = { itemId: "", at: 0 };
+    return "";
+  }
+  return String(lastNativePlayContext.itemId || "").trim();
+}
+
+function collectEventElements(event) {
+  const out = [];
+  const seen = new Set();
+  const add = (value) => {
+    const element = value?.nodeType === 1 ? value : value?.parentElement;
+    if (!element || seen.has(element)) return;
+    seen.add(element);
+    out.push(element);
+  };
+
+  try {
+    const path = typeof event?.composedPath === "function" ? event.composedPath() : [];
+    for (const entry of path) {
+      add(entry);
+    }
+  } catch {}
+
+  add(event?.target);
+  return out;
+}
+
+function collectNativePlayTextCandidates(element) {
+  if (!element) return [];
+
+  const isMenuLikeEntry =
+    isActionSheetElement(element) ||
+    /^menuitem/i.test(String(element.getAttribute?.("role") || "")) ||
+    /\b(actionSheet|actionsheetListItemBody|actionSheetItem|actionSheetMenuItem)\b/i.test(String(element.className || ""));
+
+  const values = [
+    element.getAttribute?.("data-action"),
+    element.dataset?.action,
+    element.getAttribute?.("title"),
+    element.getAttribute?.("aria-label"),
+    element.getAttribute?.("data-title"),
+    element.dataset?.title
+  ];
+
+  if (isMenuLikeEntry) {
+    values.push(
+      element.querySelector?.(".actionSheetItemText")?.textContent,
+      element.querySelector?.(".listItemBodyText")?.textContent,
+      element.querySelector?.(".buttonText")?.textContent,
+      element.textContent
+    );
+  }
+
+  return [...new Set(values.map(normalizeActionText).filter(Boolean))];
+}
+
+function hasNativePlayActionLabel(element) {
+  return collectNativePlayTextCandidates(element).some((text) => NATIVE_PLAY_ACTION_TEXTS.has(text));
+}
+
+function hasNativePlayIcon(element) {
+  if (!element) return false;
+
+  const iconTexts = [
+    element.getAttribute?.("icon"),
+    element.dataset?.icon,
+    element.querySelector?.(".material-icons, .md-icon, .cardOverlayButtonIcon")?.textContent
+  ]
+    .map(normalizeActionText)
+    .filter(Boolean);
+
+  if (iconTexts.some((text) => NATIVE_PLAY_ICON_TEXTS.has(text))) {
+    return true;
+  }
+
+  const classBlob = [
+    String(element.className || ""),
+    String(element.querySelector?.(".material-icons, .md-icon, .cardOverlayButtonIcon")?.className || "")
+  ].join(" ");
+
+  return /\b(play_arrow|play_circle|play-circle|fa-play|fa-circle-play|fa-play-circle)\b/i.test(classBlob);
+}
+
+function hasMenuLauncherLabel(element) {
+  return collectNativePlayTextCandidates(element).some((text) => NATIVE_MENU_ACTION_TEXTS.has(text));
+}
+
+function hasMenuLauncherIcon(element) {
+  if (!element) return false;
+
+  const iconTexts = [
+    element.getAttribute?.("icon"),
+    element.dataset?.icon,
+    element.querySelector?.(".material-icons, .md-icon, .cardOverlayButtonIcon")?.textContent
+  ]
+    .map(normalizeActionText)
+    .filter(Boolean);
+
+  if (iconTexts.some((text) => NATIVE_MENU_ICON_TEXTS.has(text))) {
+    return true;
+  }
+
+  const classBlob = [
+    String(element.className || ""),
+    String(element.querySelector?.(".material-icons, .md-icon, .cardOverlayButtonIcon")?.className || "")
+  ].join(" ");
+
+  return /\b(more_vert|more_horiz|more-horizontal|fa-ellipsis|fa-ellipsis-h|fa-ellipsis-v)\b/i.test(classBlob);
+}
+
+function isMenuLauncherElement(element) {
+  if (!element) return false;
+
+  const action = normalizeActionText(
+    element.getAttribute?.("data-action") ||
+    element.dataset?.action ||
+    ""
+  );
+
+  if (action && /^(menu|more|options|detailsmenu|contextmenu)$/.test(action.replace(/\s+/g, ""))) {
+    return true;
+  }
+
+  return hasMenuLauncherLabel(element) || hasMenuLauncherIcon(element);
+}
+
+function isLikelyInteractiveActionElement(element) {
+  if (!element) return false;
+
+  const tagName = String(element.tagName || "").toLowerCase();
+  const role = String(element.getAttribute?.("role") || "").toLowerCase();
+  const className = String(element.className || "");
+
+  return (
+    tagName === "button" ||
+    tagName === "a" ||
+    role === "button" ||
+    role === "menuitem" ||
+    role === "menuitemradio" ||
+    /\b(itemAction|cardOverlayButton|listItem|actionSheet|paper-icon-button-light|btnPlay|btnResume)\b/i.test(className)
+  );
+}
+
+function isActionSheetElement(element) {
+  if (!element?.closest) return false;
+  return !!element.closest([
+    ".actionSheet",
+    ".actionSheetMenu",
+    ".actionSheetContainer",
+    ".actionSheetDialog",
+    ".actionsheetListItemBody"
+  ].join(", "));
+}
+
+function resolveMenuLauncherElement(target) {
+  return target?.closest?.([
+    "[data-action=\"menu\"]",
+    "[data-action=\"more\"]",
+    ".cardOverlayButton[data-action=\"menu\"]",
+    ".cardOverlayButton[title=\"Diğer\"]",
+    ".cardOverlayButton[title=\"Diger\"]",
+    ".cardOverlayButton[title=\"More\"]",
+    ".cardOverlayButton[title=\"Other\"]",
+    ".paper-icon-button-light[data-action=\"menu\"]",
+    ".paper-icon-button-light[title=\"Diğer\"]",
+    ".paper-icon-button-light[title=\"Diger\"]",
+    ".paper-icon-button-light[title=\"More\"]",
+    ".paper-icon-button-light[title=\"Other\"]"
+  ].join(", ")) || null;
+}
+
 function isNativePlayActionElement(element) {
   if (!element) return false;
   const action = String(element.getAttribute?.("data-action") || element.dataset?.action || "").toLowerCase();
   const className = String(element.className || "");
-  return (
+  if (isMenuLauncherElement(element)) {
+    return false;
+  }
+  if (
     action === "play" ||
     action === "resume" ||
     /\bbtnPlay\b/.test(className) ||
     /\bbtnResume\b/.test(className)
-  );
+  ) {
+    return true;
+  }
+
+  if (!isLikelyInteractiveActionElement(element)) {
+    return false;
+  }
+
+  if (hasNativePlayActionLabel(element)) {
+    return true;
+  }
+
+  return /\b(cardOverlayButton|itemAction|paper-icon-button-light)\b/i.test(className) && hasNativePlayIcon(element);
 }
 
 function shouldIgnoreNativePlayInterception(element) {
@@ -719,7 +973,16 @@ function resolveNativePlayButton(target) {
     "[data-action=\"play\"]",
     "[data-action=\"resume\"]",
     ".btnPlay",
-    ".btnResume"
+    ".btnResume",
+    ".cardOverlayButton",
+    ".actionSheetMenuItem",
+    ".actionSheetItem",
+    ".actionsheetListItemBody",
+    ".actionSheet .listItem",
+    ".actionSheetMenu .listItem",
+    ".actionSheetContainer .listItem",
+    ".actionSheetDialog .listItem",
+    "[role=\"menuitem\"]"
   ].join(", "));
 
   if (!element || !isNativePlayActionElement(element) || shouldIgnoreNativePlayInterception(element)) {
@@ -729,27 +992,136 @@ function resolveNativePlayButton(target) {
   return element;
 }
 
-function extractItemIdFromNativePlayButton(element) {
+function resolveNativePlayButtonFromEvent(event) {
+  for (const element of collectEventElements(event)) {
+    if (resolveMenuLauncherElement(element)) {
+      return null;
+    }
+    const button = resolveNativePlayButton(element);
+    if (button) {
+      return button;
+    }
+  }
+
+  return null;
+}
+
+function extractItemIdFromElement(
+  element,
+  {
+    includeRoute = false,
+    includeRememberedContext = false,
+    allowDescendantSearch = true
+  } = {}
+) {
   if (!element) return "";
 
-  const candidates = [
-    element.getAttribute?.("data-id"),
-    element.getAttribute?.("data-itemid"),
-    element.getAttribute?.("data-item-id"),
-    element.dataset?.id,
-    element.dataset?.itemid,
-    element.dataset?.itemId,
-    element.closest?.("[data-id]")?.getAttribute?.("data-id"),
-    element.closest?.("[data-itemid]")?.getAttribute?.("data-itemid"),
-    element.closest?.("[data-item-id]")?.getAttribute?.("data-item-id"),
-    parseIdFromHref(element.getAttribute?.("href")),
-    parseIdFromHref(element.closest?.("a[href]")?.getAttribute?.("href")),
-    getCurrentRouteItemId()
-  ];
+  const candidates = [];
+  const pushCandidate = (value) => {
+    const normalized = String(value || "").trim();
+    if (!normalized) return;
+    candidates.push(normalized);
+  };
+
+  const lineage = [];
+  let current = element;
+  let depth = 0;
+  while (current && depth < 12) {
+    lineage.push(current);
+    current = current.parentElement;
+    depth += 1;
+  }
+
+  const nestedCarrier = allowDescendantSearch
+    ? element.querySelector?.([
+      "[data-id]",
+      "[data-itemid]",
+      "[data-item-id]",
+      "[itemid]",
+      "[item-id]",
+      "[href*=\"id=\"]"
+    ].join(", "))
+    : null;
+
+  pushCandidate(element.getAttribute?.("data-id"));
+  pushCandidate(element.getAttribute?.("data-itemid"));
+  pushCandidate(element.getAttribute?.("data-item-id"));
+  pushCandidate(element.getAttribute?.("itemid"));
+  pushCandidate(element.getAttribute?.("item-id"));
+  pushCandidate(element.dataset?.id);
+  pushCandidate(element.dataset?.itemid);
+  pushCandidate(element.dataset?.itemId);
+  pushCandidate(element.itemId);
+  pushCandidate(element.__itemId);
+  pushCandidate(element.item?.Id);
+  pushCandidate(element.__data?.Id);
+  pushCandidate(nestedCarrier?.getAttribute?.("data-id"));
+  pushCandidate(nestedCarrier?.getAttribute?.("data-itemid"));
+  pushCandidate(nestedCarrier?.getAttribute?.("data-item-id"));
+  pushCandidate(nestedCarrier?.getAttribute?.("itemid"));
+  pushCandidate(nestedCarrier?.getAttribute?.("item-id"));
+  pushCandidate(parseIdFromHref(element.getAttribute?.("href")));
+  pushCandidate(parseIdFromHref(nestedCarrier?.getAttribute?.("href")));
+
+  for (const node of lineage) {
+    pushCandidate(node.getAttribute?.("data-id"));
+    pushCandidate(node.getAttribute?.("data-itemid"));
+    pushCandidate(node.getAttribute?.("data-item-id"));
+    pushCandidate(node.getAttribute?.("itemid"));
+    pushCandidate(node.getAttribute?.("item-id"));
+    pushCandidate(node.dataset?.id);
+    pushCandidate(node.dataset?.itemid);
+    pushCandidate(node.dataset?.itemId);
+    pushCandidate(node.itemId);
+    pushCandidate(node.__itemId);
+    pushCandidate(node.item?.Id);
+    pushCandidate(node.__data?.Id);
+    pushCandidate(parseIdFromHref(node.getAttribute?.("href")));
+  }
+
+  if (includeRememberedContext && isActionSheetElement(element)) {
+    pushCandidate(getRememberedNativePlayContextItemId());
+  }
+
+  if (includeRoute) {
+    pushCandidate(getCurrentRouteItemId());
+  }
+
+  if (includeRememberedContext && !isActionSheetElement(element)) {
+    pushCandidate(getRememberedNativePlayContextItemId());
+  }
 
   for (const candidate of candidates) {
     const itemId = String(candidate || "").trim();
     if (itemId) return itemId;
+  }
+
+  return "";
+}
+
+function extractItemIdFromNativePlayButton(element) {
+  return extractItemIdFromElement(element, {
+    includeRoute: true,
+    includeRememberedContext: true,
+    allowDescendantSearch: true
+  });
+}
+
+function rememberNativePlayContextFromEvent(event) {
+  for (const element of collectEventElements(event)) {
+    if (shouldIgnoreNativePlayInterception(element)) {
+      continue;
+    }
+
+    const itemId = extractItemIdFromElement(element, {
+      includeRoute: false,
+      includeRememberedContext: false,
+      allowDescendantSearch: false
+    });
+
+    if (itemId) {
+      return rememberNativePlayContext(itemId);
+    }
   }
 
   return "";
@@ -762,14 +1134,27 @@ function installNativePlayInterceptor() {
 
   nativePlayInterceptorInstalled = true;
 
+  document.addEventListener("contextmenu", (event) => {
+    if (!event.isTrusted) return;
+    rememberNativePlayContextFromEvent(event);
+  }, true);
+
   document.addEventListener("click", (event) => {
     if (!event.isTrusted) return;
 
-    const button = resolveNativePlayButton(event.target);
+    if (resolveMenuLauncherElement(event.target)) {
+      rememberNativePlayContextFromEvent(event);
+      return;
+    }
+
+    rememberNativePlayContextFromEvent(event);
+
+    const button = resolveNativePlayButtonFromEvent(event);
     if (!button) return;
 
     const itemId = extractItemIdFromNativePlayButton(button);
     if (!itemId) return;
+    rememberNativePlayContext(itemId);
 
     event.preventDefault();
     event.stopImmediatePropagation();

@@ -1,6 +1,7 @@
 import { getConfig, publishAdminSnapshotIfForced, getAdminTargetProfile, getDeviceProfileAuto } from "./config.js";
-import { loadCSS } from "../main.js";
+import { isLocalStorageAvailable, updateConfig } from "./configPersistence.js";
 import { getLanguageLabels, getDefaultLanguage } from '../language/index.js';
+import { loadCSS } from "./playerStyles.js";
 import { showNotification } from "./player/ui/notification.js";
 import { createPositionEditor } from './settings/positionPage.js';
 import { updateSlidePosition } from './positionUtils.js';
@@ -22,6 +23,8 @@ import { createProfileChooserPanel } from './settings/profileChooserPage.js';
 import { createWatchlistPanel } from './settings/watchlistPage.js';
 import { createParentalPinPanel } from './settings/parentalPinPage.js';
 import { enhanceFormAccessibility } from './accessibility.js';
+
+export { isLocalStorageAvailable, updateConfig };
 
 let settingsModal = null;
 
@@ -912,6 +915,17 @@ function createMainSettingsPanel(labels, panels) {
         config.enableParentalPinModule !== false
     ));
 
+    enablesSection.appendChild(createCheckbox(
+        'enableCustomSplashScreen',
+        labels.enableCustomSplashScreen || 'Özel splash ekranını etkinleştir',
+        config.enableCustomSplashScreen !== false
+    ));
+    enablesSection.appendChild(createTextInput(
+        'customSplashTitle',
+        labels.customSplashTitleLabel || 'Splash başlığı',
+        config.customSplashTitle || labels.customSplashTitle || 'MonWui'
+    ));
+
     [
         extractContainerByInput(panels.profileChooserPanel, 'enableProfileChooser', '.fsetting-item'),
         extractCheckboxPair(panels.musicPanel, 'enabledGmmp'),
@@ -1169,96 +1183,6 @@ export function initSettings(defaultTab = 'monwui') {
         close: () => { modal.style.display = 'none'; }
     };
 }
-
-export function isLocalStorageAvailable() {
-    try {
-        const testKey = 'test';
-        localStorage.setItem(testKey, testKey);
-        localStorage.removeItem(testKey);
-        return true;
-    } catch (e) {
-        return false;
-    }
-}
-
-export function updateConfig(updatedConfig) {
-  const cfg = getConfig();
-
-  if (cfg?.forceGlobalUserSettings && !cfg?.currentUserIsAdmin) {
-    const allowedKeys = new Set([
-      "playerTheme"
-    ]);
-
-    const onlyAllowed =
-      Object.keys(updatedConfig || {}).every(k => allowedKeys.has(k));
-
-    if (!onlyAllowed) {
-      console.warn("[JMSFusion] Global settings forced - update blocked (non-admin).");
-      return;
-    }
-  }
-  const existingDicebearParams = localStorage.getItem('dicebearParams');
-
-  const isPlainObject = (v) =>
-    v !== null && typeof v === 'object' && !Array.isArray(v);
-
-  Object.entries(updatedConfig).forEach(([key, value]) => {
-    if (key === 'dicebearParams') return;
-
-    try {
-      if (typeof value === 'boolean') {
-        localStorage.setItem(key, value ? 'true' : 'false');
-      } else if (typeof value === 'number') {
-        localStorage.setItem(key, String(value));
-      } else if (Array.isArray(value)) {
-        localStorage.setItem(key, JSON.stringify(value));
-      } else if (isPlainObject(value)) {
-        localStorage.setItem(key, JSON.stringify(value));
-      } else if (value !== undefined && value !== null) {
-        localStorage.setItem(key, String(value));
-      } else {
-        localStorage.removeItem(key);
-      }
-    } catch (e) {
-      console.warn('Config yazılamadı:', key, e);
-    }
-  });
-
-  if (existingDicebearParams) {
-    localStorage.setItem('dicebearParams', existingDicebearParams);
-  }
-
-  if (updatedConfig.defaultLanguage !== undefined) {
-    localStorage.setItem('defaultLanguage', updatedConfig.defaultLanguage);
-  }
-
-  if (updatedConfig.dateLocale !== undefined) {
-    localStorage.setItem('dateLocale', updatedConfig.dateLocale);
-  }
-
-  if (!isLocalStorageAvailable()) return;
-
-  const keysToSave = [
-    'playerTheme',
-    'playerStyle',
-    'useAlbumArtAsBackground',
-    'albumArtBackgroundBlur',
-    'albumArtBackgroundOpacity',
-    'buttonBackgroundBlur',
-    'buttonBackgroundOpacity',
-    'dotBackgroundBlur',
-    'dotBackgroundOpacity',
-    'nextTracksSource'
-  ];
-
-  keysToSave.forEach(key => {
-    const value = updatedConfig[key];
-    if (value !== undefined && value !== null) {
-      localStorage.setItem(key, String(value));
-    }
-  });
-}
-
 
 function setupMobileTextareaBehavior() {
   const modal = document.getElementById('settings-modal');

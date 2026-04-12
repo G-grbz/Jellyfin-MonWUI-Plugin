@@ -1,6 +1,6 @@
 import { getConfig } from "./config.js";
 import { getSessionInfo, makeApiRequest, getAuthHeader, playNow, fetchItemDetails, getEmbyHeaders, jms } from "/Plugins/JMSFusion/runtime/api.js";
-import { initSettings } from './settings.js';
+import { openSettings } from "./settingsLoader.js";
 import { loadAvailableDevices, getDeviceIcon, startPlayback, showNotification, hideNotification } from './castModule.js';
 import { getProviderUrl } from './utils.js';
 import { applyContainerStyles } from './positionUtils.js';
@@ -488,8 +488,7 @@ export function createProviderContainer({ config, ProviderIds, RemoteTrailers, i
     settingsLink.title = `${config.languageLabels.settingsLink}`;
     settingsLink.addEventListener("click", (e) => {
       e.preventDefault();
-      const settings = initSettings();
-      settings.open('monwui');
+      void openSettings("monwui");
     });
     providerDiv.appendChild(settingsLink);
     ensureProviderDivMounted();

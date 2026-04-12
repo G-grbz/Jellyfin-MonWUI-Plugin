@@ -13,11 +13,11 @@ namespace Jellyfin.Plugin.JMSFusion
         private static string BuildBlock(string? pathBase = null)
         {
             var sb = new StringBuilder();
-            var ver = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             sb.AppendLine(BeginMark);
-            sb.AppendLine($@"<script type=""module"" src=""../Plugins/JMSFusion/runtime/storage-preload.js?v={ver}""></script>");
-            sb.AppendLine($@"<script type=""module"" src=""../slider/main.js?v={ver}""></script>");
-            sb.AppendLine($@"<script type=""module"" src=""../slider/modules/player/main.js?v={ver}""></script>");
+            sb.AppendLine(AssetVersioning.BuildBootstrapScript());
+            sb.AppendLine($@"<script type=""module"" src=""{AssetVersioning.AppendVersionQuery("../Plugins/JMSFusion/runtime/storage-preload.js")}""></script>");
+            sb.AppendLine($@"<script type=""module"" src=""{AssetVersioning.AppendVersionQuery("../slider/main.js")}""></script>");
+            sb.AppendLine($@"<script type=""module"" src=""{AssetVersioning.AppendVersionQuery("../slider/modules/player/main.js")}""></script>");
             sb.AppendLine(EndMark);
             return sb.ToString();
         }
@@ -134,33 +134,43 @@ namespace Jellyfin.Plugin.JMSFusion
 
                 var html = File.ReadAllText(indexPath, Encoding.UTF8);
 
-                if (html.Contains(BeginMark, StringComparison.OrdinalIgnoreCase) &&
-                    html.Contains(EndMark, StringComparison.OrdinalIgnoreCase))
-                {
-                    logger.LogInformation("[JMSFusion] index.html is already patched");
-                    return true;
-                }
-
                 var block = BuildBlock(pathBase);
-                var headEndPos = html.IndexOf("</head>", StringComparison.OrdinalIgnoreCase);
-
-                if (headEndPos >= 0)
+                var (start, end) = FindInjectRange(html);
+                if (start >= 0 && end >= 0)
                 {
-                    html = html.Insert(headEndPos, Environment.NewLine + block + Environment.NewLine);
-                    logger.LogInformation("[JMSFusion] Found </head> tag at position: {Position}", headEndPos);
+                    var currentBlock = html.Substring(start, end - start).Trim();
+                    var desiredBlock = block.Trim();
+                    if (string.Equals(currentBlock, desiredBlock, StringComparison.Ordinal))
+                    {
+                        logger.LogInformation("[JMSFusion] index.html patch is already up to date");
+                        return true;
+                    }
+
+                    html = html.Remove(start, end - start).Insert(start, block);
+                    logger.LogInformation("[JMSFusion] Existing inject block refreshed");
                 }
                 else
                 {
-                    var bodyEndPos = html.IndexOf("</body>", StringComparison.OrdinalIgnoreCase);
-                    if (bodyEndPos >= 0)
+                    var headEndPos = html.IndexOf("</head>", StringComparison.OrdinalIgnoreCase);
+
+                    if (headEndPos >= 0)
                     {
-                        html = html.Insert(bodyEndPos, Environment.NewLine + block + Environment.NewLine);
-                        logger.LogInformation("[JMSFusion] Found </body> tag at position: {Position}", bodyEndPos);
+                        html = html.Insert(headEndPos, Environment.NewLine + block + Environment.NewLine);
+                        logger.LogInformation("[JMSFusion] Found </head> tag at position: {Position}", headEndPos);
                     }
                     else
                     {
-                        html += Environment.NewLine + block + Environment.NewLine;
-                        logger.LogWarning("[JMSFusion] Neither </head> nor </body> tag found, appended to end");
+                        var bodyEndPos = html.IndexOf("</body>", StringComparison.OrdinalIgnoreCase);
+                        if (bodyEndPos >= 0)
+                        {
+                            html = html.Insert(bodyEndPos, Environment.NewLine + block + Environment.NewLine);
+                            logger.LogInformation("[JMSFusion] Found </body> tag at position: {Position}", bodyEndPos);
+                        }
+                        else
+                        {
+                            html += Environment.NewLine + block + Environment.NewLine;
+                            logger.LogWarning("[JMSFusion] Neither </head> nor </body> tag found, appended to end");
+                        }
                     }
                 }
 

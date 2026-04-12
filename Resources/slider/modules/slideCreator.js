@@ -6,7 +6,7 @@ import { createSlidesContainer, createHorizontalGradientOverlay, createLogoConta
 import { createButtons, createProviderContainer } from './buttons.js';
 import { withServer, withServerSrcset } from "./jfUrl.js";
 import { createTomatoIconElement } from "./customIcons.js";
-import { openDetailsModal } from "./detailsModal.js";
+import { openDetailsModal } from "./detailsModalLoader.js";
 import { getWatchlistButtonText } from "./watchlist.js";
 
 const S = (u) => withServer(u);

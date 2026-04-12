@@ -37,7 +37,8 @@ namespace Jellyfin.Plugin.JMSFusion
                 app.UseStaticFiles(new StaticFileOptions
                 {
                     FileProvider = embedded,
-                    RequestPath  = "/slider"
+                    RequestPath  = "/slider",
+                    OnPrepareResponse = AssetVersioning.ApplyStaticFileHeaders
                 });
 
                 var webRoot = DetectWebRootPhysicalCached();
@@ -49,7 +50,8 @@ namespace Jellyfin.Plugin.JMSFusion
                         app.UseStaticFiles(new StaticFileOptions
                         {
                             FileProvider = new PhysicalFileProvider(physicalSlider),
-                            RequestPath  = "/slider"
+                            RequestPath  = "/slider",
+                            OnPrepareResponse = AssetVersioning.ApplyStaticFileHeaders
                         });
                     }
                 }

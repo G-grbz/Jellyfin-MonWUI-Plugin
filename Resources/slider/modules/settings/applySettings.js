@@ -1,7 +1,8 @@
 import { getAdminTargetProfile, getConfig, getDeviceProfileAuto, publishAdminSnapshotIfForced } from "../config.js";
-import { loadCSS } from "../../main.js";
+import { updateConfig } from "../configPersistence.js";
+import { loadCSS } from "../playerStyles.js";
 import { updateSlidePosition } from '../positionUtils.js';
-import { createCheckbox, createImageTypeSelect, bindCheckboxKontrol, bindTersCheckboxKontrol, updateConfig } from "../settings.js";
+import { createCheckbox, createImageTypeSelect, bindCheckboxKontrol, bindTersCheckboxKontrol } from "../settings.js";
 import { updateHeaderUserAvatar, updateAvatarStyles, clearAvatarCache } from "../userAvatar.js";
 import { showNotification } from "../player/ui/notification.js";
 import { updateJmsPluginConfig } from "../jmsPluginConfig.js";
@@ -185,7 +186,7 @@ const USER_ONLY_KEYS = [
             shuffleSeedLimit: parseInt(formData.get('shuffleSeedLimit'), 10),
             balanceItemTypes: formData.get('balanceItemTypes') === 'on',
             showCast: formData.get('showCast') === 'on',
-            showProgressBar: formData.get('showProgressBar') === 'on',
+            showProgressBar: false,
             showProgressAsSeconds: formData.get('showProgressAsSeconds') === 'on',
             enableTrailerPlayback: formData.get('enableTrailerPlayback') === 'on',
             enableVideoPlayback: formData.get('enableVideoPlayback') === 'on',
@@ -200,6 +201,7 @@ const USER_ONLY_KEYS = [
             maxImageSizeKB: parseInt(formData.get('maxImageSizeKB'), 10),
             showDotNavigation: formData.get('showDotNavigation') === 'on',
             dotBackgroundImageType: formData.get('dotBackgroundImageType'),
+            dotVisibleCount: Math.max(0, _intOr(formData.get('dotVisibleCount'), config.dotVisibleCount ?? 0)),
             dotBackgroundBlur: parseInt(formData.get('dotBackgroundBlur')),
             dotBackgroundOpacity: parseFloat(formData.get('dotBackgroundOpacity')),
             dotPosterMode: formData.get('dotPosterMode') === 'on',
@@ -253,6 +255,8 @@ const USER_ONLY_KEYS = [
             enablePauseFeaturesMaster: formData.get('enablePauseFeaturesMaster') === 'on',
             enableSubtitleCustomizerModule: formData.get('enableSubtitleCustomizerModule') === 'on',
             enableParentalPinModule: formData.get('enableParentalPinModule') === 'on',
+            enableCustomSplashScreen: formData.get('enableCustomSplashScreen') === 'on',
+            customSplashTitle: String(formData.get('customSplashTitle') || '').trim(),
 
             enableDirectorRows: formData.get('enableDirectorRows') === 'on',
             showDirectorRowsHeroCards: formData.get('showDirectorRowsHeroCards') === 'on',
@@ -331,6 +335,13 @@ const USER_ONLY_KEYS = [
             continueSeriesCardCount: parseInt(formData.get('continueSeriesCardCount'), 10) || config.continueSeriesCardCount || 10,
 
             recentRowsSplitTvLibs: formData.get('recentRowsSplitTvLibs') === 'on',
+            recentRowsSplitMovieLibs: formData.get('recentRowsSplitMovieLibs') === 'on',
+
+            recentMoviesLibIds: (() => {
+              const raw = formData.get('recentMoviesLibIds');
+              if (!raw) return config.recentMoviesLibIds || [];
+              try { const a = JSON.parse(raw); return Array.isArray(a) ? a : []; } catch { return config.recentMoviesLibIds || []; }
+            })(),
 
             recentSeriesTvLibIds: (() => {
               const raw = formData.get('recentSeriesTvLibIds');
@@ -718,6 +729,9 @@ const USER_ONLY_KEYS = [
 
         const rawInput = formData.get('sortingKeywords')?.trim();
         updateConfig(toSave);
+        try {
+          window.__JMS_CUSTOM_SPLASH__?.syncFromConfig?.(updatedConfig.enableCustomSplashScreen);
+        } catch {}
         localStorage.removeItem('gradientOverlayImageType');
 
         if (!rawInput) {
@@ -794,10 +808,10 @@ const USER_ONLY_KEYS = [
             import("../recentRows.js")
           ]);
 
-          try { renderPersonalRecommendations?.(); } catch {}
-          try { mountDirectorRowsLazy?.(); } catch {}
-          try { mountRecentRowsLazy?.(); } catch {}
-          try { ensureStudioHubsMounted?.({ eager: true }); } catch {}
+          try { renderPersonalRecommendations?.({ force: true }); } catch {}
+          try { mountDirectorRowsLazy?.({ force: true }); } catch {}
+          try { mountRecentRowsLazy?.({ force: true }); } catch {}
+          try { ensureStudioHubsMounted?.({ eager: true, force: true }); } catch {}
         } catch {}
       }, 0);
     }

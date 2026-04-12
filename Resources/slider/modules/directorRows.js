@@ -4,8 +4,8 @@ import { getLanguageLabels } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";
 import { openDirectorExplorer } from "./genreExplorer.js";
 import { REOPEN_COOLDOWN_MS, OPEN_HOVER_DELAY_MS } from "./hoverTrailerModal.js";
-import { createTrailerIframe } from "./utils.js";
-import { openDetailsModal } from "./detailsModal.js";
+import { createTrailerIframe, formatOfficialRatingLabel } from "./utils.js";
+import { openDetailsModal } from "./detailsModalLoader.js";
 import {
   withServer,
   isKnownMissingImage,
@@ -14,7 +14,13 @@ import {
 } from "./jfUrl.js";
 import { cleanupImageResourceRefs } from "./imageResourceCleanup.js";
 import { faIconHtml } from "./faIcons.js";
+import { resolveSliderAssetHref } from "./assetLinks.js";
 import { setupScroller } from "./personalRecommendations.js";
+import {
+  bindManagedSectionsBelowNative,
+  waitForVisibleHomeSections
+} from "./homeSectionNative.js";
+import { waitForManagedSectionGate } from "./homeSectionChain.js";
 import {
   openDirRowsDB,
   makeScope,
@@ -31,25 +37,38 @@ import {
 const config = getConfig();
 const labels = getLanguageLabels?.() || {};
 const IS_MOBILE = (navigator.maxTouchPoints > 0) || (window.innerWidth <= 820);
+const UNIFIED_ROW_ITEM_LIMIT = 20;
 
-const PLACEHOLDER_URL = (config.placeholderImage) || './slider/src/images/placeholder.png';
-const ROW_CARD_COUNT = Number.isFinite(config.directorRowCardCount) ? Math.max(1, config.directorRowCardCount|0) : 10;
-const EFFECTIVE_ROW_CARD_COUNT = ROW_CARD_COUNT;
+const PLACEHOLDER_URL = resolveSliderAssetHref(
+  config.placeholderImage || "/slider/src/images/placeholder.png"
+);
 const MIN_RATING = 0;
 const SHOW_DIRECTOR_ROWS_HERO_CARDS = (config.showDirectorRowsHeroCards !== false);
 const HOVER_MODE = (config.directorRowsHoverPreviewMode === 'studioMini' || config.directorRowsHoverPreviewMode === 'modal')
   ? config.directorRowsHoverPreviewMode
   : 'inherit';
-
-const DIR_ROWS_COUNT_NUM = Number(config.directorRowsCount);
-const ROWS_COUNT = Number.isFinite(DIR_ROWS_COUNT_NUM) ? Math.max(1, DIR_ROWS_COUNT_NUM | 0) : 5;
-const MAX_RENDER_COUNT = ROWS_COUNT;
 const DIRECTOR_ROW_BATCH_SIZE = IS_MOBILE ? 2 : 1;
 const DIRECTOR_ROW_FILL_YIELD_MS = IS_MOBILE ? 48 : 24;
-const DIRECTOR_MOBILE_INITIAL_CARD_COUNT = 4;
-const DIRECTOR_MOBILE_CARD_CHUNK = 2;
 const DIRECTOR_MOBILE_CARD_DELAY_MS = 90;
 const IMAGE_RETRY_LIMITS = { lq: 2, hi: 2 };
+function dirRowsLog() {}
+function dirRowsWarn() {}
+
+function clampConfiguredCount(value, fallback, max = UNIFIED_ROW_ITEM_LIMIT) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(1, Math.min(max, n | 0));
+}
+
+function getDirectorRowsCount(source = null) {
+  const cfg = source || getConfig?.() || config || {};
+  return clampConfiguredCount(cfg.directorRowsCount, 5, 50);
+}
+
+function getDirectorRowCardCount(source = null) {
+  const cfg = source || getConfig?.() || config || {};
+  return clampConfiguredCount(cfg.directorRowCardCount, 10);
+}
 
 const STATE = {
   directors: [],
@@ -62,7 +81,7 @@ const STATE = {
   serverId: null,
   userId: null,
   renderedCount: 0,
-  maxRenderCount: MAX_RENDER_COUNT,
+  maxRenderCount: getDirectorRowsCount(),
   sectionIOs: new Set(),
   autoPumpScheduled: false,
   _db: null,
@@ -78,7 +97,7 @@ let __dirSyncInterval = null;
 let __dirBackfillInterval = null;
 let __dirBackfillIdleHandle = null;
 let __dirAutoPumpHandle = null;
-let __dirMountRetryTimer = null;
+let __dirDeferredWarmTimer = null;
 let __dirInitSeq = 0;
 let __dirWarmPromise = null;
 let __dirWarmScope = "";
@@ -89,6 +108,9 @@ let __dirKickBackfillPromise = null;
 let __dirKickBackfillScope = "";
 let __dirEligibilityRefreshRunning = false;
 let __dirEligibilityRefreshScope = "";
+let __directorMountPromise = null;
+let __directorDeferredStartPromise = null;
+let __directorDeferredSeq = 0;
 
 function isDirectorRowsWorkerActive() {
   return !!(STATE.started || STATE._bgStarted);
@@ -112,7 +134,7 @@ function getDirectorWarmCache(scope) {
 }
 
 function getDirectorPrimeMinItems() {
-  return EFFECTIVE_ROW_CARD_COUNT + 1;
+  return getDirectorRowCardCount() + 1;
 }
 
 function setDirectorWarmCache(scope, result) {
@@ -268,7 +290,7 @@ function scheduleDirectorAutoPump(timeout = 120) {
     try {
       await renderNextDirectorBatch();
     } catch (e) {
-      console.warn("directorRows: auto pump failed:", e);
+      dirRowsWarn("directorRows: auto pump failed:", e);
     }
   }, Math.max(40, timeout | 0));
 }
@@ -323,7 +345,7 @@ function scheduleLazyDirectorWork(target, init, {
     started = true;
     cleanup();
     try { init(); } catch (e) {
-      console.warn('directorRows: lazy init failed:', e);
+      dirRowsWarn('directorRows: lazy init failed:', e);
     }
   };
 
@@ -995,18 +1017,7 @@ if (!window.__directorRowsImageRecoveryBound) {
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) kick();
   }, { passive: true });
-
-  window.__directorRowsImageRecoveryTimer = window.setInterval(() => {
-    if (!document.hidden) kick();
-  }, 45_000);
-}
-
-if (!window.__dirRowsPageShowBound) {
-  window.__dirRowsPageShowBound = true;
-  window.addEventListener('pageshow', (e) => {
-    if (!e || !e.persisted) return;
-    try { mountDirectorRowsLazy(); } catch {}
-  });
+  window.__directorRowsImageRecoveryTimer = true;
 }
 
 function formatRuntime(ticks) {
@@ -1022,22 +1033,6 @@ function getRuntimeWithIcons(runtime) {
   if (!runtime) return '';
   return runtime.replace(/(\d+)s/g, `$1${config.languageLabels?.sa || 'sa'}`)
                .replace(/(\d+)d/g, `$1${config.languageLabels?.dk || 'dk'}`);
-}
-
-function normalizeAgeChip(rating) {
-  if (!rating) return null;
-  const r = String(rating).toUpperCase().trim();
-  if (/(18\+|R18|NC-17|XXX|AO)/.test(r)) return "18+";
-  if (/(17\+|R|TV-MA)/.test(r)) return "17+";
-  if (/(16\+|R16|M)/.test(r)) return "16+";
-  if (/(15\+|TV-15)/.test(r)) return "15+";
-  if (/(13\+|TV-14|PG-13)/.test(r)) return "13+";
-  if (/(12\+|TV-12)/.test(r)) return "12+";
-  if (/(10\+|TV-Y10)/.test(r)) return "10+";
-  if (/(7\+|TV-Y7|E10\+)/.test(r)) return "7+";
-  if (/(G|PG|TV-G|TV-PG|E|U|UC)/.test(r)) return "7+";
-  if (/(ALL AGES|ALL|TV-Y|KIDS|Y)/.test(r)) return "0+";
-  return r;
 }
 
 function getDetailsUrl(itemId, serverId) {
@@ -1075,7 +1070,7 @@ function createRecommendationCard(item, serverId, aboveFold = false) {
   const posterSetHQ = posterUrlHQ ? buildPosterSrcSet(item) : "";
   const posterUrlLQ = buildPosterUrlLQ(item);
   const year = item.ProductionYear || "";
-  const ageChip = normalizeAgeChip(item.OfficialRating || "");
+  const ageChip = formatOfficialRatingLabel(item.OfficialRating || "");
   const runtimeTicks = item.Type === "Series" ? item.CumulativeRunTimeTicks : item.RunTimeTicks;
   const runtime = formatRuntime(runtimeTicks);
   const genres = Array.isArray(item.Genres) ? item.Genres.slice(0, 2).join(", ") : "";
@@ -1172,7 +1167,7 @@ function createRecommendationCard(item, serverId, aboveFold = false) {
           originEvent: e,
         });
       } catch (err) {
-        console.warn("openDetailsModal failed (director card):", err);
+        dirRowsWarn("openDetailsModal failed (director card):", err);
       }
     }, { passive: false });
   }
@@ -1204,15 +1199,6 @@ function isHomeRoute() {
   return h.startsWith('#/home') || h.startsWith('#/index') || h === '' || h === '#';
 }
 
-function scheduleDirectorRowsRetry(ms = 500) {
-  if (!isHomeRoute()) return;
-  if (__dirMountRetryTimer) clearTimeout(__dirMountRetryTimer);
-  __dirMountRetryTimer = setTimeout(() => {
-    __dirMountRetryTimer = null;
-    try { mountDirectorRowsLazy(); } catch {}
-  }, Math.max(120, ms | 0));
-}
-
 function createDirectorHeroCard(item, serverId, directorName) {
   const { itemId, itemName } = primeItemIdentity(item);
   const hero = document.createElement('div');
@@ -1224,7 +1210,7 @@ function createDirectorHeroCard(item, serverId, directorName) {
   const logo = buildLogoUrl(item);
   const year = item.ProductionYear || '';
   const plot = clampText(item.Overview, 1200);
-  const ageChip = normalizeAgeChip(item.OfficialRating || '');
+  const ageChip = formatOfficialRatingLabel(item.OfficialRating || '');
   const genres = Array.isArray(item.Genres) ? item.Genres.slice(0, 3).join(", ") : "";
 
   const heroMetaItems = [];
@@ -1290,7 +1276,7 @@ function createDirectorHeroCard(item, serverId, directorName) {
         originEl,
       });
     } catch (err) {
-      console.warn("openDetailsModal failed (director hero):", err);
+      dirRowsWarn("openDetailsModal failed (director hero):", err);
     }
   };
 
@@ -1318,7 +1304,7 @@ function createDirectorHeroCard(item, serverId, directorName) {
       }
     }
   } catch (e) {
-    console.warn("dir-row-hero-bg hydrate failed:", e);
+    dirRowsWarn("dir-row-hero-bg hydrate failed:", e);
   }
 
   const cleanupLazyHeroTrailer = scheduleLazyDirectorWork(hero, () => {
@@ -1561,7 +1547,7 @@ function attachPreviewByMode(cardEl, itemLike, mode) {
   }
 }
 
-function renderSkeletonRow(row, count=EFFECTIVE_ROW_CARD_COUNT) {
+function renderSkeletonRow(row, count = getDirectorRowCardCount()) {
   row.innerHTML = "";
   const fragment = document.createDocumentFragment();
   for (let i=0; i<count; i++) {
@@ -1614,7 +1600,7 @@ async function getDirectorContentCount(userId, directorId) {
     const data = await makeApiRequest(url);
     return Number(data?.TotalRecordCount) || 0;
   } catch (e) {
-    console.warn('directorRows: count check failed for', directorId, e);
+    dirRowsWarn('directorRows: count check failed for', directorId, e);
     return null;
   }
 }
@@ -1637,7 +1623,7 @@ function runDirectorBackgroundTask(task, label = "directorRows: background task 
     Promise.resolve()
       .then(task)
       .catch((e) => {
-        console.warn(label, e);
+        dirRowsWarn(label, e);
       });
   };
 
@@ -1651,11 +1637,13 @@ function runDirectorBackgroundTask(task, label = "directorRows: background task 
 function ensureDirectorSyncLoop({ forceImmediate = false } = {}) {
   if (__dirSyncInterval) return;
 
-  runDirectorBackgroundTask(
-    () => checkAndSyncNewItems({ force: forceImmediate }),
-    "directorRows: startup sync failed:",
-    1200
-  );
+  if (forceImmediate) {
+    runDirectorBackgroundTask(
+      () => checkAndSyncNewItems({ force: true }),
+      "directorRows: startup sync failed:",
+      2400
+    );
+  }
 
   __dirSyncInterval = setInterval(() => {
     if (!isDirectorRowsWorkerActive()) return;
@@ -1666,14 +1654,10 @@ function ensureDirectorSyncLoop({ forceImmediate = false } = {}) {
 }
 
 function scheduleDirectorDeferredWarmTasks() {
-  runDirectorBackgroundTask(async () => {
-    if (!isDirectorRowsWorkerActive()) return;
-    if (!STATE._db || !STATE._scope || !STATE.userId) return;
-
-    try { startDirectorItemsPrime(STATE.directors || []); } catch {}
-    ensureDirectorSyncLoop({ forceImmediate: true });
-    startDirectorBackfillLoop();
-  }, "directorRows: deferred warm failed:", 1800);
+  if (__dirDeferredWarmTimer) {
+    clearTimeout(__dirDeferredWarmTimer);
+    __dirDeferredWarmTimer = null;
+  }
 }
 
 function cleanupDirectorRowsMount(host) {
@@ -1788,7 +1772,7 @@ function pruneDeletedDirectorItemsLater(itemIds) {
   }, "directorRows: prune deleted items failed:", 700);
 }
 
-async function pickRandomDirectorsFromTopGenres(userId, targetCount = ROWS_COUNT) {
+async function pickRandomDirectorsFromTopGenres(userId, targetCount = getDirectorRowsCount()) {
   const requestedPrimary = 300;
   const requestedFallback = 600;
   const fields = COMMON_FIELDS;
@@ -1815,7 +1799,7 @@ async function pickRandomDirectorsFromTopGenres(userId, targetCount = ROWS_COUNT
         if (peopleMap.size >= takeUntil) break;
       }
     } catch (e) {
-      console.warn("directorRows: people scan error:", e);
+      dirRowsWarn("directorRows: people scan error:", e);
     }
   }
 
@@ -1859,7 +1843,9 @@ function shuffle(arr){
   return arr;
 }
 
-async function fetchItemsByDirector(userId, directorId, limit = EFFECTIVE_ROW_CARD_COUNT * 2) {
+async function fetchItemsByDirector(userId, directorId, limit = getDirectorRowCardCount() * 2) {
+  const rowCount = getDirectorRowsCount();
+  const rowCardCount = getDirectorRowCardCount();
   const fields = COMMON_FIELDS;
 
   const url =
@@ -1867,28 +1853,30 @@ async function fetchItemsByDirector(userId, directorId, limit = EFFECTIVE_ROW_CA
     `IncludeItemTypes=Movie,Series&Recursive=true&Fields=${fields}&EnableUserData=true&` +
     `PersonIds=${encodeURIComponent(directorId)}&` +
     `SortBy=Random,CommunityRating,DateCreated&SortOrder=Descending&` +
-    `Limit=${Math.max(ROWS_COUNT, limit)}`;
+    `Limit=${Math.max(rowCount, limit)}`;
 
   try {
     const data = await makeApiRequest(url);
     const items = Array.isArray(data?.Items) ? data.Items : [];
-    const NEED = EFFECTIVE_ROW_CARD_COUNT + 1;
+    const NEED = rowCardCount + 1;
     return filterAndTrimByRating(items, MIN_RATING, NEED);
   } catch (e) {
-    console.warn("directorRows: yönetmen içerik çekilemedi:", e);
+    dirRowsWarn("directorRows: yönetmen içerik çekilemedi:", e);
     return [];
   }
 }
 
 async function loadDirectorsFromDbOrApi(userId) {
-  const WANT = Math.max(ROWS_COUNT * 3, (STATE.maxRenderCount || MAX_RENDER_COUNT || 1000));
+  const rowCount = getDirectorRowsCount();
+  const wantFloor = Math.max(1, STATE.maxRenderCount || rowCount);
+  const WANT = Math.max(rowCount * 3, wantFloor);
   const db = STATE._db;
   const scope = STATE._scope;
   const minContents = getDirectorMinContents();
 
   if (db && scope) {
     try {
-      const cached = await listDirectors(db, scope, { limit: Math.max(WANT * 4, ROWS_COUNT * 20) });
+      const cached = await listDirectors(db, scope, { limit: Math.max(WANT * 4, rowCount * 20) });
 
       if (cached?.length) {
         const cachedPool = cached
@@ -1918,7 +1906,7 @@ async function loadDirectorsFromDbOrApi(userId) {
 
         if (validated.length < WANT && unknownPool.length) {
           shuffle(unknownPool);
-          const toCheck = unknownPool.slice(0, Math.min(unknownPool.length, Math.max(WANT * 3, ROWS_COUNT * 8)));
+          const toCheck = unknownPool.slice(0, Math.min(unknownPool.length, Math.max(WANT * 3, rowCount * 8)));
           const checks = await pMapLimited(toCheck, 3, async (d) => {
             const total = await getDirectorContentCount(userId, d.Id);
             return {
@@ -1950,13 +1938,13 @@ async function loadDirectorsFromDbOrApi(userId) {
           refreshCachedDirectorEligibility(userId, cached, {
             db,
             scope,
-            limit: Math.min(cached.length, Math.max(WANT * 2, ROWS_COUNT * 6)),
+            limit: Math.min(cached.length, Math.max(WANT * 2, rowCount * 6)),
           });
           return { directors: validated.slice(0, WANT), fromCache: true };
         }
       }
     } catch (e) {
-      console.warn("directorRows: DB director load failed:", e);
+      dirRowsWarn("directorRows: DB director load failed:", e);
     }
   }
 
@@ -2017,7 +2005,7 @@ export async function warmDirectorRowsDb({ force = false } = {}) {
     try {
       await ensureDirectorRowsSession({ userId, serverId });
     } catch (e) {
-      console.warn("directorRows: background DB init failed:", e);
+      dirRowsWarn("directorRows: background DB init failed:", e);
       STATE._db = null;
       STATE._scope = null;
       return { directors: [], fromCache: false, skipped: true };
@@ -2053,7 +2041,7 @@ async function ensureDirectorItemsCachedForWarmup(dir, minItems = getDirectorPri
   const apiItems = await fetchItemsByDirector(
     userId,
     dir.Id,
-    Math.max(minItems * 3, EFFECTIVE_ROW_CARD_COUNT * 2)
+    Math.max(minItems * 3, getDirectorRowCardCount() * 2)
   );
 
   const items = uniqById(apiItems || []);
@@ -2083,7 +2071,7 @@ function startDirectorItemsPrime(directors, { force = false } = {}) {
     return __dirPrimePromise;
   }
 
-  const primeList = list.slice(0, Math.max(ROWS_COUNT * 3, ROWS_COUNT));
+  const primeList = list.slice(0, Math.max(getDirectorRowsCount(), 1));
   __dirPrimeScope = scope;
   __dirPrimePromise = (async () => {
     try {
@@ -2091,7 +2079,7 @@ function startDirectorItemsPrime(directors, { force = false } = {}) {
         await ensureDirectorItemsCachedForWarmup(dir);
       });
     } catch (e) {
-      console.warn("directorRows: startup prime failed:", e);
+      dirRowsWarn("directorRows: startup prime failed:", e);
     }
   })().finally(() => {
     if (__dirPrimeScope === scope) {
@@ -2120,7 +2108,7 @@ function kickDirectorBackfillNow({ force = false } = {}) {
 
   __dirKickBackfillScope = scope;
   __dirKickBackfillPromise = runDirectorBackfillOnce({ pagesPerRun, limit: perPage }).catch((e) => {
-    console.warn("directorRows: immediate backfill failed:", e);
+    dirRowsWarn("directorRows: immediate backfill failed:", e);
   }).finally(() => {
     if (__dirKickBackfillScope === scope) {
       __dirKickBackfillPromise = null;
@@ -2168,7 +2156,7 @@ async function fetchItemsByIdsDetailed(userId, ids, fields = COMMON_FIELDS) {
         if (it?.Id) found.add(String(it.Id));
       }
     } catch (e) {
-      console.warn("directorRows: fetchItemsByIds failed:", e);
+      dirRowsWarn("directorRows: fetchItemsByIds failed:", e);
       for (const id of chunk) {
         failed.add(String(id));
       }
@@ -2258,7 +2246,7 @@ async function startDirectorIncrementalSync() {
       await setMeta(db, metaKey, newestSeen);
     }
   } catch (e) {
-    console.warn("directorRows: incremental sync failed:", e);
+    dirRowsWarn("directorRows: incremental sync failed:", e);
   }
 }
 
@@ -2274,7 +2262,7 @@ async function fetchLibraryHeadTick(userId) {
     const it = (Array.isArray(data?.Items) && data.Items[0]) ? data.Items[0] : null;
     return it ? getDateCreatedTicks(it) : 0;
   } catch (e) {
-    console.warn("directorRows: head tick check failed:", e);
+    dirRowsWarn("directorRows: head tick check failed:", e);
     return 0;
   }
 }
@@ -2301,7 +2289,7 @@ function __idle(cb, timeout = 1200) {
     const h = requestIdleCallback(() => cb(), { timeout });
     return { type: "ric", h };
   }
-  const h = setTimeout(() => cb(), Math.min(timeout, 1200));
+  const h = setTimeout(() => cb(), Math.max(0, timeout | 0));
   return { type: "to", h };
 }
 
@@ -2374,7 +2362,7 @@ async function runDirectorBackfillOnce({ pagesPerRun = 1, limit = 200 } = {}) {
       }
     }
   } catch (e) {
-    console.warn("directorRows: backfill failed:", e);
+    dirRowsWarn("directorRows: backfill failed:", e);
   } finally {
     STATE._backfillRunning = false;
   }
@@ -2398,6 +2386,9 @@ function startDirectorBackfillLoop() {
   const perPage = Number.isFinite(cfg.directorRowsBackfillLimit)
     ? Math.max(50, Math.min(400, cfg.directorRowsBackfillLimit | 0))
     : 200;
+  const initialDelayMs = Number.isFinite(cfg.directorRowsBackfillInitialDelayMs)
+    ? Math.max(30_000, cfg.directorRowsBackfillInitialDelayMs | 0)
+    : Math.max(120_000, intervalMs);
 
   const schedule = async () => {
     if (!isDirectorRowsWorkerActive()) return;
@@ -2420,7 +2411,10 @@ function startDirectorBackfillLoop() {
     }, 1500);
   };
 
-  schedule();
+  __dirBackfillIdleHandle = __idle(async () => {
+    __dirBackfillIdleHandle = null;
+    await schedule();
+  }, initialDelayMs);
   __dirBackfillInterval = setInterval(schedule, intervalMs);
 }
 
@@ -2450,7 +2444,80 @@ function waitForGenreHubsDone(timeoutMs = 0) {
   });
 }
 
-export function mountDirectorRowsLazy() {
+function appendToParent(parent, node) {
+  if (!parent || !node) return;
+  if (node.parentElement === parent && node === parent.lastElementChild) return;
+  parent.appendChild(node);
+}
+
+function insertAfter(parent, node, ref) {
+  if (!parent || !node) return;
+  if (ref && ref.parentElement === parent) {
+    if (node === ref) return;
+    if (node.parentElement === parent && node.previousElementSibling === ref) return;
+    const next = ref.nextElementSibling;
+    if (next) {
+      if (next === node) return;
+      parent.insertBefore(node, next);
+    } else {
+      appendToParent(parent, node);
+    }
+    return;
+  }
+  appendToParent(parent, node);
+}
+
+function hasRenderableDirectorRowsContent(wrap) {
+  if (!wrap) return false;
+  return !!wrap.querySelector(
+    ".dir-row-section .personal-recs-card:not(.skeleton), .dir-row-section .no-recommendations, .dir-row-section .dir-row-hero"
+  );
+}
+
+function scheduleDirectorInitWhenReady(wrap, { force = false } = {}) {
+  if (force) {
+    __directorDeferredSeq += 1;
+    __directorDeferredStartPromise = null;
+  }
+
+  if (__directorDeferredStartPromise) {
+    return __directorDeferredStartPromise;
+  }
+
+  const seq = __directorDeferredSeq;
+  const run = (async () => {
+    try {
+      await waitForManagedSectionGate("directorRows", { timeoutMs: 25000 });
+      if (seq !== __directorDeferredSeq) return false;
+      await waitForGenreHubsDone(25000);
+      if (seq !== __directorDeferredSeq) return false;
+      if (!wrap?.isConnected || !isHomeRoute()) return false;
+      if (!force && hasRenderableDirectorRowsContent(wrap)) return true;
+      if (STATE.started && STATE.wrapEl === wrap && wrap.isConnected) return true;
+      await initAndRenderFirstBatch(wrap);
+      return true;
+    } catch (e) {
+      console.error(e);
+      try { cleanupDirectorRows(); } catch {}
+      return false;
+    }
+  })();
+
+  __directorDeferredStartPromise = run;
+  run.finally(() => {
+    if (__directorDeferredStartPromise === run) {
+      __directorDeferredStartPromise = null;
+    }
+  });
+  return run;
+}
+
+export async function mountDirectorRowsLazy(options = {}) {
+  const force = options?.force === true;
+  if (__directorMountPromise) {
+    if (!force) return __directorMountPromise;
+    try { await __directorMountPromise; } catch {}
+  }
   const cfg = getConfig();
   const homeSectionsConfig = getHomeSectionsRuntimeConfig(cfg);
   if (!homeSectionsConfig.enableDirectorRows) {
@@ -2460,78 +2527,54 @@ export function mountDirectorRowsLazy() {
     return;
   }
   if (!isHomeRoute()) {
-    try { cleanupDirectorRows(); } catch {}
-    const existing = document.getElementById('director-rows');
-    if (existing) { try { existing.remove(); } catch {} }
     return;
   }
 
-  if (homeSectionsConfig.enableGenreHubs && !window.__jmsGenreHubsDone) {
-    if (!window.__dirRowsWaitGenreDoneBound) {
-      window.__dirRowsWaitGenreDoneBound = true;
-      document.addEventListener("jms:genre-hubs-done", () => {
-        window.__dirRowsWaitGenreDoneBound = false;
-        try { mountDirectorRowsLazy(); } catch {}
-      }, { once: true });
+  const run = (async () => {
+    if (force) {
+      cleanupDirectorRows();
     }
-    return;
-  }
 
-  let wrap = document.getElementById('director-rows');
-  if (!wrap) {
-    wrap = document.createElement('div');
-    wrap.id = 'director-rows';
-    wrap.className = 'homeSection director-rows-wrapper';
-  }
+    const host = await waitForVisibleHomeSections({
+      timeout: force ? 5000 : 12000
+    });
+    if (!host?.container || !isHomeRoute()) return false;
+    const homeParent = host.page?.querySelector?.(".homeSectionsContainer");
+    if (!homeParent) return false;
+    bindManagedSectionsBelowNative(homeParent);
 
-  if (!window.__dirRowsRouteGuard) {
-    window.__dirRowsRouteGuard = true;
-    const onRoute = () => {
-      if (!isHomeRoute()) {
-        try { cleanupDirectorRows(); } catch {}
-        const el = document.getElementById('director-rows');
-        if (el) { try { el.remove(); } catch {} }
-      } else {
-        scheduleDirectorRowsRetry(80);
-      }
-    };
-    window.addEventListener('hashchange', onRoute, { passive: true });
-    window.addEventListener('popstate', onRoute, { passive: true });
-    window.addEventListener('pageshow', onRoute, { passive: true });
-    document.addEventListener('viewshow', onRoute, { passive: true });
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) onRoute();
-    }, { passive: true });
-  }
+    let wrap = document.getElementById('director-rows');
+    if (!wrap) {
+      wrap = document.createElement('div');
+      wrap.id = 'director-rows';
+      wrap.className = 'homeSection director-rows-wrapper';
+    }
 
-  const parent = getHomeSectionsContainer();
-  if (!parent) {
-    scheduleDirectorRowsRetry(400);
-    return;
-  }
-  parent.appendChild(wrap);
-  try { ensureIntoHomeSections(wrap, null, { placeAfterId: homeSectionsConfig.enableGenreHubs ? "genre-hubs" : null }); } catch {}
-  if (!IS_MOBILE && !homeSectionsConfig.enableGenreHubs) { try { pinDirectorRowsToBottom(wrap); } catch {} }
-
-  const start = async () => {
+    if (wrap.parentElement !== homeParent) {
+      appendToParent(homeParent, wrap);
+    }
     try {
-      if (!isHomeRoute()) return;
-      if (!wrap.isConnected) {
-        scheduleDirectorRowsRetry(260);
-        return;
-      }
-      await initAndRenderFirstBatch(wrap);
-    } catch (e) {
-      console.error(e);
-      try { cleanupDirectorRows(); } catch {}
-      scheduleDirectorRowsRetry(650);
-    }
-  };
+      ensureIntoHomeSections(wrap, host.page, {
+        placeAfterId: homeSectionsConfig.enableGenreHubs ? "genre-hubs" : "recent-rows"
+      });
+    } catch {}
 
-  if (document.readyState === 'complete') {
-    setTimeout(() => { start(); }, 0);
-  } else {
-    window.addEventListener('load', () => setTimeout(() => { start(); }, 0), { once: true });
+    if (!wrap.isConnected) return false;
+    if (!force && hasRenderableDirectorRowsContent(wrap)) {
+      return true;
+    }
+
+    scheduleDirectorInitWhenReady(wrap, { force });
+    return true;
+  })();
+
+  __directorMountPromise = run;
+  try {
+    return await run;
+  } finally {
+    if (__directorMountPromise === run) {
+      __directorMountPromise = null;
+    }
   }
 }
 
@@ -2549,12 +2592,9 @@ function ensureIntoHomeSections(el, indexPage, { placeAfterId } = {}) {
 
     const ref = placeAfterId ? document.getElementById(placeAfterId) : null;
     if (ref && ref.parentElement === container) {
-      ref.insertAdjacentElement('afterend', el);
-    } else if (el.parentElement !== container) {
-      container.appendChild(el);
-      if (!IS_MOBILE) {
-        try { pinDirectorRowsToBottom(el); } catch {}
-      }
+      insertAfter(container, el, ref);
+    } else {
+      appendToParent(container, el);
     }
     return true;
   };
@@ -2582,36 +2622,6 @@ function getHomeSectionsContainer(indexPage) {
   page;
 }
 
-function pinDirectorRowsToBottom(wrap) {
-  if (IS_MOBILE) return;
-  if (!wrap) return;
-
-  const moveToBottom = () => {
-    const container = getHomeSectionsContainer();
-    if (!container) return;
-    if (wrap.parentElement !== container) {
-      container.appendChild(wrap);
-      return;
-    }
-    if (container.lastElementChild !== wrap) {
-      container.appendChild(wrap);
-    }
-  };
-
-  moveToBottom();
-
-  if (wrap.__pinMO) return;
-  const mo = new MutationObserver(() => moveToBottom());
-  wrap.__pinMO = mo;
-
-  mo.observe(document.body, { childList: true, subtree: true });
-
-  window.addEventListener('hashchange', moveToBottom, { passive: true });
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) moveToBottom();
-  }, { passive: true });
-}
-
 async function initAndRenderFirstBatch(wrap) {
   if (STATE.started) {
     const stale =
@@ -2621,17 +2631,11 @@ async function initAndRenderFirstBatch(wrap) {
     if (!stale) return;
     try { cleanupDirectorRows(); } catch {}
   }
-  if (!wrap || !wrap.isConnected) {
-    scheduleDirectorRowsRetry(380);
-    return;
-  }
+  if (!wrap || !wrap.isConnected) return;
 
   const initSeq = ++__dirInitSeq;
   const { userId, serverId } = getSessionInfo();
-  if (!userId) {
-    scheduleDirectorRowsRetry(800);
-    return;
-  }
+  if (!userId) return;
 
   STATE.started = true;
   STATE._bgStarted = true;
@@ -2643,14 +2647,14 @@ async function initAndRenderFirstBatch(wrap) {
   try {
     warmResult = await warmDirectorRowsDb();
   } catch (e) {
-    console.warn("directorRows: warmup failed during init:", e);
+    dirRowsWarn("directorRows: warmup failed during init:", e);
   }
 
   if (!STATE._db || !STATE._scope) {
     try {
       await ensureDirectorRowsSession({ userId, serverId });
     } catch (e) {
-      console.warn("directorRows: IndexedDB init failed:", e);
+      dirRowsWarn("directorRows: IndexedDB init failed:", e);
       STATE._db = null;
       STATE._scope = null;
     }
@@ -2665,18 +2669,20 @@ async function initAndRenderFirstBatch(wrap) {
 
   const { directors, fromCache } = directorSource;
   if (initSeq !== __dirInitSeq || !STATE.started || STATE.wrapEl !== wrap || !wrap.isConnected) return;
+  const rowCount = getDirectorRowsCount();
   STATE.directors = directors || [];
+  STATE.maxRenderCount = rowCount;
 
-  if (STATE.directors.length < ROWS_COUNT) {
-    console.warn(`DirectorRows: sadece ${STATE.directors.length}/${ROWS_COUNT} yönetmen bulunabildi (kütüphane kısıtlı olabilir).`);
+  if (STATE.directors.length < rowCount) {
+    dirRowsWarn(`DirectorRows: sadece ${STATE.directors.length}/${rowCount} yönetmen bulunabildi (kütüphane kısıtlı olabilir).`);
   }
 
   STATE.nextIndex = 0;
   STATE.renderedCount = 0;
 
-  console.log(`DirectorRows: ${STATE.directors.length} yönetmen (${fromCache ? "DB cache" : "API"}) , ilk row hemen render ediliyor...`);
+  dirRowsLog(`DirectorRows: ${STATE.directors.length} yönetmen (${fromCache ? "DB cache" : "API"}) , ilk row hemen render ediliyor...`);
 
-  const originalBatchSize = STATE.batchSize;
+  const originalBatchSize = Math.max(1, Number(STATE.batchSize) || DIRECTOR_ROW_BATCH_SIZE);
   STATE.batchSize = DIRECTOR_ROW_BATCH_SIZE;
   await renderNextDirectorBatch();
   if (initSeq !== __dirInitSeq || !STATE.started || STATE.wrapEl !== wrap || !wrap.isConnected) return;
@@ -2692,7 +2698,7 @@ async function renderNextDirectorBatch() {
   }
 
   if (STATE.nextIndex >= STATE.directors.length) {
-    console.log('Tüm yönetmenler render edildi.');
+    dirRowsLog('Tüm yönetmenler render edildi.');
     if (STATE.batchObserver) {
       STATE.batchObserver.disconnect();
     }
@@ -2708,7 +2714,7 @@ async function renderNextDirectorBatch() {
   );
   const slice = STATE.directors.slice(STATE.nextIndex, end);
 
-  console.log(`Render batch: ${STATE.nextIndex}-${end} (${slice.length} yönetmen)`);
+  dirRowsLog(`Render batch: ${STATE.nextIndex}-${end} (${slice.length} yönetmen)`);
 
   const prevCount = STATE.renderedCount;
 
@@ -2719,7 +2725,7 @@ async function renderNextDirectorBatch() {
       try {
         await fillRowWhenReady(shell.row, shell.dir, shell.heroHost);
       } catch (e) {
-        console.warn('directorRows: section fill failed:', e);
+        dirRowsWarn('directorRows: section fill failed:', e);
       }
       STATE.renderedCount++;
 
@@ -2741,7 +2747,7 @@ async function renderNextDirectorBatch() {
   setDirectorArrowLoading(false);
 
   if (STATE.nextIndex >= STATE.directors.length || STATE.renderedCount >= STATE.maxRenderCount) {
-    console.log('Tüm yönetmen rowları yüklendi.');
+    dirRowsLog('Tüm yönetmen rowları yüklendi.');
     if (STATE.batchObserver) {
       STATE.batchObserver.disconnect();
       STATE.batchObserver = null;
@@ -2751,7 +2757,7 @@ async function renderNextDirectorBatch() {
     scheduleDirectorAutoPump(prevCount === 0 ? 60 : 120);
   }
 
-  console.log(`Render tamamlandı. Toplam: ${STATE.renderedCount}/${STATE.directors.length} yönetmen`);
+  dirRowsLog(`Render tamamlandı. Toplam: ${STATE.renderedCount}/${STATE.directors.length} yönetmen`);
 }
 
 function getDirectorUrl(directorId, directorName, serverId) {
@@ -2861,7 +2867,7 @@ function renderDirectorSection(dir, { deferContent = false } = {}) {
     return { section, row, heroHost, dir };
   }
   fillRowWhenReady(row, dir, heroHost).catch((e) => {
-    console.warn('directorRows: deferred section fill failed:', e);
+    dirRowsWarn('directorRows: deferred section fill failed:', e);
   });
   return { section, row, heroHost, dir };
 }
@@ -2880,8 +2886,8 @@ function uniqById(list) {
 
 function scheduleDirectorCardPump(row, items, serverId, {
   startIndex = 0,
-  limit = EFFECTIVE_ROW_CARD_COUNT,
-  chunkSize = DIRECTOR_MOBILE_CARD_CHUNK,
+  limit = getDirectorRowCardCount(),
+  chunkSize = getDirectorRowCardCount(),
   delay = DIRECTOR_MOBILE_CARD_DELAY_MS,
 } = {}) {
   let currentIndex = Math.max(0, startIndex | 0);
@@ -2915,7 +2921,8 @@ function scheduleDirectorCardPump(row, items, serverId, {
 
 async function fillRowWhenReady(row, dir, heroHost){
   try {
-    const NEED = EFFECTIVE_ROW_CARD_COUNT + 1;
+    const rowCardCount = getDirectorRowCardCount();
+    const NEED = rowCardCount + 1;
 
     let items = [];
 
@@ -2928,7 +2935,7 @@ async function fillRowWhenReady(row, dir, heroHost){
           NEED
         );
       } catch (e) {
-        console.warn("directorRows: getItemsForDirector failed:", e);
+        dirRowsWarn("directorRows: getItemsForDirector failed:", e);
       }
     }
 
@@ -2961,7 +2968,7 @@ async function fillRowWhenReady(row, dir, heroHost){
           items = reconciled;
         }
       } catch (e) {
-        console.warn("directorRows: cached items hydration failed:", e);
+        dirRowsWarn("directorRows: cached items hydration failed:", e);
       }
     }
 
@@ -2969,7 +2976,7 @@ async function fillRowWhenReady(row, dir, heroHost){
       const apiItems = await fetchItemsByDirector(
         STATE.userId,
         dir.Id,
-        Math.max(NEED * 3, EFFECTIVE_ROW_CARD_COUNT * 2)
+        Math.max(NEED * 3, rowCardCount * 2)
       );
 
       items = uniqById([...(items || []), ...(apiItems || [])]);
@@ -3012,12 +3019,12 @@ async function fillRowWhenReady(row, dir, heroHost){
     }
 
     if (IS_MOBILE) {
-      const mobileLimit = Math.min(EFFECTIVE_ROW_CARD_COUNT, remaining.length);
-      const initialCount = Math.min(DIRECTOR_MOBILE_INITIAL_CARD_COUNT, mobileLimit);
+      const mobileLimit = Math.min(rowCardCount, remaining.length);
+      const initialCount = Math.min(rowCardCount, mobileLimit);
       const mobileFragment = document.createDocumentFragment();
 
       for (let i = 0; i < initialCount; i++) {
-        mobileFragment.appendChild(createRecommendationCard(remaining[i], STATE.serverId, i < 4));
+        mobileFragment.appendChild(createRecommendationCard(remaining[i], STATE.serverId, i < Math.min(6, initialCount)));
       }
 
       row.appendChild(mobileFragment);
@@ -3031,11 +3038,11 @@ async function fillRowWhenReady(row, dir, heroHost){
       return;
     }
 
-    const initialCount = 4;
+    const initialCount = Math.min(rowCardCount, remaining.length);
     const fragment = document.createDocumentFragment();
 
     for (let i = 0; i < Math.min(initialCount, remaining.length); i++) {
-      fragment.appendChild(createRecommendationCard(remaining[i], STATE.serverId, i < 2));
+      fragment.appendChild(createRecommendationCard(remaining[i], STATE.serverId, i < Math.min(6, initialCount)));
     }
     row.appendChild(fragment);
 
@@ -3055,16 +3062,16 @@ async function fillRowWhenReady(row, dir, heroHost){
           return;
         }
 
-        if (currentIndex >= remaining.length || row.childElementCount >= EFFECTIVE_ROW_CARD_COUNT) {
+        if (currentIndex >= remaining.length || row.childElementCount >= rowCardCount) {
           finalize();
           return;
         }
 
-        const chunkSize = 2;
+        const chunkSize = rowCardCount;
         const frag = document.createDocumentFragment();
 
         for (let i = 0; i < chunkSize && currentIndex < remaining.length; i++) {
-          if (row.childElementCount >= EFFECTIVE_ROW_CARD_COUNT) break;
+          if (row.childElementCount >= rowCardCount) break;
           frag.appendChild(createRecommendationCard(remaining[currentIndex], STATE.serverId, false));
           currentIndex++;
         }
@@ -3087,9 +3094,13 @@ async function fillRowWhenReady(row, dir, heroHost){
 export function cleanupDirectorRows() {
   try {
     __dirInitSeq++;
-    if (__dirMountRetryTimer) {
-      clearTimeout(__dirMountRetryTimer);
-      __dirMountRetryTimer = null;
+    __directorDeferredSeq++;
+    __directorMountPromise = null;
+    __directorDeferredStartPromise = null;
+    try { window.__directorFirstRowReady = false; } catch {}
+    if (__dirDeferredWarmTimer) {
+      clearTimeout(__dirDeferredWarmTimer);
+      __dirDeferredWarmTimer = null;
     }
     detachDirectorScrollIdleLoader();
     STATE.batchObserver?.disconnect();
@@ -3114,8 +3125,29 @@ export function cleanupDirectorRows() {
       __dirAutoPumpHandle = null;
     }
 
-    if (STATE.wrapEl) {
-      cleanupDirectorRowsMount(STATE.wrapEl);
+    const wrapEl = STATE.wrapEl;
+    if (wrapEl) {
+      try { wrapEl.__pinMO?.disconnect?.(); } catch {}
+      try {
+        if (wrapEl.__pinHashChange) {
+          window.removeEventListener('hashchange', wrapEl.__pinHashChange);
+        }
+      } catch {}
+      try {
+        if (wrapEl.__pinVisibilityChange) {
+          document.removeEventListener('visibilitychange', wrapEl.__pinVisibilityChange);
+        }
+      } catch {}
+      try { delete wrapEl.__pinMO; } catch {}
+      try { delete wrapEl.__pinHashChange; } catch {}
+      try { delete wrapEl.__pinVisibilityChange; } catch {}
+      cleanupDirectorRowsMount(wrapEl);
+      try { wrapEl.replaceChildren(); } catch {}
+      try {
+        if (wrapEl.isConnected) {
+          wrapEl.parentElement?.removeChild(wrapEl);
+        }
+      } catch {}
     }
     Object.keys(STATE).forEach(key => {
       if (key !== 'maxRenderCount') {
@@ -3124,13 +3156,15 @@ export function cleanupDirectorRows() {
                     typeof STATE[key] === 'boolean' ? false : null;
       }
     });
+    STATE.batchSize = DIRECTOR_ROW_BATCH_SIZE;
+    STATE.maxRenderCount = getDirectorRowsCount();
     STATE.sectionIOs = new Set();
     STATE.autoPumpScheduled = false;
     STATE._db = null;
     STATE._scope = null;
 
   } catch (e) {
-    console.warn('Director rows cleanup error:', e);
+    dirRowsWarn('Director rows cleanup error:', e);
   }
 }
 

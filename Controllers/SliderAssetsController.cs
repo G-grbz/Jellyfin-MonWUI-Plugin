@@ -13,13 +13,6 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
         private readonly ILogger<SliderAssetsController> _logger;
         public SliderAssetsController(ILogger<SliderAssetsController> logger) => _logger = logger;
 
-        private void NoCache()
-        {
-            Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
-            Response.Headers["Pragma"] = "no-cache";
-            Response.Headers["Expires"] = "0";
-        }
-
         [HttpGet("{*path}")]
         public IActionResult GetAsset(string path)
         {
@@ -35,7 +28,11 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
                     if (!full.StartsWith(root, StringComparison.Ordinal)) return BadRequest("Invalid path.");
                     if (IOFile.Exists(full))
                     {
-                        NoCache();
+                        if (AssetVersioning.TryHandleConditionalGet(HttpContext, $"slider:{path}"))
+                        {
+                            return StatusCode(304);
+                        }
+
                         return File(IOFile.ReadAllBytes(full), Mime(full));
                     }
                 }
@@ -44,7 +41,11 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
                 var bytes = EmbeddedAssetHelper.TryRead(resourceName);
                 if (bytes != null)
                 {
-                    NoCache();
+                    if (AssetVersioning.TryHandleConditionalGet(HttpContext, $"slider:{path}"))
+                    {
+                        return StatusCode(304);
+                    }
+
                     return File(bytes, Mime(path));
                 }
 

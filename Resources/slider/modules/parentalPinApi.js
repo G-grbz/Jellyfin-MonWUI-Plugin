@@ -5,11 +5,19 @@ const DEFAULT_LOCKOUT_MINUTES = 15;
 const DEFAULT_TRUST_MINUTES = 60;
 
 let policyCache = {
-  userId: "",
+  authKey: "",
   value: null,
   ts: 0,
   promise: null
 };
+
+function pickFirstString(...values) {
+  for (const value of values) {
+    const normalized = String(value || "").trim();
+    if (normalized) return normalized;
+  }
+  return "";
+}
 
 function pick(payload, ...keys) {
   for (const key of keys) {
@@ -127,19 +135,119 @@ function normalizeVerifyResponse(data) {
 
 function getTokenSafe() {
   try {
-    return window.ApiClient?.accessToken?.() || window.ApiClient?._accessToken || "";
+    return pickFirstString(
+      localStorage.getItem("accessToken"),
+      sessionStorage.getItem("accessToken"),
+      localStorage.getItem("embyToken"),
+      sessionStorage.getItem("embyToken"),
+      window.ApiClient?.accessToken?.(),
+      window.ApiClient?._accessToken
+    );
   } catch {
     return "";
   }
 }
 
+function readStoredJson(key) {
+  try {
+    const raw = localStorage.getItem(key) || sessionStorage.getItem(key) || "";
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeBase(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function readCredentialUserIdFromPayload(payload) {
+  if (!payload || typeof payload !== "object") return "";
+
+  const directUserId = pickFirstString(
+    payload?.UserId,
+    payload?.userId,
+    payload?.User?.Id,
+    payload?.user?.Id
+  );
+  if (directUserId) {
+    return directUserId;
+  }
+
+  const servers = Array.isArray(payload?.Servers) ? payload.Servers : [];
+  if (!servers.length) return "";
+
+  const serverId = pickFirstString(
+    localStorage.getItem("serverId"),
+    sessionStorage.getItem("serverId"),
+    localStorage.getItem("persist_server_id"),
+    sessionStorage.getItem("persist_server_id"),
+    window.ApiClient?._serverInfo?.SystemId,
+    window.ApiClient?._serverInfo?.Id
+  );
+  const serverBase = pickFirstString(
+    typeof window.ApiClient?.serverAddress === "function" ? window.ApiClient.serverAddress() : "",
+    localStorage.getItem("jf_serverAddress"),
+    sessionStorage.getItem("jf_serverAddress")
+  );
+
+  const matchedServer = servers.find((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    if (serverId) {
+      return pickFirstString(entry?.Id, entry?.SystemId) === serverId;
+    }
+
+    const entryBases = [
+      normalizeBase(entry?.ManualAddress),
+      normalizeBase(entry?.LocalAddress)
+    ].filter(Boolean);
+
+    return !!serverBase && entryBases.includes(normalizeBase(serverBase));
+  });
+
+  return pickFirstString(
+    matchedServer?.UserId,
+    servers[0]?.UserId
+  );
+}
+
 async function getUserIdSafe() {
+  const immediate = pickFirstString(
+    localStorage.getItem("userId"),
+    sessionStorage.getItem("userId"),
+    localStorage.getItem("jf_userId"),
+    sessionStorage.getItem("jf_userId"),
+    localStorage.getItem("persist_user_id"),
+    sessionStorage.getItem("persist_user_id"),
+    readCredentialUserIdFromPayload(readStoredJson("json-credentials")),
+    readCredentialUserIdFromPayload(readStoredJson("jellyfin_credentials")),
+    readCredentialUserIdFromPayload(readStoredJson("emby_credentials")),
+    typeof window.ApiClient?.getCurrentUserId === "function" ? window.ApiClient.getCurrentUserId() : "",
+    window.ApiClient?._currentUserId
+  );
+
+  if (immediate) {
+    return immediate;
+  }
+
   try {
     const user = await window.ApiClient?.getCurrentUser?.();
-    return user?.Id || "";
+    return String(user?.Id || "").trim();
   } catch {
     return "";
   }
+}
+
+async function getAuthContext() {
+  const [userId, token] = await Promise.all([
+    getUserIdSafe(),
+    Promise.resolve(getTokenSafe())
+  ]);
+
+  return {
+    userId: String(userId || "").trim(),
+    token: String(token || "").trim()
+  };
 }
 
 async function getAuthHeaders() {
@@ -148,8 +256,7 @@ async function getAuthHeaders() {
     "Content-Type": "application/json",
   };
 
-  const token = getTokenSafe();
-  const userId = await getUserIdSafe();
+  const { userId, token } = await getAuthContext();
   if (token) headers["X-Emby-Token"] = token;
   if (userId) headers["X-Emby-UserId"] = userId;
   return headers;
@@ -207,7 +314,8 @@ export async function unlockParentalPinUser(userId) {
 }
 
 export async function fetchCurrentUserParentalPinPolicy({ force = false } = {}) {
-  const userId = await getUserIdSafe();
+  const { userId, token } = await getAuthContext();
+  const authKey = `${userId}::${token ? token.slice(-16) : ""}`;
   const now = Date.now();
   const cachedExpired =
     policyCache.value &&
@@ -219,18 +327,18 @@ export async function fetchCurrentUserParentalPinPolicy({ force = false } = {}) 
   if (
     !force &&
     policyCache.value &&
-    policyCache.userId === userId &&
+    policyCache.authKey === authKey &&
     !cachedExpired &&
     (now - policyCache.ts) < POLICY_CACHE_MS
   ) {
     return policyCache.value;
   }
 
-  if (!force && policyCache.promise && policyCache.userId === userId) {
+  if (!force && policyCache.promise && policyCache.authKey === authKey) {
     return policyCache.promise;
   }
 
-  policyCache.userId = userId;
+  policyCache.authKey = authKey;
   policyCache.promise = request("/policy")
     .then((data) => {
       policyCache.value = normalizePolicyResponse(data);
@@ -279,9 +387,27 @@ export function getParentalPinErrorMessage(error, labels = {}, fallback = "") {
 
 export function invalidateParentalPinPolicyCache() {
   policyCache = {
-    userId: "",
+    authKey: "",
     value: null,
     ts: 0,
     promise: null
   };
+}
+
+if (typeof window !== "undefined" && !window.__jmsParentalPinPolicyCacheBound) {
+  window.__jmsParentalPinPolicyCacheBound = true;
+  window.addEventListener("storage", (event) => {
+    if ([
+      "userId",
+      "jf_userId",
+      "persist_user_id",
+      "accessToken",
+      "embyToken",
+      "json-credentials",
+      "jellyfin_credentials",
+      "emby_credentials"
+    ].includes(String(event?.key || ""))) {
+      invalidateParentalPinPolicyCache();
+    }
+  });
 }

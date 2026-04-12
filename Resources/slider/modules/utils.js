@@ -8,7 +8,7 @@ import {
   getAuthHeader,
   playNow,
 } from "/Plugins/JMSFusion/runtime/api.js";
-import { openDetailsModal } from "./detailsModal.js";
+import { openDetailsModal } from "./detailsModalLoader.js";
 import { withServer, withServerSrcset, invalidateServerBaseCache, resolveServerBase } from "./jfUrl.js";
 
 const config = getConfig();
@@ -1452,6 +1452,58 @@ export function prefetchImages(urls) {
     },
     { once: true }
   );
+}
+
+const OFFICIAL_RATING_CANONICAL_MAP = new Map([
+  ["TVMA", "TV-MA"],
+  ["TV14", "TV-14"],
+  ["TVPG", "TV-PG"],
+  ["TVG", "TV-G"],
+  ["TVY7", "TV-Y7"],
+  ["TVY10", "TV-Y10"],
+  ["TVY", "TV-Y"],
+  ["PG13", "PG-13"],
+  ["NC17", "NC-17"],
+  ["FSK0", "FSK 0"],
+  ["FSK6", "FSK 6"],
+  ["FSK12", "FSK 12"],
+  ["FSK16", "FSK 16"],
+  ["FSK18", "FSK 18"],
+  ["PEGI3", "PEGI 3"],
+  ["PEGI7", "PEGI 7"],
+  ["PEGI12", "PEGI 12"],
+  ["PEGI16", "PEGI 16"],
+  ["PEGI18", "PEGI 18"],
+]);
+
+export function formatOfficialRatingLabel(rating) {
+  if (rating == null) return null;
+
+  const text = String(rating)
+    .replace(/[‐‑‒–—]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!text) return null;
+
+  const upper = text.toUpperCase();
+  if (/^(?:N\/A|NA|NONE|NULL|UNDEFINED|UNKNOWN)$/.test(upper)) return null;
+
+  const compact = upper.replace(/[\s._/\\-]+/g, "");
+  const canonical = OFFICIAL_RATING_CANONICAL_MAP.get(compact);
+  if (canonical) return canonical;
+
+  const leadingPlusMatch = upper.match(/^\+\s*(\d{1,2})$/);
+  if (leadingPlusMatch) return `${leadingPlusMatch[1]}+`;
+
+  const trailingPlusMatch = upper.match(/^(\d{1,2})\s*\+$/);
+  if (trailingPlusMatch) return `${trailingPlusMatch[1]}+`;
+
+  if (/^[A-Za-z0-9+/-]{1,12}$/.test(text)) return upper;
+
+  if (!/[a-z]/.test(text)) return upper;
+
+  return text;
 }
 
 export async function getHighResImageUrls(item, backdropIndex) {

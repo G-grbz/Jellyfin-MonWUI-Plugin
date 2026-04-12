@@ -20,6 +20,8 @@ const AUTOOPEN_FLAG = "jf_profileChooser_autoopened";
 const LAST_PICK_KEY = "jf_profileChooser_lastUser";
 const LAST_ACTIVE_KEY_PREFIX = "jf_profileChooser_lastActive::";
 const AUTOOPEN_INACTIVITY_MS = 6 * 60 * 60 * 1000;
+const CUSTOM_SPLASH_ACTIVE_ATTR = "data-jms-custom-splash";
+const CUSTOM_SPLASH_HIDDEN_ATTR = "data-jms-custom-splash-hidden";
 
 let headerHideMo = null;
 
@@ -105,7 +107,7 @@ function ensureLegacyHeaderUserButtonHidden() {
   });
 
   try {
-    headerHideMo.observe(document.documentElement, {
+    headerHideMo.observe(document.body || document.documentElement, {
       childList: true,
       subtree: true,
       attributes: true,
@@ -575,6 +577,25 @@ function resetProfileAvatarSlotState(slot) {
   slot.classList.remove("jf-profile-header-avatar-dicebear");
 }
 
+function hasRenderableAvatarContent(slot) {
+  if (!slot?.isConnected) return false;
+  try {
+    return !!slot.querySelector("img, svg, .jf-profile-fallback");
+  } catch {
+    return false;
+  }
+}
+
+function isCustomSplashBlockingProfileHeader() {
+  try {
+    const root = document.documentElement;
+    return !!root?.hasAttribute(CUSTOM_SPLASH_ACTIVE_ATTR)
+      && !root?.hasAttribute(CUSTOM_SPLASH_HIDDEN_ATTR);
+  } catch {
+    return false;
+  }
+}
+
 function setAvatarFallback(slot, user, { requestId, big = false } = {}) {
   if (!slot) return;
   if (requestId && slot.getAttribute("data-avatar-request") !== requestId) return;
@@ -747,6 +768,7 @@ function installHeaderButton(open, L, { isOverlayOpen } = {}) {
   let installed = false;
   let headerObserver = null;
   let bodyObserver = null;
+  let rootObserver = null;
   let cancelled = false;
 
   let __siCache = null, __siCacheTs = 0;
@@ -805,12 +827,11 @@ function installHeaderButton(open, L, { isOverlayOpen } = {}) {
 
   const mountOnce = (headerRightEl = null) => {
     if (cancelled) return false;
-    if (installed && document.getElementById(HEADER_BTN_ID)) return true;
-
     const headerRight = headerRightEl || findHeaderRight();
     if (!headerRight) return false;
 
     let btn = document.getElementById(HEADER_BTN_ID);
+    if (installed && btn && btn.parentElement === headerRight) return true;
     if (!btn) {
       btn = document.createElement("button");
       btn.id = HEADER_BTN_ID;
@@ -821,6 +842,14 @@ function installHeaderButton(open, L, { isOverlayOpen } = {}) {
         <span class="jf-profile-header-name"></span>
         <span class="jf-profile-header-caret">▾</span>
       `;
+      const avatarSlot = btn.querySelector(".jf-profile-header-avatar");
+      const nameSlot = btn.querySelector(".jf-profile-header-name");
+      if (avatarSlot && !hasRenderableAvatarContent(avatarSlot)) {
+        setAvatarFallback(avatarSlot, { Name: L("profil", "Profil") });
+      }
+      if (nameSlot && !String(nameSlot.textContent || "").trim()) {
+        nameSlot.textContent = L("profil", "Profil");
+      }
       btn.setAttribute("aria-label", L("profilDegistir", "Profil değiştir"));
       btn.addEventListener("click", (e) => {
         e.preventDefault();
@@ -832,22 +861,32 @@ function installHeaderButton(open, L, { isOverlayOpen } = {}) {
       try { headerRight.appendChild(btn); } catch {}
     }
 
+    try { window.__jmsQueueFeatureCssSync?.({ force: true }); } catch {}
+
     installed = true;
     return true;
   };
 
   const refreshHeaderButton = () => {
-    if (typeof isOverlayOpen === "function" && isOverlayOpen()) return;
-
     const btn = document.getElementById(HEADER_BTN_ID);
     if (!btn) return;
 
     const avatarSlot = btn.querySelector(".jf-profile-header-avatar");
     const nameSlot = btn.querySelector(".jf-profile-header-name");
+    const hasSettledHeaderState =
+      !!String(nameSlot?.textContent || "").trim()
+      && hasRenderableAvatarContent(avatarSlot);
+    if (typeof isOverlayOpen === "function" && isOverlayOpen() && hasSettledHeaderState) return;
 
     const si = getSessionInfoCached(1500);
     const userId = String(si.userId || "").trim();
     const userName = String(si?.UserName || si?.User?.Name || si?.userName || "").trim();
+    const accessToken = String(si?.accessToken || "").trim();
+    const authState =
+      accessToken || (typeof isAuthReadyStrict === "function" && isAuthReadyStrict())
+        ? "ready"
+        : "cold";
+    const splashState = isCustomSplashBlockingProfileHeader() ? "splash" : "live";
 
     if (nameSlot) {
       const next = userName || L("profil", "Profil");
@@ -858,9 +897,10 @@ function installHeaderButton(open, L, { isOverlayOpen } = {}) {
       const store = readTokenStoreCached(5000);
       const rec = userId ? store?.[userId] : null;
       const tag = rec?.primaryImageTag || "";
-      const nextKey = `${userId}|${userName}|${tag}`;
+      const nextKey = `${userId}|${userName}|${tag}|${authState}|${splashState}`;
       const prev = avatarSlot.getAttribute("data-avatar-key") || "";
-      if (prev !== nextKey) {
+      const shouldForceRefresh = !hasRenderableAvatarContent(avatarSlot);
+      if (prev !== nextKey || shouldForceRefresh) {
         avatarSlot.setAttribute("data-avatar-key", nextKey);
         renderProfileAvatarSlot(
           avatarSlot,
@@ -921,6 +961,21 @@ function installHeaderButton(open, L, { isOverlayOpen } = {}) {
         bodyObserver = new MutationObserver(() => onBodyMut());
         bodyObserver.observe(document.body, { childList: true, subtree: true });
       } catch {}
+
+      try {
+        const root = document.documentElement;
+        if (root && typeof MutationObserver === "function") {
+          rootObserver?.disconnect?.();
+          rootObserver = new MutationObserver(() => {
+            if (cancelled) return;
+            tick();
+          });
+          rootObserver.observe(root, {
+            attributes: true,
+            attributeFilter: [CUSTOM_SPLASH_ACTIVE_ATTR, CUSTOM_SPLASH_HIDDEN_ATTR],
+          });
+        }
+      } catch {}
     } catch {
       tick();
     }
@@ -931,6 +986,7 @@ function installHeaderButton(open, L, { isOverlayOpen } = {}) {
     try { window.removeEventListener("hashchange", onHash); } catch {}
     try { headerObserver?.disconnect?.(); } catch {}
     try { bodyObserver?.disconnect?.(); } catch {}
+    try { rootObserver?.disconnect?.(); } catch {}
   };
 }
 
@@ -988,6 +1044,9 @@ export function initProfileChooser(options = {}) {
 
   let overlay = null;
   let cleanupHeader = null;
+  let destroyed = false;
+  let pendingSplashWaitPromise = null;
+  let finishPendingSplashWait = null;
 
   let currentList = [];
   let currentUserId = "";
@@ -1009,6 +1068,78 @@ export function initProfileChooser(options = {}) {
     mode: "grid",
     selectedUser: null,
   };
+
+  function clearPendingSplashWait(reason = "aborted") {
+    try { finishPendingSplashWait?.(reason); } catch {}
+  }
+
+  function waitForCustomSplashToClear() {
+    if (!isCustomSplashBlockingProfileHeader()) {
+      return Promise.resolve("clear");
+    }
+    if (pendingSplashWaitPromise) return pendingSplashWaitPromise;
+
+    pendingSplashWaitPromise = new Promise((resolve) => {
+      let settled = false;
+      let observer = null;
+
+      const cleanup = () => {
+        try { observer?.disconnect?.(); } catch {}
+        observer = null;
+        if (finishPendingSplashWait === finish) {
+          finishPendingSplashWait = null;
+        }
+        pendingSplashWaitPromise = null;
+      };
+
+      const finish = (reason) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(reason);
+      };
+
+      const syncState = () => {
+        if (destroyed) {
+          finish("aborted");
+          return true;
+        }
+        if (!isCustomSplashBlockingProfileHeader()) {
+          finish("clear");
+          return true;
+        }
+        return false;
+      };
+
+      finishPendingSplashWait = finish;
+
+      if (syncState()) return;
+
+      const root = document.documentElement;
+      if (!root || typeof MutationObserver !== "function") {
+        finish("unsupported");
+        return;
+      }
+
+      observer = new MutationObserver(() => {
+        syncState();
+      });
+
+      try {
+        observer.observe(root, {
+          attributes: true,
+          attributeFilter: [CUSTOM_SPLASH_ACTIVE_ATTR, CUSTOM_SPLASH_HIDDEN_ATTR],
+        });
+      } catch {
+        finish("observe-failed");
+        return;
+      }
+
+      syncState();
+    });
+
+    return pendingSplashWaitPromise;
+  }
 
   const isOverlayOpen = () => !!overlay;
 
@@ -1463,12 +1594,24 @@ export function initProfileChooser(options = {}) {
   }
 
   const open = async ({ source = "auto" } = {}) => {
-    if (overlay) return;
+    if (destroyed || overlay) return;
+
+    const shouldWaitForSplash = source === "auto" || source === "auto-preauth";
+    if (shouldWaitForSplash && isCustomSplashBlockingProfileHeader()) {
+      await waitForCustomSplashToClear().catch(() => {});
+      if (destroyed || overlay || isCustomSplashBlockingProfileHeader()) return;
+      await new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      });
+      if (destroyed || overlay || isCustomSplashBlockingProfileHeader()) return;
+    }
 
     pauseBackground();
 
     overlay = buildOverlayDom(L);
     document.body.appendChild(overlay);
+    try { overlay.classList.add("busy"); } catch {}
+    requestAnimationFrame(() => overlay?.classList.add("open"));
 
     overlay.querySelector(".jf-profile-close")?.addEventListener("click", close);
     overlay.querySelector(".jf-profile-settings")?.addEventListener("click", (e) => {
@@ -1486,6 +1629,7 @@ export function initProfileChooser(options = {}) {
     await refreshUsers().catch(() => {});
     await syncCurrentUserAvatarTagOnce().catch(() => {});
     showGrid();
+    try { overlay?.classList.remove("busy"); } catch {}
 
     try { clearInterval(overlayPresenceTimer); } catch {}
     overlayPresenceTimer = setInterval(async () => {
@@ -1508,10 +1652,9 @@ export function initProfileChooser(options = {}) {
         await refreshUsers().catch(() => {});
         if (!overlay) return;
         renderGridOnce();
+        try { overlay.classList.remove("busy"); } catch {}
       } catch {}
     })();
-
-    requestAnimationFrame(() => overlay?.classList.add("open"));
   };
 
   cleanupHeader = installHeaderButton(open, L, { isOverlayOpen });
@@ -1553,20 +1696,11 @@ export function initProfileChooser(options = {}) {
       const inactiveLongEnough = !lastActive || (Date.now() - lastActive) >= AUTOOPEN_INACTIVITY_MS;
       const quickLoginReady = !autoOpenRequireQuickLogin || hasRememberedQuickLogin();
       if (!already && inactiveLongEnough && quickLoginReady) {
-        const authReadyNow = (typeof isAuthReadyStrict === "function" ? isAuthReadyStrict() : false);
-        if (authReadyNow) {
-          try { sessionStorage.setItem(AUTOOPEN_FLAG, "1"); } catch {}
-          setTimeout(() => { open({ source: "auto" }).catch(() => {}); }, 150);
-        } else {
-          setTimeout(async () => {
-            try {
-              await waitForAuthReadyStrict?.(6000).catch(() => {});
-              if (sessionStorage.getItem(AUTOOPEN_FLAG) === "1") return;
-              try { sessionStorage.setItem(AUTOOPEN_FLAG, "1"); } catch {}
-              open({ source: "auto-auth" }).catch(() => {});
-            } catch {}
-          }, 250);
-        }
+        const source = (typeof isAuthReadyStrict === "function" ? isAuthReadyStrict() : false)
+          ? "auto"
+          : "auto-preauth";
+        try { sessionStorage.setItem(AUTOOPEN_FLAG, "1"); } catch {}
+        setTimeout(() => { open({ source }).catch(() => {}); }, 0);
       }
     } catch {}
   }
@@ -1588,6 +1722,8 @@ export function initProfileChooser(options = {}) {
   window.addEventListener("storage", onStorage);
 
   return () => {
+    destroyed = true;
+    clearPendingSplashWait();
     try { window.removeEventListener("storage", onStorage); } catch {}
     try { window.removeEventListener("hashchange", onHashSync); } catch {}
     try { window.removeEventListener("focus", onFocusSync); } catch {}

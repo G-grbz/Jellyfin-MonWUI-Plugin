@@ -4,6 +4,28 @@ import { getTomatoIconHtml } from "./customIcons.js";
 
 const HOST_ID = "jms-osd-header-ratings-v4";
 const SESSION_POLL_INTERVAL_MS = 10_000;
+const ITEM_DETAILS_CACHE_TTL_MS = 2_500;
+
+function buildAuthHeaders() {
+  const s =
+    (typeof getSessionInfo === "function" ? getSessionInfo() : null) || {};
+
+  return {
+    "X-Emby-Authorization":
+      typeof getAuthHeader === "function" ? getAuthHeader() : "",
+    "X-Emby-Token": s.accessToken || "",
+  };
+}
+
+function getCurrentUserId() {
+  try {
+    const sessionInfo =
+      (typeof getSessionInfo === "function" ? getSessionInfo() : null) || {};
+    return sessionInfo?.userId || sessionInfo?.UserId || null;
+  } catch {
+    return null;
+  }
+}
 
 function getCommunityRatingValue(communityRating) {
   const raw = Array.isArray(communityRating)
@@ -49,23 +71,62 @@ function shouldRenderRatings(cfg = {}) {
   );
 }
 
+function isRenderableNode(el) {
+  if (!(el instanceof Element)) return false;
+  if (!el.isConnected) return false;
+  if (el.closest(".hide,[hidden],[aria-hidden='true']")) return false;
+
+  try {
+    const style = window.getComputedStyle(el);
+    if (!style) return true;
+    if (style.display === "none" || style.visibility === "hidden") return false;
+  } catch {}
+
+  return true;
+}
+
+function isVisibleBox(el) {
+  if (!(el instanceof Element)) return false;
+  if (!isRenderableNode(el)) return false;
+
+  const rect = el.getBoundingClientRect?.();
+  if (!rect) return false;
+  return rect.width > 0 && rect.height > 0;
+}
+
+function getActiveVideoContainer() {
+  const containers = Array.from(document.querySelectorAll(".videoPlayerContainer"));
+  for (const container of containers) {
+    if (!isVisibleBox(container)) continue;
+    const video = container.querySelector("video.htmlvideoplayer, video");
+    if (video && isRenderableNode(video)) return container;
+  }
+  return null;
+}
+
 function isPlaybackScreenActive() {
-  const hasControls = !!document.querySelector(
+  const activeContainer = getActiveVideoContainer();
+  if (!activeContainer) return false;
+
+  const controls = document.querySelector(
     ".videoOsdBottom.videoOsdBottom-maincontrols .buttons"
   );
-  const hasPlayerContainer = !!document.querySelector(".videoPlayerContainer");
-  const hasVideo = !!document.querySelector(
-    ".videoPlayerContainer video.htmlvideoplayer, .videoPlayerContainer video"
-  );
-  return hasControls || (hasPlayerContainer && hasVideo);
+  if (controls && isRenderableNode(controls)) return true;
+
+  const video = activeContainer.querySelector("video.htmlvideoplayer, video");
+  if (!(video instanceof HTMLMediaElement)) return false;
+  if (!String(video.currentSrc || video.src || "").trim()) return false;
+  return true;
 }
 
 function pickOsdHeaderAndTitleEl() {
-  const header =
-    document.querySelector(".skinHeader.osdHeader") ||
-    document.querySelector(".skinHeader.focuscontainer-x.osdHeader") ||
-    document.querySelector(".osdHeader") ||
-    document.querySelector(".skinHeader");
+  const activeContainer = getActiveVideoContainer();
+  if (!activeContainer) return { header: null, titleEl: null };
+
+  const headers = Array.from(document.querySelectorAll(
+    ".skinHeader.osdHeader, .skinHeader.focuscontainer-x.osdHeader, .osdHeader"
+  )).filter(isRenderableNode);
+  const header = headers.length ? headers[headers.length - 1] : null;
 
   if (!header) return { header: null, titleEl: null };
 
@@ -101,7 +162,7 @@ function ensureHost() {
     Object.assign(host.style, {
       display: 'flex',
       alignItems: 'center',
-      gap: '5px',
+      gap: '10px',
       whiteSpace: 'nowrap',
       pointerEvents: 'none',
       userSelect: 'none',
@@ -130,18 +191,120 @@ function removeExistingHost() {
 }
 
 async function fetchSessions() {
-  const s =
-    (typeof getSessionInfo === "function" ? getSessionInfo() : null) || {};
-  const headers = {
-    "X-Emby-Authorization":
-      typeof getAuthHeader === "function" ? getAuthHeader() : "",
-    "X-Emby-Token": s.accessToken || "",
-  };
-
+  const headers = buildAuthHeaders();
   const url = `/Sessions?ActiveWithinSeconds=120`;
   const res = await fetch(url, { headers });
   if (!res.ok) throw new Error(`Sessions HTTP ${res.status}`);
   return await res.json();
+}
+
+function getActiveVideoEl() {
+  const container = getActiveVideoContainer();
+  if (!container) return null;
+  return container.querySelector("video.htmlvideoplayer, video");
+}
+
+function getItemIdFromDom() {
+  const selectors = [
+    '.videoOsdBottom-hidden > div:nth-child(1) > div:nth-child(4) > button:nth-child(3)',
+    'div.page:nth-child(3) > div:nth-child(3) > div:nth-child(1) > div:nth-child(4) > button:nth-child(3)',
+    ".btnUserRating",
+    '[data-id][is="paper-icon-button-light"].btnUserRating',
+    ".btnUserRating[data-id]",
+  ];
+
+  for (const selector of selectors) {
+    const el = document.querySelector(selector);
+    const id = String(el?.getAttribute?.("data-id") || "").trim();
+    if (id) return id;
+  }
+  return null;
+}
+
+function parsePlayableIdFromVideo(videoEl) {
+  try {
+    const rawSrc = String(videoEl?.currentSrc || videoEl?.src || "").trim();
+    if (!rawSrc) return null;
+
+    const url = new URL(rawSrc, window.location.href);
+    const itemId = url.searchParams.get("ItemId") || url.searchParams.get("itemId");
+    if (itemId) return itemId;
+
+    const pathId = url.pathname.match(/\/(?:Videos|Audio)\/([^/?#]+)/i)?.[1];
+    if (pathId) return decodeURIComponent(pathId);
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function getPlaybackItemIdFromDom() {
+  const domId = getItemIdFromDom();
+  if (domId) return domId;
+  return parsePlayableIdFromVideo(getActiveVideoEl());
+}
+
+const __itemDetailsCache = {
+  key: "",
+  at: 0,
+  value: null,
+};
+
+async function fetchItemDetails(itemId, userId) {
+  const id = String(itemId || "").trim();
+  if (!id) return null;
+
+  const cacheKey = `${String(userId || "")}:${id}`;
+  if (
+    __itemDetailsCache.key === cacheKey &&
+    (Date.now() - __itemDetailsCache.at) <= ITEM_DETAILS_CACHE_TTL_MS
+  ) {
+    return __itemDetailsCache.value || null;
+  }
+
+  const path = userId
+    ? `/Users/${encodeURIComponent(String(userId))}/Items/${encodeURIComponent(id)}`
+    : `/Items/${encodeURIComponent(id)}`;
+  const fields = encodeURIComponent("CommunityRating,CriticRating,OfficialRating");
+  const url = `${path}?Fields=${fields}`;
+
+  const res = await fetch(url, { headers: buildAuthHeaders() });
+  if (!res.ok) throw new Error(`Item HTTP ${res.status}`);
+  const item = await res.json();
+
+  __itemDetailsCache.key = cacheKey;
+  __itemDetailsCache.at = Date.now();
+  __itemDetailsCache.value = item || null;
+
+  return item || null;
+}
+
+async function resolveCurrentPlaybackItem(userId, {
+  suppressItemId = "",
+  allowSessionsFallback = true,
+} = {}) {
+  const suppressedId = String(suppressItemId || "").trim();
+  const isSuppressed = (value) => {
+    const id = String(value || "").trim();
+    return !!(suppressedId && id && id === suppressedId);
+  };
+
+  const domItemId = getPlaybackItemIdFromDom();
+
+  if (domItemId && !isSuppressed(domItemId)) {
+    try {
+      const item = await fetchItemDetails(domItemId, userId);
+      if (item?.Id) return item;
+    } catch {}
+  }
+
+  if (!allowSessionsFallback) return null;
+
+  const sessions = await fetchSessions();
+  const sess = pickBestNowPlayingSession(sessions, userId);
+  const item = sess?.NowPlayingItem || null;
+  if (isSuppressed(item?.Id)) return null;
+  return item;
 }
 
 function pickBestNowPlayingSession(sessions, userId) {
@@ -215,7 +378,7 @@ function applyModernStyles(host) {
   Object.assign(host.style, {
     display: "inline-flex",
     alignItems: "center",
-    gap: "5px",
+    gap: "10px",
     alignSelf: "center",
     lineHeight: "1",
     color: "#fff",
@@ -227,7 +390,7 @@ function applyModernStyles(host) {
     Object.assign(container.style, {
       display: "flex",
       alignItems: "center",
-      gap: "3px",
+      gap: "5px",
       pointerEvents: "none",
       userSelect: "none",
       lineHeight: "1",
@@ -354,9 +517,6 @@ function addAnimationStyles() {
         transform: scale(0.9);
       }
     }
-  .headerLeft .pageTitle {
-        display: flex !important;
-    }
   `;
   document.head.appendChild(style);
 }
@@ -450,37 +610,102 @@ export function initOsdHeaderRatings() {
   let bodyObserver = null;
   let quickSyncScheduled = false;
   let tickRunning = false;
+  let videoEventCleanup = null;
+  let trackedVideoEl = null;
+  let playbackInactive = false;
+  let suppressedItemId = "";
+
+  const clearPlaybackInactive = () => {
+    playbackInactive = false;
+    suppressedItemId = "";
+  };
+
+  const markPlaybackInactive = (candidateId = "") => {
+    const nextId = String(candidateId || getPlaybackItemIdFromDom() || "").trim();
+    if (nextId) suppressedItemId = nextId;
+    playbackInactive = true;
+    lastKey = "";
+    removeExistingHost();
+  };
+
+  const bindVideoSignals = () => {
+    const nextVideo = getActiveVideoEl();
+    if (trackedVideoEl === nextVideo) return;
+
+    try { videoEventCleanup?.(); } catch {}
+    videoEventCleanup = null;
+    trackedVideoEl = nextVideo || null;
+
+    if (!nextVideo) return;
+
+    const onVideoWake = () => {
+      clearPlaybackInactive();
+      queueQuickSync();
+    };
+
+    const onVideoTerminal = () => {
+      markPlaybackInactive(
+        getPlaybackItemIdFromDom() || parsePlayableIdFromVideo(nextVideo)
+      );
+    };
+
+    const wakeEvents = ["loadstart", "loadedmetadata", "canplay", "play", "playing"];
+    const terminalEvents = ["ended", "emptied", "abort", "error"];
+
+    wakeEvents.forEach((eventName) => {
+      try { nextVideo.addEventListener(eventName, onVideoWake, { passive: true }); } catch {}
+    });
+    terminalEvents.forEach((eventName) => {
+      try { nextVideo.addEventListener(eventName, onVideoTerminal, { passive: true }); } catch {}
+    });
+
+    videoEventCleanup = () => {
+      wakeEvents.forEach((eventName) => {
+        try { nextVideo.removeEventListener(eventName, onVideoWake); } catch {}
+      });
+      terminalEvents.forEach((eventName) => {
+        try { nextVideo.removeEventListener(eventName, onVideoTerminal); } catch {}
+      });
+    };
+  };
 
   const tick = async () => {
     if (destroyed || document.hidden) return;
 
     if (!isPlaybackScreenActive()) {
+      clearPlaybackInactive();
       lastKey = "";
       removeExistingHost();
+      return;
+    }
+
+    const activeVideo = getActiveVideoEl();
+    if (activeVideo?.ended) {
+      markPlaybackInactive(parsePlayableIdFromVideo(activeVideo));
       return;
     }
 
     const host = ensureHost();
     if (!host) return;
 
-    let sessionInfo = null;
-    try {
-      sessionInfo =
-        (typeof getSessionInfo === "function" ? getSessionInfo() : null) || {};
-    } catch {}
-
-    const userId = sessionInfo?.userId || sessionInfo?.UserId || null;
+    const userId = getCurrentUserId();
 
     try {
-      const sessions = await fetchSessions();
-      const sess = pickBestNowPlayingSession(sessions, userId);
-      const item = sess?.NowPlayingItem || null;
+      const item = await resolveCurrentPlaybackItem(userId, {
+        suppressItemId: playbackInactive ? suppressedItemId : "",
+        allowSessionsFallback: !playbackInactive,
+      });
 
-      const key = item
-        ? `${item.Id || ""}:${item.CriticRating || ""}:${item.CommunityRating || ""}:${item.OfficialRating || ""}`
-        : "";
+      if (!item) {
+        lastKey = "";
+        render(host, null, cfg);
+        return;
+      }
 
-      if (key && key === lastKey) return;
+      const key = `${item.Id || ""}:${item.CriticRating || ""}:${item.CommunityRating || ""}:${item.OfficialRating || ""}`;
+
+      const hostHasContent = !!String(host.innerHTML || "").trim();
+      if (key && key === lastKey && hostHasContent) return;
       lastKey = key;
 
       render(host, item, cfg);
@@ -520,6 +745,7 @@ export function initOsdHeaderRatings() {
       if (destroyed || document.hidden) return;
 
       if (!isPlaybackScreenActive()) {
+        clearPlaybackInactive();
         lastKey = "";
         removeExistingHost();
         return;
@@ -544,6 +770,7 @@ export function initOsdHeaderRatings() {
 
   runTick().catch(() => {});
   startPolling();
+  bindVideoSignals();
 
   try {
     window.addEventListener("hashchange", onRouteLikeChange, { passive: true });
@@ -554,6 +781,7 @@ export function initOsdHeaderRatings() {
   try {
     bodyObserver = new MutationObserver(() => {
       if (destroyed || document.hidden) return;
+      bindVideoSignals();
       if (!isPlaybackScreenActive() && !document.getElementById(HOST_ID)) return;
       queueQuickSync();
     });
@@ -572,6 +800,10 @@ export function initOsdHeaderRatings() {
     } catch {}
     try { bodyObserver?.disconnect?.(); } catch {}
     bodyObserver = null;
+    try { videoEventCleanup?.(); } catch {}
+    videoEventCleanup = null;
+    trackedVideoEl = null;
+    clearPlaybackInactive();
 
     const el = document.getElementById(HOST_ID);
     if (el) {
