@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/G-grbz/Jellyfin-MonWUI-Plugin/main/img/icon.png",
     "versions": [
       {
+        "version": "2.5.1.0",
+        "changelog": "Overhaul loading, asset versioning, splash screen, and native-style home section flows.",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v2.5.1/JMSFusion-2.5.1.0-server.zip",
+        "checksum": "12336f140a22905c05b7cce44eb2cfe3",
+        "timestamp": "2026-04-12T10:53:58.8866891Z"
+      },
+      {
         "version": "2.5.0.0",
         "changelog": "Improve settings modal and add sync",
         "targetAbi": "10.11.0.0",
