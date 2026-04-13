@@ -1171,12 +1171,16 @@ export async function updateFavoriteStatus(itemId, isFavorite, options = {}) {
   const watchlistModule = await import("/slider/modules/watchlist.js");
   const cleanItemId = String(itemId || "").trim();
   if (!cleanItemId) throw new Error("itemId gerekli");
+  const localOptions = {
+    ...(options || {}),
+    __skipNativeFavoriteSync: true
+  };
 
   const syncLocal = async () => {
     if (isFavorite) {
-      return watchlistModule.addToWatchlist(cleanItemId, options);
+      return watchlistModule.addToWatchlist(cleanItemId, localOptions);
     }
-    return watchlistModule.removeFromWatchlist(cleanItemId, options);
+    return watchlistModule.removeFromWatchlist(cleanItemId, localOptions);
   };
 
   watchlistModule?.suppressFavoriteMirrorOnce?.(cleanItemId, isFavorite);
