@@ -20,11 +20,7 @@ const NATIVE_PLAY_ACTION_TEXTS = new Set([
   "play now",
   "watch now",
   "continue",
-  "continue watching",
-  "oynat",
-  "simdi oynat",
-  "devam et",
-  "izlemeye devam et"
+  "continue watching"
 ]);
 const NATIVE_PLAY_ICON_TEXTS = new Set([
   "play_arrow",
@@ -33,6 +29,78 @@ const NATIVE_PLAY_ICON_TEXTS = new Set([
   "play_circle_outline",
   "smart_display",
   "replay"
+]);
+const NATIVE_NON_PLAY_ACTION_TEXTS = new Set([
+  "favorite",
+  "favourite",
+  "favorites",
+  "favourites",
+  "add to favorites",
+  "add to favourites",
+  "remove from favorites",
+  "remove from favourites",
+  "unfavorite",
+  "unfavourite",
+  "like",
+  "unlike",
+  "user rating",
+  "rating",
+  "rate",
+  "watchlist",
+  "add to watchlist",
+  "remove from watchlist",
+  "playlist",
+  "add to playlist",
+  "queue",
+  "download",
+  "share",
+  "mark played",
+  "mark unplayed",
+  "watched",
+  "unwatched",
+  "favori",
+  "favoriler",
+  "favorilere ekle",
+  "favorilerden cikar",
+  "favorilerden cikar",
+  "favoriden cikar",
+  "favoriden cikar",
+  "begen",
+  "puan ver",
+  "puanlama",
+  "izleme listesi",
+  "izleme listeme ekle",
+  "izleme listesinden cikar",
+  "izleme listesinden cikar",
+  "oynatildi olarak isaretle",
+  "oynatilmadi olarak isaretle",
+  "paylas",
+  "indir"
+]);
+const NATIVE_NON_PLAY_ICON_TEXTS = new Set([
+  "favorite",
+  "favorite_border",
+  "favorite_outline",
+  "heart_plus",
+  "heart_minus",
+  "heart_check",
+  "star",
+  "star_border",
+  "star_outline",
+  "grade",
+  "thumb_up",
+  "thumb_up_off_alt",
+  "playlist_add",
+  "playlist_add_check",
+  "queue_music",
+  "download",
+  "download_for_offline",
+  "share",
+  "ios_share",
+  "library_add",
+  "library_add_check",
+  "bookmark",
+  "bookmark_border"
 ]);
 const NATIVE_MENU_ACTION_TEXTS = new Set([
   "more",
@@ -836,6 +904,33 @@ function hasNativePlayIcon(element) {
   return /\b(play_arrow|play_circle|play-circle|fa-play|fa-circle-play|fa-play-circle)\b/i.test(classBlob);
 }
 
+function hasExplicitNonPlayActionLabel(element) {
+  return collectNativePlayTextCandidates(element).some((text) => NATIVE_NON_PLAY_ACTION_TEXTS.has(text));
+}
+
+function hasExplicitNonPlayIcon(element) {
+  if (!element) return false;
+
+  const iconTexts = [
+    element.getAttribute?.("icon"),
+    element.dataset?.icon,
+    element.querySelector?.(".material-icons, .md-icon, .cardOverlayButtonIcon")?.textContent
+  ]
+    .map(normalizeActionText)
+    .filter(Boolean);
+
+  if (iconTexts.some((text) => NATIVE_NON_PLAY_ICON_TEXTS.has(text))) {
+    return true;
+  }
+
+  const classBlob = [
+    String(element.className || ""),
+    String(element.querySelector?.(".material-icons, .md-icon, .cardOverlayButtonIcon")?.className || "")
+  ].join(" ");
+
+  return /\b(fa-heart|fa-star|fa-bookmark|fa-download|fa-share|favorite|favorite_border|star_border|playlist_add|queue_music)\b/i.test(classBlob);
+}
+
 function hasMenuLauncherLabel(element) {
   return collectNativePlayTextCandidates(element).some((text) => NATIVE_MENU_ACTION_TEXTS.has(text));
 }
@@ -877,6 +972,27 @@ function isMenuLauncherElement(element) {
   }
 
   return hasMenuLauncherLabel(element) || hasMenuLauncherIcon(element);
+}
+
+function isExplicitlyNonPlayActionElement(element) {
+  if (!element) return false;
+
+  const action = normalizeActionText(
+    element.getAttribute?.("data-action") ||
+    element.dataset?.action ||
+    ""
+  ).replace(/\s+/g, "");
+
+  if (action && /^(favorite|favourite|unfavorite|unfavourite|togglefavorite|rating|rate|userrating|watchlist|playlist|queue|download|share|markplayed|markunplayed|watched|unwatched|like|menu|more|options)$/.test(action)) {
+    return true;
+  }
+
+  const className = String(element.className || "");
+  if (/\b(btnFavorite|btnUserRating|btnPlaylist|btnDownload|btnShare|btnShuffle|btnMenu)\b/i.test(className)) {
+    return true;
+  }
+
+  return hasExplicitNonPlayActionLabel(element) || hasExplicitNonPlayIcon(element) || isMenuLauncherElement(element);
 }
 
 function isLikelyInteractiveActionElement(element) {
@@ -928,27 +1044,12 @@ function isNativePlayActionElement(element) {
   if (!element) return false;
   const action = String(element.getAttribute?.("data-action") || element.dataset?.action || "").toLowerCase();
   const className = String(element.className || "");
-  if (isMenuLauncherElement(element)) {
-    return false;
-  }
-  if (
+  return (
     action === "play" ||
     action === "resume" ||
     /\bbtnPlay\b/.test(className) ||
     /\bbtnResume\b/.test(className)
-  ) {
-    return true;
-  }
-
-  if (!isLikelyInteractiveActionElement(element)) {
-    return false;
-  }
-
-  if (hasNativePlayActionLabel(element)) {
-    return true;
-  }
-
-  return /\b(cardOverlayButton|itemAction|paper-icon-button-light)\b/i.test(className) && hasNativePlayIcon(element);
+  );
 }
 
 function shouldIgnoreNativePlayInterception(element) {
@@ -973,16 +1074,7 @@ function resolveNativePlayButton(target) {
     "[data-action=\"play\"]",
     "[data-action=\"resume\"]",
     ".btnPlay",
-    ".btnResume",
-    ".cardOverlayButton",
-    ".actionSheetMenuItem",
-    ".actionSheetItem",
-    ".actionsheetListItemBody",
-    ".actionSheet .listItem",
-    ".actionSheetMenu .listItem",
-    ".actionSheetContainer .listItem",
-    ".actionSheetDialog .listItem",
-    "[role=\"menuitem\"]"
+    ".btnResume"
   ].join(", "));
 
   if (!element || !isNativePlayActionElement(element) || shouldIgnoreNativePlayInterception(element)) {
@@ -1100,11 +1192,29 @@ function extractItemIdFromElement(
 }
 
 function extractItemIdFromNativePlayButton(element) {
-  return extractItemIdFromElement(element, {
-    includeRoute: true,
-    includeRememberedContext: true,
-    allowDescendantSearch: true
-  });
+  if (!element) return "";
+
+  const candidates = [
+    element.getAttribute?.("data-id"),
+    element.getAttribute?.("data-itemid"),
+    element.getAttribute?.("data-item-id"),
+    element.dataset?.id,
+    element.dataset?.itemid,
+    element.dataset?.itemId,
+    element.closest?.("[data-id]")?.getAttribute?.("data-id"),
+    element.closest?.("[data-itemid]")?.getAttribute?.("data-itemid"),
+    element.closest?.("[data-item-id]")?.getAttribute?.("data-item-id"),
+    parseIdFromHref(element.getAttribute?.("href")),
+    parseIdFromHref(element.closest?.("a[href]")?.getAttribute?.("href")),
+    getCurrentRouteItemId()
+  ];
+
+  for (const candidate of candidates) {
+    const itemId = String(candidate || "").trim();
+    if (itemId) return itemId;
+  }
+
+  return "";
 }
 
 function rememberNativePlayContextFromEvent(event) {
@@ -1134,27 +1244,14 @@ function installNativePlayInterceptor() {
 
   nativePlayInterceptorInstalled = true;
 
-  document.addEventListener("contextmenu", (event) => {
-    if (!event.isTrusted) return;
-    rememberNativePlayContextFromEvent(event);
-  }, true);
-
   document.addEventListener("click", (event) => {
     if (!event.isTrusted) return;
 
-    if (resolveMenuLauncherElement(event.target)) {
-      rememberNativePlayContextFromEvent(event);
-      return;
-    }
-
-    rememberNativePlayContextFromEvent(event);
-
-    const button = resolveNativePlayButtonFromEvent(event);
+    const button = resolveNativePlayButton(event.target);
     if (!button) return;
 
     const itemId = extractItemIdFromNativePlayButton(button);
     if (!itemId) return;
-    rememberNativePlayContext(itemId);
 
     event.preventDefault();
     event.stopImmediatePropagation();
