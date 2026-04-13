@@ -5,7 +5,7 @@ export function createProfileChooserPanel(config, labels) {
   panel.id = "profile-chooser-panel";
   panel.className = "settings-panel";
 
-  const section = createSection(labels?.profileChooserHeader || "Kim izliyor?");
+  const section = createSection(labels?.profileChooserHeader || "Kim İzliyor Ayarları");
   const enableRow = document.createElement("div");
   enableRow.className = "fsetting-item";
 

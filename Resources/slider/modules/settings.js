@@ -22,6 +22,7 @@ import { createTrailersPanel } from './settings/trailersPage.js';
 import { createProfileChooserPanel } from './settings/profileChooserPage.js';
 import { createWatchlistPanel } from './settings/watchlistPage.js';
 import { createParentalPinPanel } from './settings/parentalPinPage.js';
+import { createDbManagementPanel } from './settings/dbManagementPage.js';
 import { enhanceFormAccessibility } from './accessibility.js';
 
 export { isLocalStorageAvailable, updateConfig };
@@ -151,27 +152,28 @@ export function createSettingsModal() {
 
     const mainTab = createTab('monwui', 'fa-sliders', monwuiTabLabel, true);
     const sliderTab = createTab('slider', 'fa-gear', sliderTabLabel, false);
-    const profileChooserTab = createTab( 'profile-chooser', 'fa-user-group', labels.profileChooserHeader || 'Kim izliyor?');
+    const queryTab = createTab('query', 'fa-code', labels.queryStringInput || 'Api Sorgu Ayarları');
     const musicTab = createTab('music', 'fa-music', labels.gmmpSettings || 'GMMP Ayarları');
-    const pauseTab = createTab('pause', 'fa-pause', labels.pauseSettings || 'Durdurma Ekranı');
-    const positionTab = createTab('position', 'fa-arrows-up-down-left-right', labels.positionSettings || 'Konumlandırma Ayarları');
-    const queryTab = createTab('query', 'fa-code', labels.queryStringInput || 'API Sorgu Parametresi');
-    const hoverTab = createTab('hover', 'fa-play-circle', labels.hoverTrailer || 'HoverTrailer Ayarları');
-    const trailersTab = createTab('trailers', 'fa-video', labels.trailersHeader || 'Fragmanlar');
-    const studioTab = createTab('studio', 'fa-building', labels.studioHubs || 'Stüdyo Koleksiyonları Ayarı');
-    const avatarTab = createTab('avatar', 'fa-user', labels.avatarCreateInput || 'Avatar Ayarları');
-    const notificationsTab = createTab('notifications', 'fa-bell', labels.notificationsSettings || 'Bildirim Ayarları');
+    const studioTab = createTab('studio', 'fa-building', labels.studioHubsSettings || 'Stüdyo Koleksiyonları Ayarları');
+    const profileChooserTab = createTab('profile-chooser', 'fa-user-group', labels.profileChooserHeader || 'Kim İzliyor Ayarları');
+    const pauseTab = createTab('pause', 'fa-pause', labels.pauseSettings || 'Duraklatma Ekranı Ayarları');
     const watchlistSettingsTab = createTab('watchlist-settings', 'fa-bookmark', labels.watchlistSettingsTab || 'İzleme Listesi Ayarları');
+    const hoverTab = createTab('hover', 'fa-play-circle', labels.hoverTrailer || 'HoverTrailer Ayarları');
+    const trailersTab = createTab('trailers', 'fa-video', labels.trailersHeader || 'Fragman İndirme / NFO Ayarları');
+    const notificationsTab = createTab('notifications', 'fa-bell', labels.notificationsSettings || 'Bildirim Ayarları');
+    const avatarTab = createTab('avatar', 'fa-user', labels.avatarCreateInput || 'Avatar Ayarları');
     const parentalPinTab = config?.currentUserIsAdmin
-      ? createTab('parental-pin', 'fa-key', labels.parentalPinTab || 'PIN Kontrolü')
+      ? createTab('parental-pin', 'fa-key', labels.parentalPinTab || 'PIN Kontrolü Ayarları')
       : null;
-    const exporterTab = createTab('exporter', 'fa-download', labels.backupRestore || 'Yedekle - Geri Yükle');
+    const positionTab = createTab('position', 'fa-arrows-up-down-left-right', labels.positionSettings || 'Konumlandırma Ayarları');
+    const dbManagementTab = createTab('db-management', 'fa-database', labels.dbManagementTab || 'DB Yönetimi');
+    const exporterTab = createTab('exporter', 'fa-download', labels.backupRestore || 'Yedekle ve Geri Yükle');
     const aboutTab = createTab('about', 'fa-circle-info', labels.aboutHeader || 'Hakkında');
 
     const tabs = [
-        mainTab, sliderTab, profileChooserTab, musicTab, pauseTab, positionTab,
-        queryTab, studioTab, hoverTab, trailersTab, avatarTab, notificationsTab,
-        watchlistSettingsTab, parentalPinTab, exporterTab, aboutTab
+        mainTab, sliderTab, queryTab, musicTab, studioTab, profileChooserTab,
+        pauseTab, watchlistSettingsTab, hoverTab, trailersTab, notificationsTab,
+        avatarTab, parentalPinTab, positionTab, dbManagementTab, exporterTab, aboutTab
     ].filter(Boolean);
     tabContainer.append(...tabs);
 
@@ -199,6 +201,7 @@ export function createSettingsModal() {
     const aboutPanel = createAboutPanel(labels);
     const notificationsPanel = createNotificationsPanel(config, labels);
     const watchlistSettingsPanel = createWatchlistPanel(config, labels);
+    const dbManagementPanel = createDbManagementPanel(config, labels);
     const parentalPinPanel = config?.currentUserIsAdmin
       ? createParentalPinPanel(config, labels)
       : null;
@@ -229,26 +232,25 @@ export function createSettingsModal() {
     });
 
     [
-        mainPanel, sliderPanel, musicPanel, positionPanel, queryPanel,
-         hoverPanel, trailersPanel, studioPanel, avatarPanel, notificationsPanel,
-        watchlistSettingsPanel, parentalPinPanel,
-        pausePanel, exporterPanel, aboutPanel, profileChooserPanel
+        mainPanel, sliderPanel, queryPanel, musicPanel, studioPanel, profileChooserPanel,
+        pausePanel, watchlistSettingsPanel, hoverPanel, trailersPanel, notificationsPanel,
+        avatarPanel, parentalPinPanel, positionPanel, dbManagementPanel, exporterPanel, aboutPanel
     ].filter(Boolean).forEach(panel => {
         panel.style.display = 'none';
     });
     mainPanel.style.display = 'block';
 
     const panels = [
-        mainPanel, sliderPanel, profileChooserPanel, musicPanel,
-        queryPanel, hoverPanel, trailersPanel, studioPanel, avatarPanel, watchlistSettingsPanel, parentalPinPanel,
-        pausePanel, positionPanel, aboutPanel, exporterPanel, notificationsPanel
+        mainPanel, sliderPanel, queryPanel, musicPanel, studioPanel, profileChooserPanel,
+        pausePanel, watchlistSettingsPanel, hoverPanel, trailersPanel, notificationsPanel,
+        avatarPanel, parentalPinPanel, positionPanel, dbManagementPanel, exporterPanel, aboutPanel
     ].filter(Boolean);
     tabContent.append(...panels);
 
     const interactiveTabs = [
-        mainTab, sliderTab, profileChooserTab, musicTab, queryTab, hoverTab,
-        trailersTab, studioTab, avatarTab, notificationsTab, watchlistSettingsTab, parentalPinTab,
-        positionTab, pauseTab, aboutTab, exporterTab
+        mainTab, sliderTab, queryTab, musicTab, studioTab, profileChooserTab,
+        pauseTab, watchlistSettingsTab, hoverTab, trailersTab, notificationsTab,
+        avatarTab, parentalPinTab, positionTab, dbManagementTab, exporterTab, aboutTab
     ].filter(Boolean);
     interactiveTabs.forEach(tab => {
         tab.addEventListener('click', () => {
@@ -256,9 +258,9 @@ export function createSettingsModal() {
                 t.classList.remove('active');
             });
             [
-                mainPanel, sliderPanel, profileChooserPanel,
-                musicPanel, queryPanel, hoverPanel, trailersPanel, studioPanel, avatarPanel, watchlistSettingsPanel, parentalPinPanel,
-                positionPanel, aboutPanel, exporterPanel, pausePanel, notificationsPanel
+                mainPanel, sliderPanel, queryPanel, musicPanel, studioPanel, profileChooserPanel,
+                pausePanel, watchlistSettingsPanel, hoverPanel, trailersPanel, notificationsPanel,
+                avatarPanel, parentalPinPanel, positionPanel, dbManagementPanel, exporterPanel, aboutPanel
             ].filter(Boolean).forEach(panel => {
                 panel.style.display = 'none';
             });

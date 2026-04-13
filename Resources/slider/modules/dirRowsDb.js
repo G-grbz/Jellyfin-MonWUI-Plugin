@@ -1,6 +1,14 @@
 const DB_NAME = 'jms_dirrows_db';
 const DB_VER  = 1;
 
+export function prepareDirRowsDbForDeletion() {
+  try {
+    window.dispatchEvent(new CustomEvent('jms:indexeddb:release', {
+      detail: { dbName: DB_NAME }
+    }));
+  } catch {}
+}
+
 function normalizeUserData(raw) {
   if (!raw || typeof raw !== "object") return null;
   const playedPct = Number(raw.PlayedPercentage);

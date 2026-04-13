@@ -1,6 +1,14 @@
 const DB_NAME = 'monwui_recent_db';
 const DB_VER  = 1;
 
+export function prepareRecentRowsDbForDeletion() {
+  try {
+    window.dispatchEvent(new CustomEvent('jms:indexeddb:release', {
+      detail: { dbName: DB_NAME }
+    }));
+  } catch {}
+}
+
 function idle(cb, { timeout = 1500 } = {}) {
   try {
     const ric = window.requestIdleCallback;

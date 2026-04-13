@@ -2749,6 +2749,7 @@ export function initSubtitleCustomizer() {
   let cueApplyRafId = 0;
   let heavyApplyTimeoutId = null;
   let liveSubtitleIntervalId = null;
+  let hiddenWorkSuspended = document.hidden === true;
 
   const maybeAutoCloseDialog = () => {
     if (!closeDialog) {
@@ -2769,6 +2770,12 @@ export function initSubtitleCustomizer() {
   };
 
   const applyNow = (options = null) => {
+    if (document.hidden) {
+      suspendHiddenSubtitleWork();
+      return;
+    }
+    hiddenWorkSuspended = false;
+
     const full = options?.full !== false;
     const refreshStyles = options?.refreshStyles !== false;
     const recomputeComplexRenderer =
@@ -2867,6 +2874,10 @@ export function initSubtitleCustomizer() {
   };
 
   const scheduleLightApply = () => {
+    if (document.hidden) {
+      suspendHiddenSubtitleWork();
+      return;
+    }
     if (lightApplyRafId) return;
     lightApplyRafId = window.requestAnimationFrame(() => {
       lightApplyRafId = 0;
@@ -2878,6 +2889,10 @@ export function initSubtitleCustomizer() {
   };
 
   const scheduleCueApply = () => {
+    if (document.hidden) {
+      suspendHiddenSubtitleWork();
+      return;
+    }
     if (cueApplyRafId) return;
     cueApplyRafId = window.requestAnimationFrame(() => {
       cueApplyRafId = 0;
@@ -2890,6 +2905,10 @@ export function initSubtitleCustomizer() {
   };
 
   const scheduleHeavyApply = (delayMs = 80) => {
+    if (document.hidden) {
+      suspendHiddenSubtitleWork();
+      return;
+    }
     if (heavyApplyTimeoutId) {
       clearTimeout(heavyApplyTimeoutId);
     }
@@ -2900,6 +2919,11 @@ export function initSubtitleCustomizer() {
   };
 
   const runLiveSubtitleTick = () => {
+    if (document.hidden) {
+      suspendHiddenSubtitleWork();
+      return;
+    }
+
     if (!isPlaybackScreenActive()) {
       maybeAutoCloseDialog();
       restoreMirroredSubtitleTracks();
@@ -2920,6 +2944,41 @@ export function initSubtitleCustomizer() {
     liveSubtitleIntervalId = null;
   };
 
+  const cancelScheduledApplies = () => {
+    if (lightApplyRafId) {
+      cancelAnimationFrame(lightApplyRafId);
+      lightApplyRafId = 0;
+    }
+    if (cueApplyRafId) {
+      cancelAnimationFrame(cueApplyRafId);
+      cueApplyRafId = 0;
+    }
+    if (heavyApplyTimeoutId) {
+      clearTimeout(heavyApplyTimeoutId);
+      heavyApplyTimeoutId = null;
+    }
+  };
+
+  const suspendHiddenSubtitleWork = () => {
+    cancelScheduledApplies();
+    stopLiveSubtitleTicker();
+    if (hiddenWorkSuspended) return;
+    hiddenWorkSuspended = true;
+    maybeAutoCloseDialog();
+    restoreMirroredSubtitleTracks();
+    clearSubtitleMirror(null, settings);
+  };
+
+  const resumeHiddenSubtitleWork = () => {
+    const wasSuspended = hiddenWorkSuspended;
+    hiddenWorkSuspended = false;
+    if (document.hidden) return;
+    syncLiveSubtitleTicker();
+    if (wasSuspended && isPlaybackScreenActive()) {
+      scheduleHeavyApply(40);
+    }
+  };
+
   const startLiveSubtitleTicker = () => {
     if (liveSubtitleIntervalId) return;
     if (document.hidden) return;
@@ -2928,7 +2987,14 @@ export function initSubtitleCustomizer() {
   };
 
   const syncLiveSubtitleTicker = () => {
-    if (document.hidden || !isPlaybackScreenActive()) {
+    if (document.hidden) {
+      suspendHiddenSubtitleWork();
+      return;
+    }
+
+    hiddenWorkSuspended = false;
+
+    if (!isPlaybackScreenActive()) {
       stopLiveSubtitleTicker();
       maybeAutoCloseDialog();
       restoreMirroredSubtitleTracks();
@@ -3026,6 +3092,10 @@ export function initSubtitleCustomizer() {
   ensureButtons();
 
   observer = new MutationObserver((mutations) => {
+    if (document.hidden) {
+      suspendHiddenSubtitleWork();
+      return;
+    }
     syncLiveSubtitleTicker();
     if (!isRelevantSubtitleMutation(mutations)) return;
     scheduleLightApply();
@@ -3042,15 +3112,31 @@ export function initSubtitleCustomizer() {
   });
 
   const passiveApply = () => {
+    if (document.hidden) {
+      suspendHiddenSubtitleWork();
+      return;
+    }
     syncLiveSubtitleTicker();
     scheduleHeavyApply(60);
   };
-  const passiveCueApply = () => scheduleCueApply();
+  const passiveCueApply = () => {
+    if (document.hidden) {
+      suspendHiddenSubtitleWork();
+      return;
+    }
+    scheduleCueApply();
+  };
   document.addEventListener("play", passiveApply, true);
   document.addEventListener("loadedmetadata", passiveApply, true);
   document.addEventListener("cuechange", passiveCueApply, true);
   const routeApply = () => syncLiveSubtitleTicker();
-  const visibilityApply = () => syncLiveSubtitleTicker();
+  const visibilityApply = () => {
+    if (document.hidden) {
+      suspendHiddenSubtitleWork();
+      return;
+    }
+    resumeHiddenSubtitleWork();
+  };
   window.addEventListener("hashchange", routeApply, true);
   window.addEventListener("popstate", routeApply, true);
   document.addEventListener("visibilitychange", visibilityApply, true);
@@ -3062,18 +3148,7 @@ export function initSubtitleCustomizer() {
     } catch {}
     observer = null;
 
-    if (lightApplyRafId) {
-      cancelAnimationFrame(lightApplyRafId);
-      lightApplyRafId = 0;
-    }
-    if (cueApplyRafId) {
-      cancelAnimationFrame(cueApplyRafId);
-      cueApplyRafId = 0;
-    }
-    if (heavyApplyTimeoutId) {
-      clearTimeout(heavyApplyTimeoutId);
-      heavyApplyTimeoutId = null;
-    }
+    cancelScheduledApplies();
     stopLiveSubtitleTicker();
 
     try {

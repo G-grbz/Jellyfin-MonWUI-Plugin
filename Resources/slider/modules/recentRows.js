@@ -3194,6 +3194,24 @@ export function cleanupRecentRows() {
   }
 }
 
+export function releaseRecentRowsDbConnection() {
+  try { STATE.db?.close?.(); } catch {}
+  STATE.db = null;
+  STATE.scope = null;
+}
+
+(function bindRecentRowsDbReleaseOnce() {
+  if (window.__jmsRecentRowsDbReleaseBound) return;
+  window.__jmsRecentRowsDbReleaseBound = true;
+
+  window.addEventListener('jms:indexeddb:release', (event) => {
+    const dbName = event?.detail?.dbName;
+    if (!dbName || dbName === 'monwui_recent_db' || dbName === '*') {
+      releaseRecentRowsDbConnection();
+    }
+  });
+})();
+
 function getHomeSectionsContainer(indexPage) {
   const page = indexPage ||
     document.querySelector("#indexPage:not(.hide)") ||

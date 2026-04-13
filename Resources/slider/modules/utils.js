@@ -42,12 +42,15 @@ function ensureAudioPreviewCssOnce() {
       border-radius: 16px;
       box-shadow: 0 18px 36px rgba(0,0,0,.24);
       color: #f5f8fb;
-      display: grid;
+      display: flex;
       gap: 10px;
       margin: 18px;
-      max-width: min(360px, calc(100% - 36px));
       padding: 14px 16px;
-    }
+      flex-direction: row;
+      flex-wrap: wrap;
+      align-items: center;
+      max-width: min(360px, calc(100% - 36px));
+  }
     .jms-audio-preview-overlay__eyebrow {
       align-items: center;
       color: rgba(235,244,255,.72);

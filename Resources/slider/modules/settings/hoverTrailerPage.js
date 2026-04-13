@@ -9,7 +9,7 @@ export function createHoverTrailerPanel(config, labels) {
   panel.id = 'hover-panel';
   panel.className = 'settings-panel';
 
-  const section = createSection(labels.hoverTrailer || 'HoverTrailer');
+  const section = createSection(labels.hoverTrailer || 'HoverTrailer Ayarları');
   const allPreviewModalCheckbox = createCheckbox(
     'allPreviewModal',
     labels.allPreviewModal || 'Modalı Jellyfin geneline uygula',

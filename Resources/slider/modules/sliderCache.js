@@ -19,6 +19,23 @@ const mem = {
   meta: new Map(),
 };
 
+export async function prepareSliderCacheDbForDeletion() {
+  try {
+    window.dispatchEvent(new CustomEvent("jms:indexeddb:release", {
+      detail: { dbName: DB_NAME }
+    }));
+  } catch {}
+
+  const db = await Promise.resolve(_dbPromise).catch(() => null);
+  try { db?.close?.(); } catch {}
+
+  _dbPromise = null;
+  _dbDisabled = false;
+  mem.item.clear();
+  mem.query.clear();
+  mem.meta.clear();
+}
+
 function now() { return Date.now(); }
 
 function fnv1a(str) {

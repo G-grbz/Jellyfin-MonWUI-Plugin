@@ -67,7 +67,7 @@ export function createParentalPinPanel(config, labels) {
   panel.id = "parental-pin-panel";
   panel.className = "settings-panel";
 
-  const section = createSection(labels.parentalPinTab || "PIN Control");
+  const section = createSection(labels.parentalPinTab || "PIN Kontrolü Ayarları");
   const note = document.createElement("div");
   note.className = "jms-pin-settings-note";
   note.textContent =

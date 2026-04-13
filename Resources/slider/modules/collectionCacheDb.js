@@ -5,6 +5,18 @@ const STORE_MOVIE_BOXSET = "movieBoxset";
 const STORE_BOXSET_ITEMS = "boxsetItems";
 const STORE_META = "meta";
 
+export async function prepareCollectionCacheDbForDeletion() {
+  try {
+    window.dispatchEvent(new CustomEvent("jms:indexeddb:release", {
+      detail: { dbName: DB_NAME }
+    }));
+  } catch {}
+
+  const db = await Promise.resolve(_dbP).catch(() => null);
+  try { db?.close?.(); } catch {}
+  _dbP = null;
+}
+
 function promisifyReq(req) {
   return new Promise((resolve, reject) => {
     req.onsuccess = () => resolve(req.result);

@@ -17,7 +17,7 @@ export function createPausePanel(_config, labels) {
   panel.id = 'pause-panel';
   panel.className = 'settings-panel';
 
-  const section = createSection(labels.pauseSettings || 'Durdurma Ekranı Ayarları');
+  const section = createSection(labels.pauseSettings || 'Duraklatma Ekranı Ayarları');
 
   const enableCheckbox = createCheckbox(
     'pauseOverlay',

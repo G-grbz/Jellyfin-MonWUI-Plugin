@@ -380,7 +380,7 @@ function translateLogBlock(allText, L) {
 
 export function createTrailersPanel(config, labels) {
   const L = {
-    trailersHeader: labels?.trailersHeader || 'Fragman İndirme / NFO',
+    trailersHeader: labels?.trailersHeader || 'Fragman İndirme / NFO Ayarları',
     enableTrailerDownloader: labels?.enableTrailerDownloader || 'Fragman indir (trailers.sh)',
     enableTrailerUrlNfo: labels?.enableTrailerUrlNfo || 'Sadece URLyi NFO ya yaz (trailersurl.sh)',
     jfBase: labels?.jfBase || 'Jellyfin URL (JF_BASE)',

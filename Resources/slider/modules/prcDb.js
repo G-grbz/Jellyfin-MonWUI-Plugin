@@ -1,6 +1,14 @@
 const DB_NAME = 'jms_prc_db';
 const DB_VER  = 1;
 
+export function preparePrcDbForDeletion() {
+  try {
+    window.dispatchEvent(new CustomEvent('jms:indexeddb:release', {
+      detail: { dbName: DB_NAME }
+    }));
+  } catch {}
+}
+
 function promisify(req) {
   return new Promise((resolve, reject) => {
     req.onsuccess = () => resolve(req.result);

@@ -4189,6 +4189,31 @@ export function resetPersonalRecsAndGenreState() {
   try { __resetGenreHubsDoneSignal(); } catch {}
 }
 
+export function releasePrcDbConnection() {
+  try { PRC_DB_STATE.db?.close?.(); } catch {}
+  PRC_DB_STATE.db = null;
+  PRC_DB_STATE.scope = null;
+  PRC_DB_STATE.userId = null;
+  PRC_DB_STATE.serverId = null;
+  PRC_DB_STATE.failed = false;
+
+  try { PRC_SESSION_PERSONAL_CACHE.clear(); } catch {}
+  try { PRC_SESSION_BYW_SEEDS_CACHE.clear(); } catch {}
+  try { PRC_SESSION_BYW_ITEMS_CACHE.clear(); } catch {}
+}
+
+(function bindPrcDbReleaseOnce() {
+  if (window.__jmsPrcDbReleaseBound) return;
+  window.__jmsPrcDbReleaseBound = true;
+
+  window.addEventListener('jms:indexeddb:release', (event) => {
+    const dbName = event?.detail?.dbName;
+    if (!dbName || dbName === 'jms_prc_db' || dbName === '*') {
+      releasePrcDbConnection();
+    }
+  });
+})();
+
 let __homeScrollerRefreshTimer = null;
 
 function refreshHomeScrollers() {

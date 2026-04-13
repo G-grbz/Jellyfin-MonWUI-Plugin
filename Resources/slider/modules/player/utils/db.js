@@ -1,9 +1,11 @@
 import { musicPlayerState } from "../core/state.js";
 import { buildLyricsRecord, normalizeLyricsPayload } from "../lyrics/normalizer.js";
 
+const GMMP_MUSIC_DB_NAME = "GMMP-MusicDB";
+
 class MusicDB {
   constructor() {
-    this.dbName = "GMMP-MusicDB";
+    this.dbName = GMMP_MUSIC_DB_NAME;
     this.dbVersion = 2;
     this.storeName = "tracks";
     this.deletedStoreName = "deletedTracks";
@@ -90,6 +92,13 @@ class MusicDB {
 
   async ready() {
     return this.open();
+  }
+
+  async close() {
+    try {
+      this.db?.close?.();
+    } catch {}
+    this.db = null;
   }
 
   _tx(store, mode = "readonly") {
@@ -374,3 +383,10 @@ class MusicDB {
 }
 
 export const musicDB = new MusicDB();
+
+export async function prepareMusicDbForDeletion() {
+  await musicDB.close();
+  try {
+    musicPlayerState.lyricsCache = {};
+  } catch {}
+}

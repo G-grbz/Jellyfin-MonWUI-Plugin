@@ -3168,6 +3168,24 @@ export function cleanupDirectorRows() {
   }
 }
 
+export function releaseDirectorRowsDbConnection() {
+  try { STATE._db?.close?.(); } catch {}
+  STATE._db = null;
+  STATE._scope = null;
+}
+
+(function bindDirectorRowsDbReleaseOnce() {
+  if (window.__jmsDirectorRowsDbReleaseBound) return;
+  window.__jmsDirectorRowsDbReleaseBound = true;
+
+  window.addEventListener('jms:indexeddb:release', (event) => {
+    const dbName = event?.detail?.dbName;
+    if (!dbName || dbName === 'jms_dirrows_db' || dbName === '*') {
+      releaseDirectorRowsDbConnection();
+    }
+  });
+})();
+
 function clampText(s, max = 220) {
   const t = String(s || "").replace(/\s+/g, " ").trim();
   if (!t) return "";
