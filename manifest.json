@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/G-grbz/Jellyfin-MonWUI-Plugin/main/img/icon.png",
     "versions": [
       {
+        "version": "2.5.1.1",
+        "changelog": "Fix Subtitle Freeze & Add DB Management",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v2.5.1/JMSFusion-2.5.1.1-server.zip",
+        "checksum": "0c2fbb626a0f0aed9c6240fe46cf452a",
+        "timestamp": "2026-04-13T08:29:15.6025392Z"
+      },
+      {
         "version": "2.5.1.0",
         "changelog": "Overhaul loading, asset versioning, splash screen, and native-style home section flows.",
         "targetAbi": "10.11.0.0",
