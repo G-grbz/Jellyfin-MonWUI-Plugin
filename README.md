@@ -115,6 +115,8 @@ https://raw.githubusercontent.com/G-grbz/Jellyfin-MonWUI-Plugin/main/manifest.js
 * After install/update, perform a hard refresh (**Ctrl + F5**)
 * You may need to refresh a few times for all UI assets to fully update
 * Some advanced modules are optional and may require admin access, API keys, or server-side tools
+* Hover videos for manually added studio collections can be sourced from YouTube. You can use Gharmonize as a tool: https://github.com/G-grbz/Gharmonize
+
 - If you use Watchlist and want to hide the default Jellyfin Favorites tab, add the following CSS to the Jellyfin custom CSS area:
 ```text
 
