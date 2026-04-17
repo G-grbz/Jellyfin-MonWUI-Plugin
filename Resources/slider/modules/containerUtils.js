@@ -13,6 +13,20 @@ const QUALITY_SVG_BY_LEVEL = {
   "4k": "./slider/src/images/quality/4k.svg"
 };
 
+function escapeMetaHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildMetaTextSpan(text, ...classNames) {
+  const className = ["monwui-meta-text", ...classNames.filter(Boolean)].join(" ");
+  return `<span class="${className}">${escapeMetaHtml(text)}</span>`;
+}
+
 function getNormalizedDimension(value) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : 0;
@@ -79,26 +93,30 @@ export function createStatusContainer(itemType, config, UserData, ChildCount, Ru
       Movie: { text: config.languageLabels.film, icon: '<i class="fas fa-film "></i>' }
     };
     const typeInfo = typeTranslations[itemType] || { text: itemType, icon: "" };
-    typeSpan.innerHTML = `${typeInfo.icon} ${typeInfo.text}`;
+    let typeText = typeInfo.text;
     if (itemType === "Series" && ChildCount) {
-      typeSpan.innerHTML += ` (${ChildCount} ${config.languageLabels.sezon})`;
+      typeText += ` (${ChildCount} ${config.languageLabels.sezon})`;
     }
     if (itemType === "BoxSet" && ChildCount) {
-      typeSpan.innerHTML += ` (${ChildCount} ${config.languageLabels.seri})`;
+      typeText += ` (${ChildCount} ${config.languageLabels.seri})`;
     }
+    typeSpan.innerHTML = `${typeInfo.icon}${buildMetaTextSpan(typeText, "monwui-type-text")}`;
     statusContainer.appendChild(typeSpan);
   }
 
   if (UserData && config.showWatchedInfo) {
     const watchedSpan = document.createElement("span");
     watchedSpan.className = "watched-status";
+    const watchedIcon = UserData.Played
+      ? `<i class="fa-regular fa-circle-check"></i>`
+      : `<i class="fa-regular fa-circle-xmark"></i>`;
     let watchedText = UserData.Played
-      ? `<i class="fa-regular fa-circle-check"></i> ${config.languageLabels.izlendi}`
-      : `<i class="fa-regular fa-circle-xmark"></i> ${config.languageLabels.izlenmedi}`;
+      ? config.languageLabels.izlendi
+      : config.languageLabels.izlenmedi;
     if (UserData.Played && UserData.PlayCount > 0) {
       watchedText += ` (${UserData.PlayCount})`;
     }
-    watchedSpan.innerHTML = watchedText;
+    watchedSpan.innerHTML = `${watchedIcon}${buildMetaTextSpan(watchedText, "monwui-watched-text")}`;
     statusContainer.appendChild(watchedSpan);
   }
 
@@ -133,9 +151,12 @@ export function createStatusContainer(itemType, config, UserData, ChildCount, Ru
     };
 
     if (Array.isArray(RunTimeTicks)) {
-      runtimeSpan.innerHTML = `<i class="fa-solid fa-hourglass-end"></i> ${
-        RunTimeTicks.map(val => calcRuntime(val)).join(", ")
-      }`;
+      runtimeSpan.innerHTML =
+        `<i class="fa-solid fa-hourglass-end"></i>` +
+        buildMetaTextSpan(
+          RunTimeTicks.map(val => calcRuntime(val)).join(", "),
+          "monwui-runtime-text"
+        );
     } else {
       const remainingTicks =
         typeof UserData?.PlaybackPositionTicks === "number" &&
@@ -146,9 +167,11 @@ export function createStatusContainer(itemType, config, UserData, ChildCount, Ru
       const endHHMM = formatEndTimeLocalized(remainingTicks);
       const endTimeLabel = String(config?.languageLabels?.endTimeLabel || "").trim();
       runtimeSpan.innerHTML = `
-        <i class="fa-solid fa-hourglass-end"></i> ${calcRuntime(RunTimeTicks)}
+        <i class="fa-solid fa-hourglass-end"></i>
+        ${buildMetaTextSpan(calcRuntime(RunTimeTicks), "monwui-runtime-text")}
         <span class="end-time">
-          <i class="fa-solid fa-clock"></i> ${endTimeLabel ? `${endTimeLabel} ` : ""}${endHHMM}
+          <i class="fa-solid fa-clock"></i>
+          ${buildMetaTextSpan(`${endTimeLabel ? `${endTimeLabel} ` : ""}${endHHMM}`, "monwui-end-time-text")}
         </span>
       `.trim();
     }
@@ -436,11 +459,11 @@ export async function createRatingContainer({
       matchSpan.innerHTML = `
   <span class="monwui-match-rating">
     <i class="fa-regular fa-heart fa-lg"></i>
-    <span class="monwui-heart-filled" style="clip-path: inset(${100 - matchPercentage}% 0 0 0);">
+      <span class="monwui-heart-filled" style="clip-path: inset(${100 - matchPercentage}% 0 0 0);">
       <i class="fa-solid fa-heart fa-lg"></i>
     </span>
   </span>
-  <span class="monwui-percentage-text">${matchPercentage}%</span>`;
+  ${buildMetaTextSpan(`${matchPercentage}%`, "monwui-percentage-text")}`;
       container.appendChild(matchSpan);
       ratingExists = true;
     }
@@ -466,7 +489,8 @@ export async function createRatingContainer({
       <span class="monwui-star-filled" style="clip-path: inset(${100 - ratingPercentage}% 0 0 0);">
         <i class="fa-solid fa-star fa-lg" style="display: block;"></i>
       </span>
-    </span> ${ratingValue} `;
+    </span>
+    ${buildMetaTextSpan(ratingValue, "monwui-rating-text")}`;
   container.appendChild(ratingSpan);
   ratingExists = true;
 }
@@ -474,9 +498,12 @@ export async function createRatingContainer({
     if (config.showCriticRating && CriticRating) {
       const criticSpan = document.createElement("span");
       criticSpan.className = "monwui-t-rating";
-      criticSpan.innerHTML = `${getTomatoIconHtml()} ${
-        Array.isArray(CriticRating) ? CriticRating.join(", ") : CriticRating
-      } `;
+      criticSpan.innerHTML =
+        `${getTomatoIconHtml()}` +
+        buildMetaTextSpan(
+          Array.isArray(CriticRating) ? CriticRating.join(", ") : CriticRating,
+          "monwui-critic-rating-text"
+        );
       container.appendChild(criticSpan);
       ratingExists = true;
     }
@@ -484,9 +511,12 @@ export async function createRatingContainer({
     if (config.showOfficialRating && OfficialRating) {
       const officialRatingSpan = document.createElement("span");
       officialRatingSpan.className = "monwui-officialrating";
-      officialRatingSpan.innerHTML = `<i class="fa-solid fa-user-group"></i> ${
-        Array.isArray(OfficialRating) ? OfficialRating.join(", ") : OfficialRating
-      }`;
+      officialRatingSpan.innerHTML =
+        `<i class="fa-solid fa-user-group"></i>` +
+        buildMetaTextSpan(
+          Array.isArray(OfficialRating) ? OfficialRating.join(", ") : OfficialRating,
+          "monwui-officialrating-text"
+        );
       container.appendChild(officialRatingSpan);
       ratingExists = true;
     }
@@ -529,17 +559,24 @@ export function createLanguageContainer({ config, MediaStreams, itemType }) {
   let subtitleLabel = "";
 
   if (hasTurkishAudio) {
-    audioLabel = `<i class="fa-solid fa-language"></i> ${config.languageLabels.audio}`;
+    audioLabel =
+      `<i class="fa-solid fa-language"></i>` +
+      buildMetaTextSpan(config.languageLabels.audio, "monwui-audio-label-text");
   } else {
     const defaultAudioStream = audioStreams.find(stream => stream.IsDefault);
     const fallbackLanguage = defaultAudioStream?.Language || "";
     audioLabel =
-      `<i class="fa-solid fa-language"></i> ${config.languageLabels.original}` +
-      (fallbackLanguage ? ` ${fallbackLanguage}` : "");
+      `<i class="fa-solid fa-language"></i>` +
+      buildMetaTextSpan(
+        `${config.languageLabels.original}${fallbackLanguage ? ` ${fallbackLanguage}` : ""}`,
+        "monwui-audio-label-text"
+      );
   }
 
   if (!hasTurkishAudio && hasTurkishSubtitle) {
-    subtitleLabel = `<i class="fa-solid fa-closed-captioning"></i> ${config.languageLabels.subtitle}`;
+    subtitleLabel =
+      `<i class="fa-solid fa-closed-captioning"></i>` +
+      buildMetaTextSpan(config.languageLabels.subtitle, "monwui-subtitle-text");
   }
 
   const selectedAudioStream =
@@ -557,8 +594,18 @@ export function createLanguageContainer({ config, MediaStreams, itemType }) {
       ? selectedAudioStream.Codec.toUpperCase()
       : "";
 
-    if (channelsText || bitRateText || codecText) {
-      audioLabel += ` <i class="fa-solid fa-volume-high"></i> ${channelsText} - ${bitRateText} <i class="fa-solid fa-microchip"></i> ${codecText}`;
+    const detailsText = [channelsText, bitRateText].filter(Boolean).join(" - ");
+
+    if (detailsText) {
+      audioLabel +=
+        `<i class="fa-solid fa-volume-high"></i>` +
+        buildMetaTextSpan(detailsText, "monwui-audio-details-text");
+    }
+
+    if (codecText) {
+      audioLabel +=
+        `<i class="fa-solid fa-microchip"></i>` +
+        buildMetaTextSpan(codecText, "monwui-audio-codec-text");
     }
   }
 
@@ -598,16 +645,9 @@ export function createPlotContainer(config, Overview, UserData, RunTimeTicks) {
   applyContainerStyles(container, 'plot');
 
   if (config.showDescriptions && config.showPlotInfo && Overview) {
-    if (config.showbPlotInfo && config.languageLabels.konu) {
-      const plotBSpan = document.createElement("span");
-      plotBSpan.className = "monwui-plotb";
-      plotBSpan.textContent = config.languageLabels.konu;
-      container.appendChild(plotBSpan);
-    }
-
     const plotSpan = document.createElement("span");
     plotSpan.className = "monwui-plot";
-    plotSpan.textContent = "\u00A0\u00A0" + Overview;
+    plotSpan.textContent = Overview;
     container.appendChild(plotSpan);
   }
 

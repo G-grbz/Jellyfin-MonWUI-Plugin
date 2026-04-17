@@ -1,4 +1,4 @@
-import { createCheckbox, createImageTypeSelect, bindCheckboxKontrol, bindTersCheckboxKontrol } from "../settings.js";
+import { createCheckbox, createImageTypeSelect, bindCheckboxKontrol, bindTersCheckboxKontrol } from "./shared.js";
 import { getDefaultLanguage, getStoredLanguagePreference } from '../../language/index.js';
 import { fetchJmsPluginConfig, sanitizeTmdbApiKey } from "../jmsPluginConfig.js";
 

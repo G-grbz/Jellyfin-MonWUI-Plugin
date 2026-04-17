@@ -529,7 +529,6 @@ export const languageLabels = {
   log: "Live-Log",
   clean: "Bereinigen",
   adminRequired: "Für diesen Vorgang sind Administratorrechte erforderlich",
-  noteDescription: "Es funktioniert nur, wenn es über die Plugin-Methode installiert wird und erfordert die Installation der notwendigen Werkzeuge (curl, jq und für trailers.sh: yt-dlp und ffmpeg)",
   hideSecret: "Ausblenden",
   showSecret: "Anzeigen",
   settingsReadOnly: "Nicht-Administratoren können die Einstellungen nicht ändern",
@@ -1337,7 +1336,6 @@ export const languageLabels = {
   buttonBackgroundImageType: "Schaltflächen-Hintergrundbild",
   showInfo: "Genre-, Jahr- und Länderinformationen anzeigen",
   showGenresInfo: "Genre",
-  showbPlotInfo: "Plottitel",
   sliderbackgroundsettings: "Einstellungen für den Slider-Hintergrund",
   manualBackdropSelection: "Folienhintergrund ändern",
   slideBackgroundImageType: "Bildtyp für den Slider-Hintergrund",
@@ -1635,7 +1633,6 @@ export const languageLabels = {
   dizi: "Serie",
   boxset: "Kollektion",
   izlendi: "Gesehen",
-  konu: "Thema: ",
   izlenmedi: "Nicht gesehen",
   sure: "Dauer",
   sa: "Std",
@@ -2036,6 +2033,7 @@ export const languageLabels = {
     heroRootLabel: "Web-UI-Pfad",
     tabs: {
       jmsfusion: "JMSFusion",
+      monwuiSettings: "MonWUI-Einstellungen",
       status: "Status",
       snippet: "HTML-Snippet, Webpfad & Berechtigungen"
     },
@@ -2048,6 +2046,7 @@ export const languageLabels = {
       statusBody: "Schnelle Prüfung von Konfigurationszustand, Player-Pfad und eingebettetem Asset-Fallback.",
       inMemoryTitle: "In-Memory-Injektion",
       inMemoryBody: "Prüft, ob index.html zur Laufzeit umgeschrieben wird, ohne Dateien auf dem Datenträger zu verändern.",
+      monwuiSettingsTitle: "MonWUI-Einstellungen",
       snippetTitle: "HTML-Snippet",
       snippetBody: "Das genaue Snippet, das JMSFusion in Jellyfin Web einfügt.",
       envTitle: "Webpfad & Berechtigungen",
@@ -2065,6 +2064,7 @@ export const languageLabels = {
     actions: {
       save: "Speichern",
       publishGlobal: "Admin-Einstellungen global veröffentlichen",
+      reloadMonwuiSettings: "MonWUI-Einstellungen neu laden",
       refreshEnv: "Webpfad & Berechtigungen aktualisieren",
       copyAcl: "Berechtigungsbefehle kopieren",
       patch: "index.html patchen",
@@ -2081,6 +2081,8 @@ export const languageLabels = {
       publishDone: "Globale Einstellungen wurden erfolgreich veröffentlicht.",
       statusPending: "Status wurde noch nicht geladen.",
       snippetPending: "Snippet wurde noch nicht geladen.",
+      monwuiSettingsLoading: "MonWUI-Einstellungen werden geladen...",
+      monwuiSettingsLoadFailed: "Die MonWUI-Einstellungen konnten nicht geladen werden.",
       inMemoryChecking: "In-Memory-Injektion wird geprüft...",
       envPending: "(noch nicht berechnet)"
     },

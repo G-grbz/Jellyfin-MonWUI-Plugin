@@ -1,5 +1,5 @@
 import { getConfig } from "../config.js";
-import { createCheckbox, createSection, bindCheckboxKontrol } from "../settings.js";
+import { createCheckbox, createSection, bindCheckboxKontrol } from "./shared.js";
 import { applySettings } from "./applySettings.js";
 
 const cfg = getConfig();

@@ -1,4 +1,4 @@
-import { createSection, createCheckbox, createTextInput } from '../settings.js';
+import { createSection, createCheckbox, createTextInput } from './shared.js';
 import { showNotification } from "../player/ui/notification.js";
 import { getServerBase } from "/Plugins/JMSFusion/runtime/api.js";
 
@@ -456,7 +456,6 @@ export function createTrailersPanel(config, labels) {
     ctrlLastStepStarting: labels?.ctrlLastStepStarting || '{step} başlıyor...',
     ctrlLastStepFinished: labels?.ctrlLastStepFinished || '{step} bitti.',
     ctrlLastFinishedDuration: labels?.ctrlLastFinishedDuration || 'Bitti ✓ ({seconds} sn)',
-    noteDescription: labels?.noteDescription || 'Sadece eklenti yöntemi ile yüklenerek çalışır ve gerekli araçların (curl, jq, trailers.sh için yt-dlp ve ffmpeg) kurulu olması gerekir',
     logInfo: labels?.logInfo || '[INFO]',
     logWarn: labels?.logWarn || '[WARN]',
     logError: labels?.logError || '[HATA]',
@@ -1356,12 +1355,6 @@ export function createTrailersPanel(config, labels) {
       setTopLevelReadOnly(true);
     }
   })();
-
-  const noteDesc = document.createElement('div');
-  noteDesc.className = 'description-text';
-  noteDesc.textContent = L.noteDescription;
-  noteDesc.style.cssText = 'margin-top:10px; font-size:.9em; color:#888; font-style:italic;';
-  panel.appendChild(noteDesc);
 
   return panel;
 }

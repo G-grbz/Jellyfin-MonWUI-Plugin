@@ -1,6 +1,6 @@
 import { getAdminTargetProfile, getDeviceProfileAuto } from "../config.js";
 import { getGlobalTmdbApiKey } from "../jmsPluginConfig.js";
-import { createCheckbox, createSection, createNumberInput } from "../settings.js";
+import { createCheckbox, createSection, createNumberInput } from "./shared.js";
 import { applySettings } from "./applySettings.js";
 import { fetchItemDetails, makeApiRequest } from "/Plugins/JMSFusion/runtime/api.js";
 import {

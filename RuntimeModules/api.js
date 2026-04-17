@@ -15,6 +15,7 @@ const MAX_ITEM_CACHE = 600;
 const MAX_DOT_GENRE_CACHE = 1200;
 const MAX_PREVIEW_CACHE = 200;
 const MAX_TOMBSTONES = 2000;
+export const AUTH_PROFILE_CHANGED_EVENT = "jms:auth-profile-changed";
 
 function setLastPlayNowBlockReason(reason = "") {
   try {
@@ -159,6 +160,8 @@ async function __destroyGmmpBeforeVideoPlayNow() {
 
 let __lastAuthSnapshot = null;
 let __authWarmupStart = Date.now();
+let __authSnapshotSyncTimer = 0;
+let __authSnapshotWatchdogInstalled = false;
 const AUTH_WARMUP_MS = 15000;
 const QB_PRIME_MAX = 2000;
 const __qbPrimed = new Map();
@@ -307,6 +310,51 @@ function dbgAuth(tag, url="") {
   } catch {}
 }
 
+function normalizeAuthProfileString(value) {
+  return typeof value === "string" ? value.trim() : (value == null ? "" : String(value).trim());
+}
+
+function buildAuthProfileChangeDetail(prev = {}, next = {}) {
+  const prevUserId = normalizeAuthProfileString(prev.userId);
+  const nextUserId = normalizeAuthProfileString(next.userId);
+  const prevServerId = normalizeAuthProfileString(prev.serverId);
+  const nextServerId = normalizeAuthProfileString(next.serverId);
+  const prevToken = normalizeAuthProfileString(prev.accessToken);
+  const nextToken = normalizeAuthProfileString(next.accessToken);
+  const prevServerBase = normalizeServerBase(prev.serverBase || "");
+  const nextServerBase = normalizeServerBase(next.serverBase || "");
+
+  const userChanged = prevUserId !== nextUserId;
+  const serverChanged = prevServerId !== nextServerId || prevServerBase !== nextServerBase;
+  const tokenChanged = prevToken !== nextToken;
+
+  return {
+    prev: {
+      userId: prevUserId,
+      serverId: prevServerId,
+      accessToken: prevToken,
+      serverBase: prevServerBase,
+    },
+    next: {
+      userId: nextUserId,
+      serverId: nextServerId,
+      accessToken: nextToken,
+      serverBase: nextServerBase,
+    },
+    userChanged,
+    serverChanged,
+    tokenChanged,
+    changed: userChanged || serverChanged || tokenChanged,
+  };
+}
+
+function dispatchAuthProfileChanged(detail) {
+  if (!detail?.changed || typeof document === "undefined") return;
+  try {
+    document.dispatchEvent(new CustomEvent(AUTH_PROFILE_CHANGED_EVENT, { detail }));
+  } catch {}
+}
+
  export function persistAuthSnapshotFromApiClient() {
   try {
     const api = (typeof window !== "undefined" && window.ApiClient) ? window.ApiClient : null;
@@ -319,10 +367,12 @@ function dbgAuth(tag, url="") {
       (typeof api.getCurrentUserId === "function" ? api.getCurrentUserId() : api._currentUserId) || null;
     const deviceId = readApiClientDeviceId() || "web-client";
     const serverId = api._serverInfo?.SystemId || api._serverInfo?.Id || null;
+    let serverBase = "";
     try {
       const baseFromLoc = normalizeServerBase(getBaseFromLocation());
       const baseFromApi = normalizeServerBase((typeof api.serverAddress === "function") ? api.serverAddress() : "");
       const pick = baseFromLoc || (baseFromApi && !isOriginOnly(baseFromApi) ? baseFromApi : "");
+      serverBase = pick || "";
       if (pick) persistServerBase(pick);
     } catch {}
     if (!userId) return;
@@ -334,11 +384,11 @@ function dbgAuth(tag, url="") {
     try { localStorage.setItem(DEVICE_ID_KEY, deviceId); sessionStorage.setItem(DEVICE_ID_KEY, deviceId); } catch {}
     try { persistUserId(userId); } catch {}
 
-    const result = { userId, accessToken: token || "", sessionId: api._sessionId || null, serverId, deviceId,
+    const result = { userId, accessToken: token || "", sessionId: api._sessionId || null, serverId, serverBase, deviceId,
                      clientName: "Jellyfin Web Client", clientVersion: "1.0.0" };
                      dbgAuth("persistAuthSnapshot:done");
     onAuthProfileChanged(__lastAuthSnapshot, result);
-    __lastAuthSnapshot = { userId, accessToken: token || "", serverId };
+    __lastAuthSnapshot = { userId, accessToken: token || "", serverId, serverBase };
   } catch {
   }
 }
@@ -413,15 +463,52 @@ function nukeAllCachesAndLocalUserCaches() {
 
 function onAuthProfileChanged(prev, next) {
   if (!prev) return;
-  const changed =
-    prev.userId !== next.userId ||
-    prev.serverId !== next.serverId ||
-    prev.accessToken !== next.accessToken;
-  if (changed) {
+  const detail = buildAuthProfileChangeDetail(prev, next);
+  if (detail.changed) {
     console.log("🔐 Auth profili değişti → tüm cache’ler temizleniyor");
     nukeAllCachesAndLocalUserCaches();
     invalidateServerBaseCache();
+    dispatchAuthProfileChanged(detail);
   }
+}
+
+function queueAuthSnapshotSync(delayMs = 0) {
+  if (typeof window === "undefined") return;
+  if (__authSnapshotSyncTimer) {
+    clearTimeout(__authSnapshotSyncTimer);
+    __authSnapshotSyncTimer = 0;
+  }
+  __authSnapshotSyncTimer = window.setTimeout(() => {
+    __authSnapshotSyncTimer = 0;
+    try { persistAuthSnapshotFromApiClient(); } catch {}
+  }, Math.max(0, delayMs | 0));
+}
+
+function installAuthSnapshotWatchdog() {
+  if (typeof window === "undefined" || __authSnapshotWatchdogInstalled) return;
+  __authSnapshotWatchdogInstalled = true;
+
+  const queueNow = (delayMs = 0) => queueAuthSnapshotSync(delayMs);
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => queueNow(0), { once: true });
+  } else {
+    queueNow(0);
+  }
+
+  window.addEventListener("pageshow", () => queueNow(0), { passive: true });
+  window.addEventListener("focus", () => queueNow(0), { passive: true });
+  window.addEventListener("hashchange", () => queueNow(60), { passive: true });
+  window.addEventListener("popstate", () => queueNow(60), { passive: true });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    queueNow(0);
+  }, { passive: true });
+
+  window.setInterval(() => {
+    if (document.hidden) return;
+    queueNow(0);
+  }, 2000);
 }
 
 function isLikelyGuid(id) {
@@ -1171,12 +1258,16 @@ export async function updateFavoriteStatus(itemId, isFavorite, options = {}) {
   const watchlistModule = await import("/slider/modules/watchlist.js");
   const cleanItemId = String(itemId || "").trim();
   if (!cleanItemId) throw new Error("itemId gerekli");
+  const localOptions = {
+    ...(options || {}),
+    __skipNativeFavoriteSync: true
+  };
 
   const syncLocal = async () => {
     if (isFavorite) {
-      return watchlistModule.addToWatchlist(cleanItemId, options);
+      return watchlistModule.addToWatchlist(cleanItemId, localOptions);
     }
-    return watchlistModule.removeFromWatchlist(cleanItemId, options);
+    return watchlistModule.removeFromWatchlist(cleanItemId, localOptions);
   };
 
   watchlistModule?.suppressFavoriteMirrorOnce?.(cleanItemId, isFavorite);
@@ -2463,6 +2554,7 @@ export async function getCachedItemDetails(itemId) {
 }
 
 if (typeof window !== 'undefined') {
+  installAuthSnapshotWatchdog();
   window.addEventListener('pagehide', clearAllInMemoryCaches, { once: true });
   window.addEventListener('storage', (e) => {
     if (["json-credentials", "embyToken", "serverId"].includes(e.key)) {

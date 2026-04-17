@@ -529,7 +529,6 @@ export const languageLabels = {
   log: "Journal en direct",
   clean: "Nettoyer",
   adminRequired: "Les privilèges administrateur sont requis pour cette opération",
-  noteDescription: "Il fonctionne uniquement lorsqu'il est installé via la méthode du plugin et nécessite l'installation des outils requis (curl, jq, et pour trailers.sh : yt-dlp et ffmpeg)",
   hideSecret: "Cacher",
   showSecret: "Afficher",
   settingsReadOnly: "Les utilisateurs non administrateurs ne peuvent pas modifier les paramètres",
@@ -1337,7 +1336,6 @@ export const languageLabels = {
   showInfo: "Afficher les informations sur le genre, l'année et le pays",
   buttonBackgroundImageType: "Image d'arrière-plan du bouton",
   showGenresInfo: "Genre",
-  showbPlotInfo: "Titre du tracé",
   sliderbackgroundsettings: "Paramètres d’arrière-plan du curseur",
   manualBackdropSelection: "Modifier l’arrière-plan de la diapositive",
   slideBackgroundImageType: "Type d’image d’arrière-plan du curseur",
@@ -1634,7 +1632,6 @@ export const languageLabels = {
   boxset: "Coffret",
   izlendi: "Vu",
   izlenmedi: "Non vu",
-  konu: "Sujet: ",
   sure: "Durée",
   sa: "h",
   dk: "min",
@@ -2034,6 +2031,7 @@ export const languageLabels = {
     heroRootLabel: "Chemin Web UI",
     tabs: {
       jmsfusion: "JMSFusion",
+      monwuiSettings: "Parametres MonWUI",
       status: "Statut",
       snippet: "HTML Snippet, chemin web et permissions"
     },
@@ -2046,6 +2044,7 @@ export const languageLabels = {
       statusBody: "Verification rapide de l'etat de configuration, du chemin player et du fallback des ressources integrees.",
       inMemoryTitle: "Injection en memoire",
       inMemoryBody: "Verifie si index.html est reecrit a la volee sans modifier les fichiers sur disque.",
+      monwuiSettingsTitle: "Parametres MonWUI",
       snippetTitle: "HTML Snippet",
       snippetBody: "Le snippet exact que JMSFusion injecte dans Jellyfin Web.",
       envTitle: "Chemin web et permissions",
@@ -2063,6 +2062,7 @@ export const languageLabels = {
     actions: {
       save: "Enregistrer",
       publishGlobal: "Publier globalement les parametres administrateur",
+      reloadMonwuiSettings: "Recharger les parametres MonWUI",
       refreshEnv: "Actualiser le chemin web et les permissions",
       copyAcl: "Copier les commandes de permission",
       patch: "Patcher index.html",
@@ -2079,6 +2079,8 @@ export const languageLabels = {
       publishDone: "Les parametres globaux ont ete publies avec succes.",
       statusPending: "Le statut n'a pas encore ete charge.",
       snippetPending: "Le snippet n'a pas encore ete charge.",
+      monwuiSettingsLoading: "Les parametres MonWUI se chargent...",
+      monwuiSettingsLoadFailed: "Les parametres MonWUI n'ont pas pu etre charges.",
       inMemoryChecking: "Verification de l'injection en memoire...",
       envPending: "(pas encore calcule)"
     },

@@ -529,7 +529,6 @@ export const languageLabels = {
   log: "Canlı Log",
   clean: "Temizle",
   adminRequired: "Bu işlem için yönetici yetkisi gerekiyor",
-  noteDescription: "Sadece eklenti yöntemi ile yüklenerek çalışır ve gerekli araçların (curl, jq, trailers.sh için yt-dlp ve ffmpeg) kurulu olması gerekir",
   hideSecret: "Gizle",
   showSecret: "Göster",
   settingsReadOnly: "Yönetici olmayan kullanıcılar ayarları değiştiremez",
@@ -1336,7 +1335,6 @@ export const languageLabels = {
   showInfo: "Tür, Yıl ve Ülke Bilgilerini Göster",
   buttonBackgroundImageType: "Buton Arkaplan Görseli",
   showGenresInfo: "Tür",
-  showbPlotInfo: "Özet Başlığı",
   sliderbackgroundsettings: "Slider Arka Plan Ayarları",
   manualBackdropSelection: "Slider Arka Planını Değiştir",
   slideBackgroundImageType: "Slider Arka Planı Görüntü Türü",
@@ -1632,7 +1630,6 @@ export const languageLabels = {
   dizi: "Dizi",
   boxset: "BoxSet",
   izlendi: "İzlendi",
-  konu: "Konu: ",
   izlenmedi: "İzlenmedi",
   sure: "Süre",
   sa: "sa",
@@ -2033,6 +2030,7 @@ export const languageLabels = {
     heroRootLabel: "Web Arayüz Yolu",
     tabs: {
       jmsfusion: "JMSFusion",
+      monwuiSettings: "MonWUI Ayarları",
       status: "Status",
       snippet: "HTML Snippet, Web Path ve Permissions"
     },
@@ -2045,6 +2043,7 @@ export const languageLabels = {
       statusBody: "Yapılandırma durumu, player yolu ve embedded asset fallback için hızlı kontrol ekranı.",
       inMemoryTitle: "Bellek İçi Enjeksiyon",
       inMemoryBody: "index.html dosyasının disk üzerindeki dosyalara dokunmadan yanıt anında yeniden yazılıp yazılmadığını kontrol eder.",
+      monwuiSettingsTitle: "MonWUI Ayarları",
       snippetTitle: "HTML Snippet",
       snippetBody: "JMSFusion'ın Jellyfin Web içine enjekte ettiği tam snippet.",
       envTitle: "Web Yolu ve İzinler",
@@ -2062,6 +2061,7 @@ export const languageLabels = {
     actions: {
       save: "Kaydet",
       publishGlobal: "Yönetici ayarlarını globale yayınla",
+      reloadMonwuiSettings: "MonWUI Ayarlarını Yenile",
       refreshEnv: "Web Yolu ve İzinleri Yenile",
       copyAcl: "İzin komutlarını kopyala",
       patch: "index.html dosyasını patchle",
@@ -2078,6 +2078,8 @@ export const languageLabels = {
       publishDone: "Global ayarlar başarıyla yayınlandı.",
       statusPending: "Durum henüz yüklenmedi.",
       snippetPending: "Snippet henüz yüklenmedi.",
+      monwuiSettingsLoading: "MonWUI ayarları yükleniyor...",
+      monwuiSettingsLoadFailed: "MonWUI ayarları yüklenemedi.",
       inMemoryChecking: "Bellek içi enjeksiyon kontrol ediliyor...",
       envPending: "(henüz hesaplanmadı)"
     },

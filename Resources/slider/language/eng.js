@@ -529,7 +529,6 @@ export const languageLabels = {
   log: "Live Log",
   clean: "Clean",
   adminRequired: "Administrator privileges are required for this operation",
-  noteDescription: "It only works when installed via the plugin method and requires the necessary tools (curl, jq, and for trailers.sh: yt-dlp and ffmpeg) to be installed",
   hideSecret: "Hide",
   showSecret: "Show",
   settingsReadOnly: "Non-administrator users cannot change settings",
@@ -1340,7 +1339,6 @@ export const languageLabels = {
   buttonBackgroundImageType: "Button Background Image",
   showInfo: "Show Genre, Year, and Country Info",
   showGenresInfo: "Genre",
-  showbPlotInfo: "Plot Title",
   sliderbackgroundsettings: "Slider Background Settings",
   manualBackdropSelection: "Change Slide Background",
   slideBackgroundImageType: "Slider Background Image Type",
@@ -1637,7 +1635,6 @@ export const languageLabels = {
   dizi: "Serie",
   boxset: "Collection",
   izlendi: "Watched",
-  konu: "Subject: ",
   izlenmedi: "No Watched",
   sure: "Time",
   sa: "h",
@@ -2041,6 +2038,7 @@ export const languageLabels = {
     heroRootLabel: "Web UI Root",
     tabs: {
       jmsfusion: "JMSFusion",
+      monwuiSettings: "MonWUI Settings",
       status: "Status",
       snippet: "HTML Snippet & Web Path & Permissions"
     },
@@ -2053,6 +2051,7 @@ export const languageLabels = {
       statusBody: "Quick verification for configuration state, player path resolution, and embedded asset fallback.",
       inMemoryTitle: "In-Memory Injection",
       inMemoryBody: "Checks whether index.html is being rewritten at response time without touching files on disk.",
+      monwuiSettingsTitle: "MonWUI Settings",
       snippetTitle: "HTML Snippet",
       snippetBody: "The exact snippet JMSFusion injects into Jellyfin web.",
       envTitle: "Web Path & Permissions",
@@ -2070,6 +2069,7 @@ export const languageLabels = {
     actions: {
       save: "Save",
       publishGlobal: "Publish admin settings globally",
+      reloadMonwuiSettings: "Reload MonWUI Settings",
       refreshEnv: "Refresh Web Path & Permissions",
       copyAcl: "Copy permission commands",
       patch: "Patch index.html",
@@ -2086,6 +2086,8 @@ export const languageLabels = {
       publishDone: "Global settings published successfully.",
       statusPending: "Status has not been loaded yet.",
       snippetPending: "Snippet has not been loaded yet.",
+      monwuiSettingsLoading: "MonWUI settings are loading...",
+      monwuiSettingsLoadFailed: "MonWUI settings could not be loaded.",
       inMemoryChecking: "Checking in-memory injection...",
       envPending: "(not computed yet)"
     },

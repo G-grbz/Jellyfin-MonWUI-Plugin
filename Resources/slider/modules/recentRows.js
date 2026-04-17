@@ -1342,10 +1342,27 @@ function openResumePage(type) {
   gotoHash(getMoviesHashFallback());
 }
 
+function queueEnterAnimation(el) {
+  if (!el) return el;
+  el.classList.add("is-entering");
+  const clear = () => {
+    try { el.classList.remove("is-entering"); } catch {}
+  };
+  try {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(clear);
+    });
+  } catch {
+    setTimeout(clear, 34);
+  }
+  return el;
+}
+
 function createRecommendationCard(item, serverId, { aboveFold=false, showProgress=false } = {}) {
   const { itemId, itemName } = primeItemIdentity(item);
   const card = document.createElement("div");
   card.className = "card personal-recs-card";
+  queueEnterAnimation(card);
   if (itemId) card.dataset.itemId = itemId;
 
   const posterSource = item?.__posterSource || item;
@@ -1777,8 +1794,7 @@ async function createRowHeroCard(item, serverId, labelText, { showProgress = fal
   hero.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") openDetails(e);
   });
-  hero.classList.add("active");
-
+    hero.classList.add("active");
   try {
     const backdropImg = hero.querySelector(".dir-row-hero-bg");
     if (backdropImg) {
@@ -2364,7 +2380,9 @@ async function fillSectionWithItems({
 
         heroHost.innerHTML = "";
         if (runtimeCfg.showHeroCards && best) {
-          heroHost.appendChild(await createRowHeroCard(best, STATE.serverId, heroLabel, { showProgress }));
+          const hero = await createRowHeroCard(best, STATE.serverId, heroLabel, { showProgress });
+          heroHost.appendChild(hero);
+          queueEnterAnimation(hero);
         }
 
         row.innerHTML = "";
@@ -2438,7 +2456,9 @@ async function fillSectionWithItems({
 
   heroHost.innerHTML = "";
   if (runtimeCfg.showHeroCards && best) {
-    heroHost.appendChild(await createRowHeroCard(best, STATE.serverId, heroLabel, { showProgress }));
+    const hero = await createRowHeroCard(best, STATE.serverId, heroLabel, { showProgress });
+    heroHost.appendChild(hero);
+    queueEnterAnimation(hero);
   }
 
   row.innerHTML = "";

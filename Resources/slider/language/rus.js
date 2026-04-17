@@ -529,7 +529,6 @@ export const languageLabels = {
   log: "Живой лог",
   clean: "Очистить",
   adminRequired: "Для этой операции требуются права администратора",
-  noteDescription: "Работает только при установке с помощью метода плагина и требует установки необходимых инструментов (curl, jq, а для trailers.sh: yt-dlp и ffmpeg)",
   hideSecret: "Скрыть",
   showSecret: "Показать",
   settingsReadOnly: "Пользователи без прав администратора не могут изменять настройки",
@@ -1337,7 +1336,6 @@ export const languageLabels = {
   showInfo: "Показывать информацию о жанре, годе и стране",
   buttonBackgroundImageType: "Фоновое изображение для кнопок",
   showGenresInfo: "Жанр",
-  showbPlotInfo: "Заголовок сюжета",
   sliderbackgroundsettings: "Настройки фона слайдера",
   manualBackdropSelection: "Изменить фон слайдера",
   slideBackgroundImageType: "Тип фонового изображения слайдера",
@@ -1633,7 +1631,6 @@ export const languageLabels = {
   dizi: "Сериал",
   boxset: "Коллекция",
   izlendi: "Просмотрено",
-  konu: "Сюжет: ",
   izlenmedi: "Не просмотрено",
   sure: "ВРЕМЯ",
   sa: "ч",
@@ -2034,6 +2031,7 @@ export const languageLabels = {
     heroRootLabel: "Путь Web UI",
     tabs: {
       jmsfusion: "JMSFusion",
+      monwuiSettings: "Настройки MonWUI",
       status: "Статус",
       snippet: "HTML Snippet, веб-путь и права"
     },
@@ -2046,6 +2044,7 @@ export const languageLabels = {
       statusBody: "Быстрая проверка состояния конфигурации, пути player и fallback для встроенных ресурсов.",
       inMemoryTitle: "In-memory инъекция",
       inMemoryBody: "Проверяет, переписывается ли index.html во время ответа без изменения файлов на диске.",
+      monwuiSettingsTitle: "Настройки MonWUI",
       snippetTitle: "HTML Snippet",
       snippetBody: "Точный snippet, который JMSFusion внедряет в Jellyfin Web.",
       envTitle: "Веб-путь и права",
@@ -2063,6 +2062,7 @@ export const languageLabels = {
     actions: {
       save: "Сохранить",
       publishGlobal: "Опубликовать настройки администратора глобально",
+      reloadMonwuiSettings: "Перезагрузить настройки MonWUI",
       refreshEnv: "Обновить веб-путь и права",
       copyAcl: "Скопировать команды прав",
       patch: "Применить patch к index.html",
@@ -2079,6 +2079,8 @@ export const languageLabels = {
       publishDone: "Глобальные настройки успешно опубликованы.",
       statusPending: "Статус еще не загружен.",
       snippetPending: "Snippet еще не загружен.",
+      monwuiSettingsLoading: "Настройки MonWUI загружаются...",
+      monwuiSettingsLoadFailed: "Не удалось загрузить настройки MonWUI.",
       inMemoryChecking: "Проверка in-memory инъекции...",
       envPending: "(еще не вычислено)"
     },

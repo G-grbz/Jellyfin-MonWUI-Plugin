@@ -1,5 +1,5 @@
 import { getConfig } from "../config.js";
-import { createCheckbox, createImageTypeSelect, bindCheckboxKontrol, bindTersCheckboxKontrol, createSection } from "../settings.js";
+import { createCheckbox, createImageTypeSelect, bindCheckboxKontrol, bindTersCheckboxKontrol, createSection } from "./shared.js";
 import { applySettings, applyRawConfig } from "./applySettings.js";
 
 const LYRICS_JOB_KEY = 'jmsf_lyrics_job_running';

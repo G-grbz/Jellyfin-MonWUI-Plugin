@@ -3004,10 +3004,27 @@ function createGenreHeroCard(item, serverId, genreName, { aboveFold = false } = 
   return hero;
 }
 
+function queueEnterAnimation(el) {
+  if (!el) return el;
+  el.classList.add('is-entering');
+  const clear = () => {
+    try { el.classList.remove('is-entering'); } catch {}
+  };
+  try {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(clear);
+    });
+  } catch {
+    setTimeout(clear, 34);
+  }
+  return el;
+}
+
 function createRecommendationCard(item, serverId, aboveFold = false) {
   const { itemId, itemName } = primeItemIdentity(item);
   const card = document.createElement("div");
   card.className = "card personal-recs-card";
+  queueEnterAnimation(card);
   if (itemId) card.dataset.itemId = itemId;
   card.setAttribute('data-key', makePRCKey(item));
 

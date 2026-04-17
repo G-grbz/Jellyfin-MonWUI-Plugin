@@ -1,5 +1,5 @@
 import { getConfig } from "../config.js";
-import { createCheckbox, createSection, createImageTypeSelect, bindCheckboxKontrol } from "../settings.js";
+import { createCheckbox, createSection, createImageTypeSelect, bindCheckboxKontrol } from "./shared.js";
 import { applySettings } from "./applySettings.js";
 
 export function createButtonsPanel(config, labels) {

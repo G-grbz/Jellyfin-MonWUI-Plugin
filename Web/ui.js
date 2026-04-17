@@ -3,7 +3,10 @@
   const split = path.split("/web/");
   const jfRoot = split.length > 1 ? split[0] : "";
   const langModuleUrl = `${window.location.origin}${jfRoot}/slider/language/index.js`;
+  const webSettingsModuleUrl = `${window.location.origin}${jfRoot}/Plugins/JMSFusion/assets/WebSettingsJs`;
+  const sliderSettingsCssUrl = `${window.location.origin}${jfRoot}/slider/src/settings.css`;
   const TAB_STORAGE_KEY = "jmsfusion-config-active-tab";
+  const MONWUI_SUBTAB_STORAGE_KEY = "jmsfusion-monwui-requested-subtab";
 
   const api = (p) => `${jfRoot}/Plugins/JMSFusion/${p}`;
   const esc = (s) => (s ?? "").toString().replace(/[&<>]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[m]));
@@ -17,6 +20,7 @@
       heroRootLabel: "Web UI Root",
       tabs: {
         jmsfusion: "JMSFusion",
+        monwuiSettings: "MonWUI Settings",
         status: "Status",
         snippet: "HTML Snippet & Web Path & Permissions"
       },
@@ -29,6 +33,7 @@
         statusBody: "Quick verification for configuration state, player path resolution, and embedded asset fallback.",
         inMemoryTitle: "In-Memory Injection",
         inMemoryBody: "Checks whether index.html is being rewritten at response time without touching files on disk.",
+        monwuiSettingsTitle: "MonWUI Settings",
         snippetTitle: "HTML Snippet",
         snippetBody: "The exact snippet JMSFusion injects into Jellyfin web.",
         envTitle: "Web Path & Permissions",
@@ -46,6 +51,7 @@
       actions: {
         save: "Save",
         publishGlobal: "Publish admin settings globally",
+        reloadMonwuiSettings: "Reload MonWUI Settings",
         refreshEnv: "Refresh Web Path & Permissions",
         copyAcl: "Copy permission commands",
         patch: "Patch index.html",
@@ -62,6 +68,8 @@
         publishDone: "Global settings published successfully.",
         statusPending: "Status has not been loaded yet.",
         snippetPending: "Snippet has not been loaded yet.",
+        monwuiSettingsLoading: "MonWUI settings are loading...",
+        monwuiSettingsLoadFailed: "MonWUI settings could not be loaded.",
         inMemoryChecking: "Checking in-memory injection...",
         envPending: "(not computed yet)"
       },
@@ -126,6 +134,20 @@
     if (el) el.setAttribute("placeholder", text);
   }
 
+  function ensureStylesheet(key, href) {
+    let link = document.querySelector(`link[data-jmsfusion-config-css="${key}"]`);
+    if (!link) {
+      link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.setAttribute("data-jmsfusion-config-css", key);
+      document.head.appendChild(link);
+    }
+    if (link.href !== href) {
+      link.href = href;
+    }
+    return link;
+  }
+
   function getLanguageDisplayName(code) {
     const map = {
       tur: "Turkce",
@@ -175,6 +197,85 @@
     }, 3200);
   }
 
+  function renderMonwuiSettingsPlaceholder(view, text, tone = "") {
+    const host = view.querySelector("#monwuiSettingsHost");
+    if (!host) return;
+
+    const placeholder = document.createElement("div");
+    placeholder.id = "monwuiSettingsPlaceholder";
+    placeholder.className = `jms-empty ${tone ? `jms-empty--${tone}` : ""}`.trim();
+    placeholder.textContent = text;
+    host.replaceChildren(placeholder);
+  }
+
+  function consumeRequestedMonwuiSettingsTab() {
+    let value = "";
+    try {
+      value = sessionStorage.getItem(MONWUI_SUBTAB_STORAGE_KEY) || "";
+      if (value) sessionStorage.removeItem(MONWUI_SUBTAB_STORAGE_KEY);
+    } catch {}
+    return String(value || "").trim() || "monwui";
+  }
+
+  async function ensureMonwuiSettings(view, { force = false } = {}) {
+    const host = view.querySelector("#monwuiSettingsHost");
+    const reloadBtn = view.querySelector("#reloadMonwuiSettingsBtn");
+    if (!host) return null;
+
+    const requestedInnerTab = consumeRequestedMonwuiSettingsTab();
+
+    if (!force && host.__jmsMonwuiReady && host.querySelector("#settings-modal")) {
+      const existingApi = host.__jmsMonwuiApi || host.__jmsMonwuiSettingsApi || null;
+      existingApi?.open?.(requestedInnerTab);
+      return host.querySelector("#settings-modal");
+    }
+
+    if (host.__jmsMonwuiPromise) {
+      return host.__jmsMonwuiPromise;
+    }
+
+    host.__jmsMonwuiReady = false;
+    renderMonwuiSettingsPlaceholder(
+      view,
+      t("webConfig.messages.monwuiSettingsLoading", "MonWUI settings are loading...")
+    );
+    if (reloadBtn) reloadBtn.disabled = true;
+
+    host.__jmsMonwuiPromise = (async () => {
+      ensureStylesheet("monwui-settings", sliderSettingsCssUrl);
+
+      const settingsModule = await import(webSettingsModuleUrl);
+      const settingsApi = typeof settingsModule?.mountMonwuiSettingsPage === "function"
+        ? await settingsModule.mountMonwuiSettingsPage(host, {
+            defaultTab: requestedInnerTab,
+            force
+          })
+        : null;
+      const modal = settingsApi?.element || host.querySelector("#settings-modal");
+
+      if (!modal || !settingsApi) {
+        throw new Error("MonWUI settings page is not available.");
+      }
+
+      host.__jmsMonwuiApi = settingsApi;
+      host.__jmsMonwuiReady = true;
+      view.__monwuiSettingsLoaded = true;
+      return modal;
+    })()
+      .catch((error) => {
+        const fallback = t("webConfig.messages.monwuiSettingsLoadFailed", "MonWUI settings could not be loaded.");
+        const detail = String(error?.message || "").trim();
+        renderMonwuiSettingsPlaceholder(view, detail ? `${fallback} ${detail}` : fallback, "error");
+        throw error;
+      })
+      .finally(() => {
+        host.__jmsMonwuiPromise = null;
+        if (reloadBtn) reloadBtn.disabled = false;
+      });
+
+    return host.__jmsMonwuiPromise;
+  }
+
   function activateTab(view, tabName) {
     view.querySelectorAll(".jms-tab").forEach((tab) => {
       const active = tab.dataset.tab === tabName;
@@ -191,6 +292,12 @@
     try {
       localStorage.setItem(TAB_STORAGE_KEY, tabName);
     } catch {}
+
+    if (tabName === "monwui-settings") {
+      ensureMonwuiSettings(view).catch((error) => {
+        console.error("MonWUI settings load failed:", error);
+      });
+    }
   }
 
   function initTabs(view) {
@@ -204,7 +311,7 @@
     let active = "jmsfusion";
     try {
       const stored = localStorage.getItem(TAB_STORAGE_KEY);
-      if (stored && ["jmsfusion", "status", "snippet"].includes(stored)) {
+      if (stored && ["jmsfusion", "monwui-settings", "status", "snippet"].includes(stored)) {
         active = stored;
       }
     } catch {}
@@ -221,6 +328,7 @@
     setText(view, "#heroRootValue", webRootLabel());
 
     setText(view, "#tabJmsfusion", t("webConfig.tabs.jmsfusion", "JMSFusion"));
+    setText(view, "#tabMonwuiSettings", t("webConfig.tabs.monwuiSettings", "MonWUI Settings"));
     setText(view, "#tabStatus", t("webConfig.tabs.status", "Status"));
     setText(view, "#tabSnippet", t("webConfig.tabs.snippet", "HTML Snippet & Web Path & Permissions"));
 
@@ -228,6 +336,7 @@
     setText(view, "#configCardBody", t("webConfig.sections.configBody", "Choose where JMSFusion serves slider assets from and how the player module path is resolved."));
     setText(view, "#actionsCardTitle", t("webConfig.sections.adminTitle", "Admin Actions"));
     setText(view, "#actionsCardBody", t("webConfig.sections.adminBody", "Save plugin settings or publish the current admin snapshot globally for every user profile."));
+    setText(view, "#monwuiSettingsCardTitle", t("webConfig.sections.monwuiSettingsTitle", "MonWUI Settings"));
     setText(view, "#statusCardTitle", t("webConfig.sections.statusTitle", "Runtime Status"));
     setText(view, "#statusCardBody", t("webConfig.sections.statusBody", "Quick verification for configuration state, player path resolution, and embedded asset fallback."));
     setText(view, "#inmemCardTitle", t("webConfig.sections.inMemoryTitle", "In-Memory Injection"));
@@ -247,6 +356,7 @@
 
     setText(view, "#saveBtn", t("webConfig.actions.save", "Save"));
     setText(view, "#publishGlobalBtn", t("webConfig.actions.publishGlobal", "Publish admin settings globally"));
+    setText(view, "#reloadMonwuiSettingsBtn", t("webConfig.actions.reloadMonwuiSettings", "Reload MonWUI Settings"));
     setText(view, "#refreshEnvBtn", t("webConfig.actions.refreshEnv", "Refresh Web Path & Permissions"));
     setText(view, "#copyAclBtn", t("webConfig.actions.copyAcl", "Copy permission commands"));
     setText(view, "#patchBtn", t("webConfig.actions.patch", "Patch index.html"));
@@ -268,6 +378,12 @@
     }
     if (!view.__envData) {
       setText(view, "#envAcl", t("webConfig.messages.envPending", "(not computed yet)"));
+    }
+    if (!view.__monwuiSettingsLoaded && !view.querySelector("#monwuiSettingsHost #settings-modal")) {
+      renderMonwuiSettingsPlaceholder(
+        view,
+        t("webConfig.messages.monwuiSettingsLoading", "MonWUI settings are loading...")
+      );
     }
 
     if (view.__statusData) renderStatus(view, view.__statusData);
@@ -495,9 +611,9 @@
     if (view.__jms_initialized) return;
     view.__jms_initialized = true;
 
-    initTabs(view);
     await loadLanguagePack();
     applyTranslations(view);
+    initTabs(view);
 
     view.querySelector("#saveBtn")?.addEventListener("click", async () => {
       try {
@@ -528,6 +644,14 @@
         if (!r.ok) throw new Error("Publish failed");
         await fetch(`${jfRoot}/Plugins/JMSFusion/UserSettings`, { cache: "no-store" }).catch(() => null);
         showMessage(view, t("webConfig.messages.publishDone", "Global settings published successfully."), "ok");
+      } catch (e) {
+        showMessage(view, e.message || String(e), "err");
+      }
+    });
+
+    view.querySelector("#reloadMonwuiSettingsBtn")?.addEventListener("click", async () => {
+      try {
+        await ensureMonwuiSettings(view, { force: true });
       } catch (e) {
         showMessage(view, e.message || String(e), "err");
       }
@@ -610,6 +734,23 @@
   document.addEventListener("DOMContentLoaded", function () {
     const existingView = document.getElementById("JMSFusionConfigPage");
     if (existingView) setTimeout(() => initView(existingView), 50);
+  });
+
+  window.addEventListener("jmsfusion:plugin-config-open-request", (event) => {
+    const detail = event?.detail || {};
+    if (detail.pluginTab === "monwui-settings") {
+      try {
+        localStorage.setItem(TAB_STORAGE_KEY, "monwui-settings");
+      } catch {}
+      try {
+        sessionStorage.setItem(MONWUI_SUBTAB_STORAGE_KEY, String(detail.settingsTab || "monwui"));
+      } catch {}
+    }
+
+    const existingView = document.getElementById("JMSFusionConfigPage");
+    if (existingView) {
+      activateTab(existingView, detail.pluginTab || "jmsfusion");
+    }
   });
 
   const immediateCheck = document.getElementById("JMSFusionConfigPage");

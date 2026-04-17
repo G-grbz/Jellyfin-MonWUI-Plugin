@@ -2,7 +2,7 @@ import { getAdminTargetProfile, getConfig, getDeviceProfileAuto, publishAdminSna
 import { updateConfig } from "../configPersistence.js";
 import { loadCSS } from "../playerStyles.js";
 import { updateSlidePosition } from '../positionUtils.js';
-import { createCheckbox, createImageTypeSelect, bindCheckboxKontrol, bindTersCheckboxKontrol } from "../settings.js";
+import { createCheckbox, createImageTypeSelect, bindCheckboxKontrol, bindTersCheckboxKontrol } from "./shared.js";
 import { updateHeaderUserAvatar, updateAvatarStyles, clearAvatarCache } from "../userAvatar.js";
 import { showNotification } from "../player/ui/notification.js";
 import { updateJmsPluginConfig } from "../jmsPluginConfig.js";
@@ -484,7 +484,6 @@ const USER_ONLY_KEYS = [
             showOriginalTitleInfo: formData.get('showOriginalTitleInfo') === 'on',
             hideOriginalTitleIfSame: formData.get('hideOriginalTitleIfSame') === 'on',
             showPlotInfo: formData.get('showPlotInfo') === 'on',
-            showbPlotInfo: formData.get('showbPlotInfo') === 'on',
 
             showProviderInfo: formData.get('showProviderInfo') === 'on',
             showSettingsLink: formData.get('showSettingsLink') === 'on',

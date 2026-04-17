@@ -306,7 +306,6 @@ export function getConfig() {
     showActorRole: localStorage.getItem('showActorRole') === 'true',
     showDescriptions: localStorage.getItem('showDescriptions') !== 'false',
     showPlotInfo: localStorage.getItem('showPlotInfo') !== 'false',
-    showbPlotInfo: localStorage.getItem('showbPlotInfo') !== 'false',
     showSloganInfo: localStorage.getItem('showSloganInfo') !== 'false',
     showTitleInfo: localStorage.getItem('showTitleInfo') !== 'false',
     showOriginalTitleInfo: localStorage.getItem('showOriginalTitleInfo') !== 'false',
@@ -350,7 +349,7 @@ export function getConfig() {
     useRandomContent: localStorage.getItem('useRandomContent') !== 'false',
     fullscreenMode: localStorage.getItem('fullscreenMode') === 'true' ? true : false,
     listLimit: 20,
-    version: "v2.5.1",
+    version: "v2.5.2",
     historySize: 20,
     updateInterval: 300000,
     nextTracksSource: localStorage.getItem('nextTracksSource') || 'playlist',
@@ -827,13 +826,27 @@ export function getConfig() {
 
     currentUserIsAdmin: (() => {
       try {
-        const ls = localStorage.getItem('currentUserIsAdmin');
-        if (ls === 'true' || ls === 'false') return ls === 'true';
         const pol =
           window.ApiClient?._currentUser?.Policy ||
           window.ApiClient?._currentUser?.UserPolicy ||
           null;
-        if (pol && (pol.IsAdministrator === true || pol.IsAdministrator === 'true')) return true;
+
+        if (pol) {
+          const liveAdminFlag = [pol.IsAdministrator, pol.IsAdmin, pol.IsAdminUser]
+            .find(value =>
+              value === true ||
+              value === false ||
+              value === 'true' ||
+              value === 'false'
+            );
+
+          if (liveAdminFlag !== undefined) {
+            return liveAdminFlag === true || liveAdminFlag === 'true';
+          }
+        }
+
+        const ls = localStorage.getItem('currentUserIsAdmin');
+        if (ls === 'true' || ls === 'false') return ls === 'true';
       } catch {}
       return false;
     })(),

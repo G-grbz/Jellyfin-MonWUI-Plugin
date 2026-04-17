@@ -34,6 +34,13 @@
               aria-selected="true"
               aria-controls="panelJmsfusion"
               data-tab="jmsfusion">JMSFusion</button>
+      <button id="tabMonwuiSettings"
+              type="button"
+              class="jms-tab"
+              role="tab"
+              aria-selected="false"
+              aria-controls="panelMonwuiSettings"
+              data-tab="monwui-settings">MonWUI Settings</button>
       <button id="tabStatus"
               type="button"
               class="jms-tab"
@@ -127,6 +134,27 @@
           <div id="inmem" class="jms-inline-state">
             Checking in-memory injection...
           </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="panelMonwuiSettings"
+             class="jms-panel"
+             data-panel="monwui-settings"
+             role="tabpanel"
+             aria-labelledby="tabMonwuiSettings"
+             hidden>
+      <div class="jms-card">
+        <div class="jms-card-head">
+          <h3 id="monwuiSettingsCardTitle">MonWUI Settings</h3>
+        </div>
+
+        <div class="buttonContainer buttonContainer--tight">
+          <button id="reloadMonwuiSettingsBtn" type="button" class="raised">Reload MonWUI Settings</button>
+        </div>
+
+        <div id="monwuiSettingsHost" class="jms-settings-page-host">
+          <div id="monwuiSettingsPlaceholder" class="jms-empty">MonWUI settings are loading...</div>
         </div>
       </div>
     </section>
@@ -550,6 +578,12 @@
   background: var(--jms-gold-soft);
 }
 
+#JMSFusionConfigPage .jms-empty--error {
+  border-style: solid;
+  color: var(--jms-danger);
+  background: var(--jms-danger-soft);
+}
+
 #JMSFusionConfigPage .jms-badge {
   display: inline-flex;
   align-items: center;
@@ -656,6 +690,37 @@
   color: var(--jms-gold);
 }
 
+#JMSFusionConfigPage .jms-settings-page-host {
+  min-height: 360px;
+}
+
+#JMSFusionConfigPage .jms-settings-page-host > #settings-modal.jms-settings-page-shell {
+  display: block !important;
+  position: relative !important;
+  inset: auto !important;
+  padding: 0 !important;
+  background: transparent !important;
+  animation: none !important;
+}
+
+#JMSFusionConfigPage .jms-settings-page-host > #settings-modal.jms-settings-page-shell .settings-modal-content {
+  width: 100% !important;
+  max-width: none !important;
+  height: min(80vh, 980px) !important;
+  max-height: min(80vh, 980px) !important;
+  box-shadow: none !important;
+}
+
+#JMSFusionConfigPage .jms-settings-page-host > #settings-modal.jms-settings-page-shell .settings-modal-content h2 {
+  display: none !important;
+}
+
+#JMSFusionConfigPage .jms-settings-page-host > #settings-modal.jms-settings-page-shell form,
+#JMSFusionConfigPage .jms-settings-page-host > #settings-modal.jms-settings-page-shell .settings-tabs,
+#JMSFusionConfigPage .jms-settings-page-host > #settings-modal.jms-settings-page-shell .settings-tab-content {
+  min-height: 0 !important;
+}
+
 @media (max-width: 900px) {
   #JMSFusionConfigPage .jms-hero-card,
   #JMSFusionConfigPage .jms-grid--split {
@@ -690,6 +755,11 @@
 
   #JMSFusionConfigPage .jms-status-value {
     text-align: left;
+  }
+
+  #JMSFusionConfigPage .jms-settings-page-host > #settings-modal.jms-settings-page-shell .settings-modal-content {
+    height: min(86vh, 1100px) !important;
+    max-height: min(86vh, 1100px) !important;
   }
 }
 </style>

@@ -1,4 +1,4 @@
-import { createCheckbox, createSection, bindCheckboxKontrol } from "../settings.js";
+import { createCheckbox, createSection, bindCheckboxKontrol } from "./shared.js";
 
 export function createProfileChooserPanel(config, labels) {
   const panel = document.createElement("div");

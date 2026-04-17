@@ -133,18 +133,36 @@ function normalizeVerifyResponse(data) {
   };
 }
 
+function getApiClientSafe() {
+  try {
+    return window.ApiClient || window.apiClient || null;
+  } catch {
+    return null;
+  }
+}
+
 function getTokenSafe() {
+  const api = getApiClientSafe();
+  let storageToken = "";
+  try {
+    storageToken = pickFirstString(
+      sessionStorage.getItem("accessToken"),
+      localStorage.getItem("accessToken"),
+      sessionStorage.getItem("embyToken"),
+      localStorage.getItem("embyToken")
+    );
+  } catch {}
+
   try {
     return pickFirstString(
-      localStorage.getItem("accessToken"),
-      sessionStorage.getItem("accessToken"),
-      localStorage.getItem("embyToken"),
-      sessionStorage.getItem("embyToken"),
-      window.ApiClient?.accessToken?.(),
-      window.ApiClient?._accessToken
+      typeof api?.accessToken === "function" ? api.accessToken() : "",
+      api?._serverInfo?.AccessToken,
+      api?._accessToken,
+      api?._authToken,
+      storageToken
     );
   } catch {
-    return "";
+    return storageToken;
   }
 }
 
@@ -177,16 +195,17 @@ function readCredentialUserIdFromPayload(payload) {
   const servers = Array.isArray(payload?.Servers) ? payload.Servers : [];
   if (!servers.length) return "";
 
+  const api = getApiClientSafe();
   const serverId = pickFirstString(
-    localStorage.getItem("serverId"),
+    api?._serverInfo?.SystemId,
+    api?._serverInfo?.Id,
     sessionStorage.getItem("serverId"),
-    localStorage.getItem("persist_server_id"),
+    localStorage.getItem("serverId"),
     sessionStorage.getItem("persist_server_id"),
-    window.ApiClient?._serverInfo?.SystemId,
-    window.ApiClient?._serverInfo?.Id
+    localStorage.getItem("persist_server_id")
   );
   const serverBase = pickFirstString(
-    typeof window.ApiClient?.serverAddress === "function" ? window.ApiClient.serverAddress() : "",
+    typeof api?.serverAddress === "function" ? api.serverAddress() : "",
     localStorage.getItem("jf_serverAddress"),
     sessionStorage.getItem("jf_serverAddress")
   );
@@ -211,28 +230,42 @@ function readCredentialUserIdFromPayload(payload) {
   );
 }
 
-async function getUserIdSafe() {
-  const immediate = pickFirstString(
-    localStorage.getItem("userId"),
-    sessionStorage.getItem("userId"),
-    localStorage.getItem("jf_userId"),
-    sessionStorage.getItem("jf_userId"),
-    localStorage.getItem("persist_user_id"),
-    sessionStorage.getItem("persist_user_id"),
-    readCredentialUserIdFromPayload(readStoredJson("json-credentials")),
-    readCredentialUserIdFromPayload(readStoredJson("jellyfin_credentials")),
-    readCredentialUserIdFromPayload(readStoredJson("emby_credentials")),
-    typeof window.ApiClient?.getCurrentUserId === "function" ? window.ApiClient.getCurrentUserId() : "",
-    window.ApiClient?._currentUserId
-  );
-
-  if (immediate) {
-    return immediate;
+function getLiveUserIdSafe() {
+  const api = getApiClientSafe();
+  try {
+    return pickFirstString(
+      typeof api?.getCurrentUserId === "function" ? api.getCurrentUserId() : "",
+      api?._currentUserId,
+      api?._currentUser?.Id,
+      api?._serverInfo?.UserId
+    );
+  } catch {
+    return "";
   }
+}
+
+async function getUserIdSafe() {
+  const liveUserId = getLiveUserIdSafe();
+  if (liveUserId) return liveUserId;
 
   try {
-    const user = await window.ApiClient?.getCurrentUser?.();
-    return String(user?.Id || "").trim();
+    const user = await getApiClientSafe()?.getCurrentUser?.();
+    const resolvedUserId = pickFirstString(user?.Id, user?.UserId);
+    if (resolvedUserId) return resolvedUserId;
+  } catch {}
+
+  try {
+    return pickFirstString(
+      sessionStorage.getItem("userId"),
+      localStorage.getItem("userId"),
+      sessionStorage.getItem("jf_userId"),
+      localStorage.getItem("jf_userId"),
+      sessionStorage.getItem("persist_user_id"),
+      localStorage.getItem("persist_user_id"),
+      readCredentialUserIdFromPayload(readStoredJson("json-credentials")),
+      readCredentialUserIdFromPayload(readStoredJson("jellyfin_credentials")),
+      readCredentialUserIdFromPayload(readStoredJson("emby_credentials"))
+    );
   } catch {
     return "";
   }
@@ -410,4 +443,7 @@ if (typeof window !== "undefined" && !window.__jmsParentalPinPolicyCacheBound) {
       invalidateParentalPinPolicyCache();
     }
   });
+  if (typeof document !== "undefined") {
+    document.addEventListener("jms:auth-profile-changed", invalidateParentalPinPolicyCache);
+  }
 }

@@ -1,6 +1,6 @@
 import { getConfig } from "../config.js";
 import { compareSemver, fetchLatestGitHubVersion } from "../update.js";
-import { createCheckbox, createSection, createImageTypeSelect, bindCheckboxKontrol, bindTersCheckboxKontrol } from "../settings.js";
+import { createCheckbox, createSection, createImageTypeSelect, bindCheckboxKontrol, bindTersCheckboxKontrol } from "./shared.js";
 import { clearQualityBadgesCacheAndRefresh } from "../qualityBadges.js";
 
 export function createStatusRatingPanel(config, labels) {
@@ -344,18 +344,11 @@ export function createDescriptionPanel(config, labels) {
     subOptions.appendChild(hideIfSameWrapper);
 
     subOptions.appendChild(createCheckbox('showPlotInfo', labels.showPlotInfo || 'Konu Metni', config.showPlotInfo));
-
-    const plotOnlyDiv = document.createElement('div');
-    plotOnlyDiv.className = 'sub-options plot-sub-options';
-    plotOnlyDiv.id = 'showPlotOnlyLabel';
-    plotOnlyDiv.appendChild(createCheckbox('showbPlotInfo', labels.showbPlotInfo || 'Konu Başlığı', config.showbPlotInfo));
-    subOptions.appendChild(plotOnlyDiv);
     subOptions.appendChild(createCheckbox('showPlaybackProgress', labels.showPlaybackProgress || 'Oynatma İlerleme Çubuğu', config.showPlaybackProgress));
 
     section.appendChild(subOptions);
 
     bindCheckboxKontrol('#showDescriptions', '.desc-sub-options');
-    bindCheckboxKontrol('#showPlotInfo', '.plot-sub-options');
     bindCheckboxKontrol('#showOriginalTitleInfo', '.hide-original-if-same-wrapper');
 
     const description = document.createElement('div');

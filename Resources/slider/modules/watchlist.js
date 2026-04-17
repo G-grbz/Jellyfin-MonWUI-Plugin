@@ -497,6 +497,48 @@ function getFavoriteMirrorUserId() {
   return text(getCurrentUserContext().userId || getSessionInfo?.()?.userId);
 }
 
+async function setJellyfinFavoriteStatus(itemId, isFavorite, { signal } = {}) {
+  const userId = text(getFavoriteMirrorUserId());
+  if (!userId) {
+    const err = new Error("Kullanıcı oturumu bulunamadı.");
+    err.status = 401;
+    throw err;
+  }
+
+  const cleanItemId = text(itemId);
+  if (!cleanItemId) {
+    throw new Error("itemId gerekli");
+  }
+
+  return makeApiRequest(`/Users/${encodeURIComponent(userId)}/FavoriteItems/${encodeURIComponent(cleanItemId)}`, {
+    method: isFavorite ? "POST" : "DELETE",
+    signal,
+    __quiet: true
+  });
+}
+
+function shouldSyncJellyfinFavoriteFromWatchlist(options = {}) {
+  if (options?.syncJellyfinFavorite === true) return true;
+  if (options?.syncJellyfinFavorite === false) return false;
+  if (options?.__skipNativeFavoriteSync) return false;
+  if (options?.__favoriteMirror) return false;
+  if (options?.__startupImport) return false;
+  return true;
+}
+
+async function syncJellyfinFavoriteFromWatchlist(itemId, isFavorite, options = {}) {
+  if (!shouldSyncJellyfinFavoriteFromWatchlist(options)) {
+    return false;
+  }
+
+  const cleanItemId = text(itemId);
+  if (!cleanItemId) return false;
+
+  suppressFavoriteMirrorOnce(cleanItemId, isFavorite);
+  await setJellyfinFavoriteStatus(cleanItemId, isFavorite, { signal: options?.signal });
+  return true;
+}
+
 function extractRequestUrl(input) {
   if (!input) return "";
   if (typeof input === "string") return input;
@@ -971,19 +1013,32 @@ export async function addToWatchlist(itemId, options = {}) {
   const id = text(itemId);
   if (!id) throw new Error("itemId gerekli");
 
+  const syncedFavorite = await syncJellyfinFavoriteFromWatchlist(id, true, options);
+
   let item = options?.item || null;
   if (!item || text(item?.Id) !== id) {
     item = await fetchItemDetailsFull(id).catch(() => null);
   }
 
   const payload = snapshotFromItem(item, id);
-  const result = await requestWatchlist("/items", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload)
-  });
+  let result;
+  try {
+    result = await requestWatchlist("/items", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+  } catch (error) {
+    if (syncedFavorite) {
+      try {
+        suppressFavoriteMirrorOnce(id, false);
+        await setJellyfinFavoriteStatus(id, false, { signal: options?.signal });
+      } catch {}
+    }
+    throw error;
+  }
 
   mutateCacheAfterAdd(result?.item || payload);
   if (item) patchItemMembership(item);
@@ -995,9 +1050,22 @@ export async function removeFromWatchlist(itemId, options = {}) {
   const id = text(itemId);
   if (!id) throw new Error("itemId gerekli");
 
-  const result = await requestWatchlist(`/items/${encodeURIComponent(id)}`, {
-    method: "DELETE"
-  });
+  const syncedFavorite = await syncJellyfinFavoriteFromWatchlist(id, false, options);
+
+  let result;
+  try {
+    result = await requestWatchlist(`/items/${encodeURIComponent(id)}`, {
+      method: "DELETE"
+    });
+  } catch (error) {
+    if (syncedFavorite) {
+      try {
+        suppressFavoriteMirrorOnce(id, true);
+        await setJellyfinFavoriteStatus(id, true, { signal: options?.signal });
+      } catch {}
+    }
+    throw error;
+  }
 
   mutateCacheAfterRemove(id);
   if (options?.item) patchItemMembership(options.item);
@@ -1259,7 +1327,7 @@ async function processAutoRemovalTasks(tasks = []) {
             if (shouldAutoRemovePlayedFromFavorites()) {
               await updateFavoriteStatus(task.itemId, false);
             } else {
-              await removeFromWatchlist(task.itemId);
+              await removeFromWatchlist(task.itemId, { syncJellyfinFavorite: false });
             }
           }
         } catch {} finally {

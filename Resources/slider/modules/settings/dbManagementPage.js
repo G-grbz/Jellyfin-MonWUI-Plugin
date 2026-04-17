@@ -1,4 +1,4 @@
-import { createSection } from "../settings.js";
+import { createSection } from "./shared.js";
 import { showNotification } from "../player/ui/notification.js";
 
 const RELEASE_WAIT_MS = 120;

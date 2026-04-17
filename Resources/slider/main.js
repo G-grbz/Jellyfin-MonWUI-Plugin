@@ -12,7 +12,7 @@ import { ensureProgressBarExists, resetProgressBar, pauseProgressBar, resumeProg
 import { createSlide } from "./modules/slideCreator.js";
 import { changeSlide, createDotNavigation, enablePeakNeighborActivation, getPeakDisplayOptions, initSwipeEvents, primePeakFirstPaint, syncPeakStructureNow, updatePeakClasses } from "./modules/navigation.js";
 import { attachMouseEvents } from "./modules/events.js";
-import { fetchItemDetails as fetchItemDetailsNet, getSessionInfo, getAuthHeader, waitForAuthReadyStrict, isAuthReadyStrict } from "/Plugins/JMSFusion/runtime/api.js";
+import { fetchItemDetails as fetchItemDetailsNet, getSessionInfo, getAuthHeader, waitForAuthReadyStrict, isAuthReadyStrict, AUTH_PROFILE_CHANGED_EVENT } from "/Plugins/JMSFusion/runtime/api.js";
 import { cachedFetchJson, createCachedItemDetailsFetcher, startLibraryDeltaWatcher } from "./modules/sliderCache.js";
 import { forceHomeSectionsTop, forceSkinHeaderPointerEvents } from "./modules/positionOverrides.js";
 import { initAvatarSystem } from "./modules/userAvatar.js";
@@ -46,6 +46,7 @@ const CUSTOM_SPLASH_PROGRESS_KEY = "__JMS_CUSTOM_SPLASH_PROGRESS__";
 const CUSTOM_SPLASH_TIMEOUT_MS = 12_000;
 const CUSTOM_SPLASH_CLEANUP_MS = 420;
 const CUSTOM_SPLASH_EXIT_SYNC_MS = 120;
+const AUTH_CONTEXT_REBOOT_DEBOUNCE_MS = 180;
 let materialIconsRepairPromise = null;
 let __detailsModalLoaderPromise = null;
 let __hoverTrailerModulePromise = null;
@@ -57,6 +58,8 @@ let __customSplashObserver = null;
 let __customSplashCleanupTimer = 0;
 let __customSplashHideTimer = 0;
 let __customSplashHardTimer = 0;
+let __authContextRecoveryTimer = 0;
+let __lastRecoveredAuthContextKey = "";
 const __customSplashProgressState = {
   authReady: false,
   dataPoolReady: false,
@@ -2274,7 +2277,7 @@ window.__jmsIndexerAutoStartTimer = window.__jmsIndexerAutoStartTimer || null;
 window.__jmsIndexerAutoStartReady = window.__jmsIndexerAutoStartReady || false;
 window.__jmsIndexerAutoStartPending = window.__jmsIndexerAutoStartPending || false;
 
-function fullSliderReset() {
+function fullSliderReset({ preserveHomeSections = true } = {}) {
   try { teardownAnimations(); } catch {}
   forceSkinHeaderPointerEvents();
   forceHomeSectionsTop();
@@ -2294,7 +2297,10 @@ function fullSliderReset() {
 
   setCurrentIndex(0);
   stopSlideTimer();
-  cleanupSlider({ preserveHomeSections: true });
+  try { window.__cleanupActiveWatch?.(); } catch {}
+  window.__cleanupActiveWatch = null;
+  clearQueuedHomeSectionsBoot();
+  cleanupSlider({ preserveHomeSections });
   clearCycleArm();
   try { window.__peakBooting = true; } catch {}
   window.__jmsFirstSlideReady = false;
@@ -3748,6 +3754,14 @@ function setupNavigationObserver() {
 let homeSectionsBootTimer = 0;
 let homeSectionsBootSeq = 0;
 
+function clearQueuedHomeSectionsBoot() {
+  if (homeSectionsBootTimer) {
+    clearTimeout(homeSectionsBootTimer);
+    homeSectionsBootTimer = 0;
+  }
+  homeSectionsBootSeq += 1;
+}
+
 function queueHomeSectionsBoot({
   delayMs = 0,
   eagerStudioHubs = false,
@@ -3886,6 +3900,7 @@ function cleanupSlider({ preserveHomeSections = false } = {}) {
   try { teardownAnimations(); } catch {}
   clearHomeSectionMountTimers();
   homeSectionMountSeq += 1;
+  clearQueuedHomeSectionsBoot();
   if (!preserveHomeSections) {
     void cleanupRecentRowsLazy();
     void cleanupDirectorRowsLazy();
@@ -3905,6 +3920,13 @@ function cleanupSlider({ preserveHomeSections = false } = {}) {
     window.mySlider = {};
   }
 
+  try { resetProgressBar?.(); } catch {}
+  try {
+    document
+      .querySelectorAll(".monwui-dot-navigation-container, .monwui-slide-progress-seconds")
+      .forEach((node) => node.remove());
+  } catch {}
+
   const host =
     document.querySelector("#indexPage:not(.hide)") ||
     document.querySelector("#homePage:not(.hide)");
@@ -3922,6 +3944,64 @@ function cleanupSlider({ preserveHomeSections = false } = {}) {
       sliderContainer.remove();
     }
   }
+}
+
+function getAuthContextRecoveryKey(profile = {}) {
+  const serverId = String(profile?.serverId || "").trim();
+  const serverBase = String(profile?.serverBase || "").trim().replace(/\/+$/, "");
+  const userId = String(profile?.userId || "").trim();
+  return [serverId, serverBase, userId].join("|");
+}
+
+function bootHomeAfterAuthContextReset() {
+  window.__initOnHomeOnce = false;
+  initializeSliderOnHome({ forceManagedSectionsBoot: true });
+}
+
+function scheduleAuthContextRecovery(detail = {}) {
+  if (!detail?.serverChanged && !detail?.userChanged) return;
+
+  const nextKey =
+    getAuthContextRecoveryKey(detail.next) ||
+    getAuthContextRecoveryKey(detail.prev);
+
+  if (nextKey && nextKey === __lastRecoveredAuthContextKey) return;
+  if (nextKey) __lastRecoveredAuthContextKey = nextKey;
+
+  if (__authContextRecoveryTimer) {
+    clearTimeout(__authContextRecoveryTimer);
+    __authContextRecoveryTimer = 0;
+  }
+
+  __authContextRecoveryTimer = window.setTimeout(async () => {
+    __authContextRecoveryTimer = 0;
+    console.log("[jms] Auth context degisti -> slider yeniden hazirlaniyor", detail);
+
+    try { fullSliderReset({ preserveHomeSections: false }); } catch {}
+    window.__initOnHomeOnce = false;
+
+    if (!(isHomeVisible() || isHomeRouteActive())) return;
+
+    const visible = await waitForVisibleIndexPage(12000);
+    if (visible) {
+      bootHomeAfterAuthContextReset();
+      return;
+    }
+
+    const stop = observeWhenHomeReady(() => {
+      bootHomeAfterAuthContextReset();
+      stop();
+    }, 20000);
+  }, AUTH_CONTEXT_REBOOT_DEBOUNCE_MS);
+}
+
+function installAuthContextRecovery() {
+  if (window.__jmsAuthContextRecoveryInstalled) return;
+  window.__jmsAuthContextRecoveryInstalled = true;
+
+  document.addEventListener(AUTH_PROFILE_CHANGED_EVENT, (event) => {
+    scheduleAuthContextRecovery(event?.detail || {});
+  }, true);
 }
 
 function observeWhenHomeReady(cb, maxMs = 20000) {
@@ -4227,6 +4307,7 @@ function observeWhenHomeReady(cb, maxMs = 20000) {
     });
 
     setupNavigationObserver();
+    installAuthContextRecovery();
     installHomeTabSliderOnlyGate();
     idle(() => {
       if (shouldRenderStudioHubsUi(getMainConfig())) {

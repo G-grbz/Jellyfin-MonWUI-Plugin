@@ -7,7 +7,7 @@ import {
   unlockParentalPinUser
 } from "../parentalPinApi.js";
 import { formatThresholdLabel, PARENTAL_PIN_THRESHOLDS } from "../parentalPinShared.js";
-import { createSection } from "../settings.js";
+import { createSection } from "./shared.js";
 
 const PIN_THRESHOLD_OPTIONS = [0, ...PARENTAL_PIN_THRESHOLDS];
 

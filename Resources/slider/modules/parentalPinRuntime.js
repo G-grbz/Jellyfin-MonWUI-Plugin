@@ -14,17 +14,9 @@ import { showNotification } from "./player/ui/notification.js";
 
 const STYLE_ID = "jms-parental-pin-style";
 const NATIVE_PLAY_CONTEXT_TTL_MS = 20_000;
-const NATIVE_PLAY_ACTION_TEXTS = new Set([
+const NATIVE_PLAY_ACTIONS = new Set([
   "play",
-  "resume",
-  "play now",
-  "watch now",
-  "continue",
-  "continue watching",
-  "oynat",
-  "simdi oynat",
-  "devam et",
-  "izlemeye devam et"
+  "resume"
 ]);
 const NATIVE_PLAY_ICON_TEXTS = new Set([
   "play_arrow",
@@ -34,18 +26,56 @@ const NATIVE_PLAY_ICON_TEXTS = new Set([
   "smart_display",
   "replay"
 ]);
-const NATIVE_MENU_ACTION_TEXTS = new Set([
+const NATIVE_NON_PLAY_ACTIONS = new Set([
+  "favorite",
+  "favourite",
+  "unfavorite",
+  "unfavourite",
+  "like",
+  "rating",
+  "rate",
+  "userrating",
+  "watchlist",
+  "playlist",
+  "queue",
+  "download",
+  "share",
+  "markplayed",
+  "markunplayed",
+  "watched",
+  "unwatched"
+]);
+const NATIVE_NON_PLAY_ICON_TEXTS = new Set([
+  "favorite",
+  "favorite_border",
+  "favorite_outline",
+  "heart_plus",
+  "heart_minus",
+  "heart_check",
+  "star",
+  "star_border",
+  "star_outline",
+  "grade",
+  "thumb_up",
+  "thumb_up_off_alt",
+  "playlist_add",
+  "playlist_add_check",
+  "queue_music",
+  "download",
+  "download_for_offline",
+  "share",
+  "ios_share",
+  "library_add",
+  "library_add_check",
+  "bookmark",
+  "bookmark_border"
+]);
+const NATIVE_MENU_ACTIONS = new Set([
   "more",
-  "more options",
-  "more actions",
   "options",
   "menu",
-  "details",
-  "details menu",
-  "secenekler",
-  "daha fazla",
-  "daha fazla secenek",
-  "menuyu ac"
+  "detailsmenu",
+  "contextmenu"
 ]);
 const NATIVE_MENU_ICON_TEXTS = new Set([
   "more_vert",
@@ -740,6 +770,17 @@ function normalizeActionText(value) {
     .trim();
 }
 
+function isReservedNativeActionToken(value) {
+  const normalized = normalizeActionText(value);
+  if (!normalized) return false;
+
+  return (
+    NATIVE_PLAY_ACTIONS.has(normalized) ||
+    NATIVE_NON_PLAY_ACTIONS.has(normalized.replace(/\s+/g, "")) ||
+    NATIVE_MENU_ACTIONS.has(normalized.replace(/\s+/g, ""))
+  );
+}
+
 function rememberNativePlayContext(itemId) {
   const normalized = String(itemId || "").trim();
   if (!normalized) return "";
@@ -780,39 +821,6 @@ function collectEventElements(event) {
   return out;
 }
 
-function collectNativePlayTextCandidates(element) {
-  if (!element) return [];
-
-  const isMenuLikeEntry =
-    isActionSheetElement(element) ||
-    /^menuitem/i.test(String(element.getAttribute?.("role") || "")) ||
-    /\b(actionSheet|actionsheetListItemBody|actionSheetItem|actionSheetMenuItem)\b/i.test(String(element.className || ""));
-
-  const values = [
-    element.getAttribute?.("data-action"),
-    element.dataset?.action,
-    element.getAttribute?.("title"),
-    element.getAttribute?.("aria-label"),
-    element.getAttribute?.("data-title"),
-    element.dataset?.title
-  ];
-
-  if (isMenuLikeEntry) {
-    values.push(
-      element.querySelector?.(".actionSheetItemText")?.textContent,
-      element.querySelector?.(".listItemBodyText")?.textContent,
-      element.querySelector?.(".buttonText")?.textContent,
-      element.textContent
-    );
-  }
-
-  return [...new Set(values.map(normalizeActionText).filter(Boolean))];
-}
-
-function hasNativePlayActionLabel(element) {
-  return collectNativePlayTextCandidates(element).some((text) => NATIVE_PLAY_ACTION_TEXTS.has(text));
-}
-
 function hasNativePlayIcon(element) {
   if (!element) return false;
 
@@ -836,8 +844,27 @@ function hasNativePlayIcon(element) {
   return /\b(play_arrow|play_circle|play-circle|fa-play|fa-circle-play|fa-play-circle)\b/i.test(classBlob);
 }
 
-function hasMenuLauncherLabel(element) {
-  return collectNativePlayTextCandidates(element).some((text) => NATIVE_MENU_ACTION_TEXTS.has(text));
+function hasExplicitNonPlayIcon(element) {
+  if (!element) return false;
+
+  const iconTexts = [
+    element.getAttribute?.("icon"),
+    element.dataset?.icon,
+    element.querySelector?.(".material-icons, .md-icon, .cardOverlayButtonIcon")?.textContent
+  ]
+    .map(normalizeActionText)
+    .filter(Boolean);
+
+  if (iconTexts.some((text) => NATIVE_NON_PLAY_ICON_TEXTS.has(text))) {
+    return true;
+  }
+
+  const classBlob = [
+    String(element.className || ""),
+    String(element.querySelector?.(".material-icons, .md-icon, .cardOverlayButtonIcon")?.className || "")
+  ].join(" ");
+
+  return /\b(fa-heart|fa-star|fa-bookmark|fa-download|fa-share|favorite|favorite_border|star_border|playlist_add|queue_music)\b/i.test(classBlob);
 }
 
 function hasMenuLauncherIcon(element) {
@@ -870,13 +897,34 @@ function isMenuLauncherElement(element) {
     element.getAttribute?.("data-action") ||
     element.dataset?.action ||
     ""
-  );
+  ).replace(/\s+/g, "");
 
-  if (action && /^(menu|more|options|detailsmenu|contextmenu)$/.test(action.replace(/\s+/g, ""))) {
+  if (action && NATIVE_MENU_ACTIONS.has(action)) {
     return true;
   }
 
-  return hasMenuLauncherLabel(element) || hasMenuLauncherIcon(element);
+  return hasMenuLauncherIcon(element);
+}
+
+function isExplicitlyNonPlayActionElement(element) {
+  if (!element) return false;
+
+  const action = normalizeActionText(
+    element.getAttribute?.("data-action") ||
+    element.dataset?.action ||
+    ""
+  ).replace(/\s+/g, "");
+
+  if (action && (NATIVE_NON_PLAY_ACTIONS.has(action) || NATIVE_MENU_ACTIONS.has(action))) {
+    return true;
+  }
+
+  const className = String(element.className || "");
+  if (/\b(btnFavorite|btnUserRating|btnPlaylist|btnDownload|btnShare|btnShuffle|btnMenu)\b/i.test(className)) {
+    return true;
+  }
+
+  return hasExplicitNonPlayIcon(element) || isMenuLauncherElement(element);
 }
 
 function isLikelyInteractiveActionElement(element) {
@@ -911,29 +959,32 @@ function resolveMenuLauncherElement(target) {
   return target?.closest?.([
     "[data-action=\"menu\"]",
     "[data-action=\"more\"]",
+    "[data-action=\"options\"]",
     ".cardOverlayButton[data-action=\"menu\"]",
-    ".cardOverlayButton[title=\"Diğer\"]",
-    ".cardOverlayButton[title=\"Diger\"]",
-    ".cardOverlayButton[title=\"More\"]",
-    ".cardOverlayButton[title=\"Other\"]",
-    ".paper-icon-button-light[data-action=\"menu\"]",
-    ".paper-icon-button-light[title=\"Diğer\"]",
-    ".paper-icon-button-light[title=\"Diger\"]",
-    ".paper-icon-button-light[title=\"More\"]",
-    ".paper-icon-button-light[title=\"Other\"]"
+    ".paper-icon-button-light[data-action=\"menu\"]"
   ].join(", ")) || null;
 }
 
 function isNativePlayActionElement(element) {
   if (!element) return false;
-  const action = String(element.getAttribute?.("data-action") || element.dataset?.action || "").toLowerCase();
+  const action = normalizeActionText(
+    element.getAttribute?.("data-action") ||
+    element.dataset?.action ||
+    ""
+  );
+  const dataId = normalizeActionText(
+    element.getAttribute?.("data-id") ||
+    element.dataset?.id ||
+    ""
+  );
   const className = String(element.className || "");
-  if (isMenuLauncherElement(element)) {
+  if (isMenuLauncherElement(element) || isExplicitlyNonPlayActionElement(element)) {
     return false;
   }
+
   if (
-    action === "play" ||
-    action === "resume" ||
+    NATIVE_PLAY_ACTIONS.has(action) ||
+    NATIVE_PLAY_ACTIONS.has(dataId) ||
     /\bbtnPlay\b/.test(className) ||
     /\bbtnResume\b/.test(className)
   ) {
@@ -944,11 +995,13 @@ function isNativePlayActionElement(element) {
     return false;
   }
 
-  if (hasNativePlayActionLabel(element)) {
-    return true;
-  }
-
-  return /\b(cardOverlayButton|itemAction|paper-icon-button-light)\b/i.test(className) && hasNativePlayIcon(element);
+  return (
+    hasNativePlayIcon(element) &&
+    (
+      isActionSheetElement(element) ||
+      /\b(cardOverlayButton|itemAction|paper-icon-button-light|listItem|actionSheetMenuItem)\b/i.test(className)
+    )
+  );
 }
 
 function shouldIgnoreNativePlayInterception(element) {
@@ -968,28 +1021,33 @@ function shouldIgnoreNativePlayInterception(element) {
 }
 
 function resolveNativePlayButton(target) {
-  const element = target?.closest?.([
-    ".itemAction",
-    "[data-action=\"play\"]",
-    "[data-action=\"resume\"]",
-    ".btnPlay",
-    ".btnResume",
-    ".cardOverlayButton",
-    ".actionSheetMenuItem",
-    ".actionSheetItem",
-    ".actionsheetListItemBody",
-    ".actionSheet .listItem",
-    ".actionSheetMenu .listItem",
-    ".actionSheetContainer .listItem",
-    ".actionSheetDialog .listItem",
-    "[role=\"menuitem\"]"
-  ].join(", "));
+  const candidates = [
+    target,
+    target?.closest?.([
+      ".itemAction",
+      "[data-action=\"play\"]",
+      "[data-action=\"resume\"]",
+      ".btnPlay",
+      ".btnResume",
+      ".actionSheetMenuItem",
+      ".actionSheetItem",
+      ".actionSheet .listItem",
+      ".actionSheetMenu .listItem",
+      ".actionSheetContainer .listItem",
+      ".actionSheetDialog .listItem",
+      "[role=\"menuitem\"]",
+      "[role=\"menuitemradio\"]"
+    ].join(", ")),
+    target?.closest?.(".actionsheetListItemBody")
+  ].filter(Boolean);
 
-  if (!element || !isNativePlayActionElement(element) || shouldIgnoreNativePlayInterception(element)) {
-    return null;
+  for (const element of candidates) {
+    if (isNativePlayActionElement(element) && !shouldIgnoreNativePlayInterception(element)) {
+      return element;
+    }
   }
 
-  return element;
+  return null;
 }
 
 function resolveNativePlayButtonFromEvent(event) {
@@ -997,9 +1055,18 @@ function resolveNativePlayButtonFromEvent(event) {
     if (resolveMenuLauncherElement(element)) {
       return null;
     }
+
+    if (isExplicitlyNonPlayActionElement(element)) {
+      return null;
+    }
+
     const button = resolveNativePlayButton(element);
     if (button) {
       return button;
+    }
+
+    if (isLikelyInteractiveActionElement(element)) {
+      return null;
     }
   }
 
@@ -1019,7 +1086,7 @@ function extractItemIdFromElement(
   const candidates = [];
   const pushCandidate = (value) => {
     const normalized = String(value || "").trim();
-    if (!normalized) return;
+    if (!normalized || isReservedNativeActionToken(normalized)) return;
     candidates.push(normalized);
   };
 
@@ -1141,11 +1208,6 @@ function installNativePlayInterceptor() {
 
   document.addEventListener("click", (event) => {
     if (!event.isTrusted) return;
-
-    if (resolveMenuLauncherElement(event.target)) {
-      rememberNativePlayContextFromEvent(event);
-      return;
-    }
 
     rememberNativePlayContextFromEvent(event);
 

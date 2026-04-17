@@ -1,5 +1,5 @@
 import { getConfig } from "../config.js";
-import { createCheckbox, createSection } from "../settings.js";
+import { createCheckbox, createSection } from "./shared.js";
 import { applySettings } from "./applySettings.js";
 
 const config = getConfig();

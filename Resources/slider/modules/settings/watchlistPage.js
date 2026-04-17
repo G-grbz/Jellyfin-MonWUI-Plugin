@@ -1,4 +1,4 @@
-import { bindCheckboxKontrol, createCheckbox, createSection } from "../settings.js";
+import { bindCheckboxKontrol, createCheckbox, createSection } from "./shared.js";
 
 export function createWatchlistPanel(config, labels) {
     const panel = document.createElement("div");

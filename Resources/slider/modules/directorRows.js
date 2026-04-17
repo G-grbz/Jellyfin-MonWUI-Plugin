@@ -1060,10 +1060,68 @@ function getPlaybackPercent(item) {
   return clamp01(pos / durTicks);
 }
 
+function queueEnterAnimation(el) {
+  if (!el) return el;
+  el.classList.add('is-entering');
+  const clear = () => {
+    try { el.classList.remove('is-entering'); } catch {}
+  };
+  try {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(clear);
+    });
+  } catch {
+    setTimeout(clear, 34);
+  }
+  return el;
+}
+
+function clearDirectorHeroHost(heroHost) {
+  if (!heroHost) return;
+  try {
+    heroHost.querySelectorAll('.dir-row-hero').forEach((el) => {
+      try { el.dispatchEvent(new Event('jms:cleanup')); } catch {}
+    });
+  } catch {}
+  heroHost.innerHTML = '';
+  try { heroHost.style.visibility = 'hidden'; } catch {}
+}
+
+function mountDirectorHero(heroHost, heroItem, serverId, directorName, { aboveFold = false } = {}) {
+  const heroItemId = resolveItemId(heroItem);
+  if (!heroHost || !heroItemId) return { hero: null, changed: false };
+
+  const existing = heroHost.querySelector('.dir-row-hero');
+  const same = existing && existing.dataset.itemId === String(heroItemId);
+
+  if (same) {
+    const label = existing.querySelector('.dir-row-hero-label');
+    if (label) {
+      label.textContent = `${(config.languageLabels?.yonetmen || "yönetmen")} ${directorName || ""}`.trim();
+    }
+    try { heroHost.style.visibility = 'visible'; } catch {}
+    return { hero: existing, changed: false };
+  }
+
+  if (existing) {
+    clearDirectorHeroHost(heroHost);
+  }
+
+  const hero = createDirectorHeroCard(heroItem, serverId, directorName, { aboveFold });
+  hero.classList.add('is-entering');
+  heroHost.appendChild(hero);
+  try { heroHost.style.visibility = 'visible'; } catch {}
+  requestAnimationFrame(() => {
+    try { hero.classList.remove('is-entering'); } catch {}
+  });
+  return { hero, changed: true };
+}
+
 function createRecommendationCard(item, serverId, aboveFold = false) {
   const { itemId, itemName } = primeItemIdentity(item);
   const card = document.createElement("div");
   card.className = "card personal-recs-card";
+  queueEnterAnimation(card);
   if (itemId) card.dataset.itemId = itemId;
 
   const posterUrlHQ = buildPosterUrlHQ(item);
@@ -1199,7 +1257,7 @@ function isHomeRoute() {
   return h.startsWith('#/home') || h.startsWith('#/index') || h === '' || h === '#';
 }
 
-function createDirectorHeroCard(item, serverId, directorName) {
+function createDirectorHeroCard(item, serverId, directorName, { aboveFold = false } = {}) {
   const { itemId, itemName } = primeItemIdentity(item);
   const hero = document.createElement('div');
   hero.className = 'dir-row-hero';
@@ -1237,7 +1295,11 @@ function createDirectorHeroCard(item, serverId, directorName) {
 
   hero.innerHTML = `
     <div class="dir-row-hero-bg-wrap">
-      <img class="dir-row-hero-bg" alt="${escapeHtml(itemName)}" loading="lazy" decoding="async">
+      <img class="dir-row-hero-bg"
+           alt="${escapeHtml(itemName)}"
+           decoding="async"
+           loading="${aboveFold ? 'eager' : 'lazy'}"
+           ${aboveFold ? 'fetchpriority="high"' : ''}>
     </div>
 
     <div class="dir-row-hero-inner">
@@ -1294,7 +1356,7 @@ function createDirectorHeroCard(item, serverId, directorName) {
       if (bgHQ || bgLQ) {
         hydrateBlurUp(bgImg, {
           lqSrc: bgLQ,
-          hqSrc: bgHQ,
+          hqSrc: bgHQ || PLACEHOLDER_URL,
           hqSrcset: "",
           fallback: PLACEHOLDER_URL
         });
@@ -1307,38 +1369,7 @@ function createDirectorHeroCard(item, serverId, directorName) {
     dirRowsWarn("dir-row-hero-bg hydrate failed:", e);
   }
 
-  const cleanupLazyHeroTrailer = scheduleLazyDirectorWork(hero, () => {
-    try {
-      const backdropImg = hero.querySelector('.dir-row-hero-bg');
-      const heroInner = hero.querySelector('.dir-row-hero-inner');
-      const RemoteTrailers =
-        item.RemoteTrailers ||
-        item.RemoteTrailerItems ||
-        item.RemoteTrailerUrls ||
-        [];
-
-      createTrailerIframe({
-        config,
-        RemoteTrailers,
-        slide: hero,
-        backdropImg,
-        extraHoverTargets: [heroInner],
-        itemId,
-        serverId,
-        detailsUrl: itemId ? getDetailsUrl(itemId, serverId) : "#",
-        detailsText: (config.languageLabels?.details || labels.details || "Ayrıntılar"),
-        showDetailsOverlay: false,
-      });
-    } catch (err) {
-      console.error("Director hero için createTrailerIframe hata:", err);
-    }
-  }, {
-    eager: !IS_MOBILE,
-    timeout: IS_MOBILE ? 900 : 420,
-  });
-
   hero.addEventListener('jms:cleanup', () => {
-    try { cleanupLazyHeroTrailer(); } catch {}
     try {
       const bgImg = hero.querySelector('.dir-row-hero-bg');
       if (bgImg) unobserveImage(bgImg);
@@ -2832,6 +2863,7 @@ function renderDirectorSection(dir, { deferContent = false } = {}) {
   const heroHost = document.createElement('div');
   heroHost.className = 'dir-row-hero-host';
   heroHost.style.display = SHOW_DIRECTOR_ROWS_HERO_CARDS ? '' : 'none';
+  heroHost.style.visibility = 'hidden';
 
   const btnL = document.createElement('button');
   btnL.className = 'hub-scroll-btn hub-scroll-left';
@@ -2990,8 +3022,8 @@ async function fillRowWhenReady(row, dir, heroHost){
       cleanupDirectorRowsMount(row);
       row.innerHTML = `<div class="no-recommendations">${(config.languageLabels?.noRecommendations) || (labels.noRecommendations || "Uygun içerik yok")}</div>`;
       if (heroHost) {
-        cleanupDirectorRowsMount(heroHost);
-        heroHost.innerHTML = "";
+        heroHost.style.display = SHOW_DIRECTOR_ROWS_HERO_CARDS ? '' : 'none';
+        clearDirectorHeroHost(heroHost);
       }
       setupScroller(row);
       return;
@@ -3002,10 +3034,33 @@ async function fillRowWhenReady(row, dir, heroHost){
     const remaining = best ? pool.filter(x => x?.Id !== best.Id) : pool;
 
     if (heroHost) {
-      cleanupDirectorRowsMount(heroHost);
-      heroHost.innerHTML = "";
-      if (SHOW_DIRECTOR_ROWS_HERO_CARDS && best) {
-        heroHost.appendChild(createDirectorHeroCard(best, STATE.serverId, dir.Name));
+      const showHero = SHOW_DIRECTOR_ROWS_HERO_CARDS;
+      heroHost.style.display = showHero ? '' : 'none';
+      if (!showHero || !best) {
+        clearDirectorHeroHost(heroHost);
+      } else {
+        const { hero: heroEl, changed } = mountDirectorHero(heroHost, best, STATE.serverId, dir.Name);
+        try {
+          const backdropImg = heroEl?.querySelector?.('.dir-row-hero-bg');
+          const RemoteTrailers =
+            best.RemoteTrailers ||
+            best.RemoteTrailerItems ||
+            best.RemoteTrailerUrls ||
+            [];
+          if (heroEl && (changed || !heroEl.querySelector('.intro-video-container'))) {
+            createTrailerIframe({
+              config,
+              RemoteTrailers,
+              slide: heroEl,
+              backdropImg,
+              itemId: best.Id,
+              serverId: STATE.serverId,
+              detailsUrl: getDetailsUrl(best.Id, STATE.serverId),
+              detailsText: (config.languageLabels?.details || labels.details || "Ayrıntılar"),
+              showDetailsOverlay: false,
+            });
+          }
+        } catch {}
       }
     }
 

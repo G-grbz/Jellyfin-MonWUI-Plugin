@@ -529,7 +529,6 @@ export const languageLabels = {
   log: "Registro en Vivo",
   clean: "Limpiar",
   adminRequired: "Se requieren privilegios de administrador para esta operación",
-  noteDescription: "Solo funciona cuando se instala mediante el método de plugin y requiere que las herramientas necesarias (curl, jq, y para trailers.sh: yt-dlp y ffmpeg) estén instaladas",
   hideSecret: "Ocultar",
   showSecret: "Mostrar",
   settingsReadOnly: "Los usuarios no administradores no pueden cambiar la configuración",
@@ -1336,7 +1335,6 @@ export const languageLabels = {
   buttonBackgroundImageType: "Imagen de Fondo del Botón",
   showInfo: "Mostrar Información de Género, Año y País",
   showGenresInfo: "Género",
-  showbPlotInfo: "Título del Argumento",
   sliderbackgroundsettings: "Configuración del Fondo del Slider",
   manualBackdropSelection: "Cambiar Fondo de Diapositiva",
   slideBackgroundImageType: "Tipo de Imagen de Fondo del Slider",
@@ -1629,7 +1627,6 @@ export const languageLabels = {
   dizi: "Serie",
   boxset: "Colección",
   izlendi: "Visto",
-  konu: "Argumento: ",
   izlenmedi: "No Visto",
   sure: "Duración",
   sa: "h",
@@ -2032,6 +2029,7 @@ export const languageLabels = {
     heroRootLabel: "Ruta Web UI",
     tabs: {
       jmsfusion: "JMSFusion",
+      monwuiSettings: "Ajustes de MonWUI",
       status: "Estado",
       snippet: "HTML Snippet, ruta web y permisos"
     },
@@ -2044,6 +2042,7 @@ export const languageLabels = {
       statusBody: "Verificacion rapida del estado de configuracion, la ruta del player y el fallback de recursos embebidos.",
       inMemoryTitle: "Inyeccion en memoria",
       inMemoryBody: "Comprueba si index.html se reescribe en tiempo de respuesta sin tocar los archivos en disco.",
+      monwuiSettingsTitle: "Ajustes de MonWUI",
       snippetTitle: "HTML Snippet",
       snippetBody: "El snippet exacto que JMSFusion inyecta en Jellyfin Web.",
       envTitle: "Ruta web y permisos",
@@ -2061,6 +2060,7 @@ export const languageLabels = {
     actions: {
       save: "Guardar",
       publishGlobal: "Publicar ajustes de administrador globalmente",
+      reloadMonwuiSettings: "Recargar ajustes de MonWUI",
       refreshEnv: "Actualizar ruta web y permisos",
       copyAcl: "Copiar comandos de permisos",
       patch: "Aplicar patch a index.html",
@@ -2077,6 +2077,8 @@ export const languageLabels = {
       publishDone: "Los ajustes globales se publicaron correctamente.",
       statusPending: "El estado aun no se ha cargado.",
       snippetPending: "El snippet aun no se ha cargado.",
+      monwuiSettingsLoading: "Se estan cargando los ajustes de MonWUI...",
+      monwuiSettingsLoadFailed: "No se pudieron cargar los ajustes de MonWUI.",
       inMemoryChecking: "Comprobando la inyeccion en memoria...",
       envPending: "(aun no calculado)"
     },

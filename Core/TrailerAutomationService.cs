@@ -40,6 +40,7 @@ public sealed class TrailerAutomationService
     private const long MinFreeMb = 1024;
     private const string YtDlpLatestReleaseApi = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest";
     private const string DenoLatestReleaseApi = "https://api.github.com/repos/denoland/deno/releases/latest";
+    private const string JellyfinFfmpegLatestReleaseApi = "https://api.github.com/repos/jellyfin/jellyfin-ffmpeg/releases/latest";
 
     private static readonly HttpClient Http = CreateHttpClient();
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -242,17 +243,7 @@ public sealed class TrailerAutomationService
 
     public bool HasCommand(string commandName)
     {
-        if (string.Equals(commandName, "yt-dlp", StringComparison.OrdinalIgnoreCase))
-        {
-            return !string.IsNullOrWhiteSpace(GetManagedToolPath("yt-dlp")) || CommandExists("yt-dlp");
-        }
-
-        if (string.Equals(commandName, "deno", StringComparison.OrdinalIgnoreCase))
-        {
-            return !string.IsNullOrWhiteSpace(GetManagedToolPath("deno")) || CommandExists("deno");
-        }
-
-        return CommandExists(commandName);
+        return !string.IsNullOrWhiteSpace(ResolveCommandPath(commandName));
     }
 
     public void StartBackgroundToolBootstrap()
@@ -305,8 +296,15 @@ public sealed class TrailerAutomationService
 
         var ytDlpCommand = tools.YtDlp.InstallPath;
         var jsRuntimeArg = $"deno:{tools.Deno.InstallPath}";
+        var ffmpegCommand = ResolveCommandPath("ffmpeg");
+        var ffprobeCommand = ResolveCommandPath("ffprobe");
+        var hasFfprobe = !string.IsNullOrWhiteSpace(ffprobeCommand);
 
-        var hasFfprobe = CommandExists("ffprobe");
+        if (string.IsNullOrWhiteSpace(ffmpegCommand))
+        {
+            logger.Err("Uyarı: ffmpeg yok; yt-dlp progressive mp4 fallback ile denenecek.");
+        }
+
         if (!hasFfprobe)
         {
             logger.Err("Uyarı: ffprobe yok; süre/boyut kontrolleri sınırlı olur.");
@@ -378,7 +376,8 @@ public sealed class TrailerAutomationService
                         ytDlpCommand,
                         jsRuntimeArg,
                         overwritePolicy,
-                        hasFfprobe,
+                        ffmpegCommand,
+                        ffprobeCommand,
                         seenDirs,
                         handledDirs,
                         seriesTmdbCache,
@@ -557,7 +556,8 @@ public sealed class TrailerAutomationService
         string ytDlpCommand,
         string jsRuntimeArg,
         string overwritePolicy,
-        bool hasFfprobe,
+        string? ffmpegCommand,
+        string? ffprobeCommand,
         ConcurrentDictionary<string, byte> seenDirs,
         ConcurrentDictionary<string, byte> handledDirs,
         ConcurrentDictionary<string, string?> seriesTmdbCache,
@@ -566,6 +566,7 @@ public sealed class TrailerAutomationService
         ConcurrentDictionary<string, IReadOnlyList<TrailerCandidate>> trailerCache,
         CancellationToken ct)
     {
+        var hasFfprobe = !string.IsNullOrWhiteSpace(ffprobeCommand);
         var itemId = item.Id ?? string.Empty;
         var itemType = item.Type ?? string.Empty;
         var name = item.Name ?? "(adsiz)";
@@ -667,7 +668,7 @@ public sealed class TrailerAutomationService
             return DownloadOutcome.Fail;
         }
 
-        var tmpPath = Path.Combine(ctx.WorkDir, $"{SanitizeFileName(itemId)}.tmp.mp4");
+        var tempPrefix = SanitizeFileName(string.IsNullOrWhiteSpace(itemId) ? $"{name}-{year}" : itemId);
         var tried = 0;
 
         foreach (var candidate in candidates)
@@ -690,58 +691,98 @@ public sealed class TrailerAutomationService
                 continue;
             }
 
-            TryDeleteFile(tmpPath);
-
-            ctx.Log.Out($"[INDIR] {name} ({year}) -> {outFile}  [{candidate.Site}:{candidate.Key}] (best mp4)");
-            var url = candidate.Site == "youtube"
-                ? $"https://www.youtube.com/watch?v={candidate.Key}"
-                : $"https://vimeo.com/{candidate.Key}";
-
-            var ytdlp = await RunProcessAsync(
-                ytDlpCommand,
-                BuildYtDlpArgs(jsRuntimeArg, tmpPath, url, ctx.Options.TrailerMinResolution, ctx.Options.TrailerMaxResolution),
-                ct).ConfigureAwait(false);
-
-            if (ytdlp.ExitCode != 0 || !File.Exists(tmpPath))
+            var attemptWorkDir = Path.Combine(ctx.WorkDir, $"{tempPrefix}-{tried:D2}-{Guid.NewGuid():N}");
+            if (!TryEnsureDirectory(attemptWorkDir, out var attemptDirError))
             {
-                ctx.Log.Out($"[WARN] yt-dlp deneme #{tried} başarısız.");
-                LogProcessFailure(ctx.Log, ytdlp);
-                if (GetFreeMb(dir) <= 0)
-                {
-                    ctx.Log.Out($"[HATA] Diskte yer kalmamış. Film atlanıyor: {name} ({year})");
-                }
-                TryDeleteFile(tmpPath);
+                ctx.Log.Out($"[WARN] Geçici klasör oluşturulamadı: {attemptWorkDir} ({attemptDirError ?? "bilinmeyen hata"})");
                 continue;
             }
 
-            var sizeBytes = GetFileSize(tmpPath);
-            if (sizeBytes < MinTrailerBytes)
-            {
-                ctx.Log.Out($"[WARN] Dosya çok küçük ({sizeBytes}B). Siliniyor ve sonraki aday denenecek...");
-                TryDeleteFile(tmpPath);
-                continue;
-            }
+            var tmpPath = Path.Combine(attemptWorkDir, "trailer.tmp.mp4");
 
-            if (hasFfprobe)
+            try
             {
-                var duration = await ProbeDurationAsync(tmpPath, ct).ConfigureAwait(false);
-                if (duration > 0 && duration < MinTrailerDurationSeconds)
+                ctx.Log.Out($"[INDIR] {name} ({year}) -> {outFile}  [{candidate.Site}:{candidate.Key}] (best mp4)");
+                var url = candidate.Site == "youtube"
+                    ? $"https://www.youtube.com/watch?v={candidate.Key}"
+                    : $"https://vimeo.com/{candidate.Key}";
+
+                var ytdlp = await RunProcessAsync(
+                    ytDlpCommand,
+                    BuildYtDlpArgs(
+                        jsRuntimeArg,
+                        tmpPath,
+                        url,
+                        ctx.Options.TrailerMinResolution,
+                        ctx.Options.TrailerMaxResolution,
+                        ffmpegCommand),
+                    ct).ConfigureAwait(false);
+
+                if (ytdlp.ExitCode != 0 || !File.Exists(tmpPath))
                 {
-                    ctx.Log.Out($"[WARN] Süre kısa ({duration.ToString("0.##", CultureInfo.InvariantCulture)}s). Siliniyor ve sonraki aday denenecek...");
+                    ctx.Log.Out($"[WARN] yt-dlp deneme #{tried} başarısız.");
+                    LogProcessFailure(ctx.Log, ytdlp);
+                    if (GetFreeMb(dir) <= 0)
+                    {
+                        ctx.Log.Out($"[HATA] Diskte yer kalmamış. Film atlanıyor: {name} ({year})");
+                    }
                     TryDeleteFile(tmpPath);
                     continue;
                 }
-            }
 
-            if (compareAfter && File.Exists(outFile))
-            {
-                var tmpDuration = hasFfprobe ? await ProbeDurationAsync(tmpPath, ct).ConfigureAwait(false) : 0d;
-                var outDuration = hasFfprobe ? await ProbeDurationAsync(outFile, ct).ConfigureAwait(false) : 0d;
-                var outSize = GetFileSize(outFile);
-
-                if (IsBetterTrailer(sizeBytes, outSize, tmpDuration, outDuration))
+                var sizeBytes = GetFileSize(tmpPath);
+                if (sizeBytes < MinTrailerBytes)
                 {
-                    ctx.Log.Out("[OK] Yeni trailer daha iyi bulundu (if-better): değiştiriliyor.");
+                    ctx.Log.Out($"[WARN] Dosya çok küçük ({sizeBytes}B). Siliniyor ve sonraki aday denenecek...");
+                    TryDeleteFile(tmpPath);
+                    continue;
+                }
+
+                if (hasFfprobe)
+                {
+                    var duration = await ProbeDurationAsync(ffprobeCommand, tmpPath, ct).ConfigureAwait(false);
+                    if (duration > 0 && duration < MinTrailerDurationSeconds)
+                    {
+                        ctx.Log.Out($"[WARN] Süre kısa ({duration.ToString("0.##", CultureInfo.InvariantCulture)}s). Siliniyor ve sonraki aday denenecek...");
+                        TryDeleteFile(tmpPath);
+                        continue;
+                    }
+                }
+
+                if (compareAfter && File.Exists(outFile))
+                {
+                    var tmpDuration = hasFfprobe ? await ProbeDurationAsync(ffprobeCommand, tmpPath, ct).ConfigureAwait(false) : 0d;
+                    var outDuration = hasFfprobe ? await ProbeDurationAsync(ffprobeCommand, outFile, ct).ConfigureAwait(false) : 0d;
+                    var outSize = GetFileSize(outFile);
+
+                    if (IsBetterTrailer(sizeBytes, outSize, tmpDuration, outDuration))
+                    {
+                        ctx.Log.Out("[OK] Yeni trailer daha iyi bulundu (if-better): değiştiriliyor.");
+                        if (!TryMoveReplace(tmpPath, outFile))
+                        {
+                            ctx.Log.Err($"[HATA] mv başarısız, yazılamıyor: {outFile}");
+                            TryDeleteFile(tmpPath);
+                            return DownloadOutcome.Fail;
+                        }
+
+                        if (ctx.Options.EnableThemeLink == 1)
+                        {
+                            await EnsureBackdropsThemeAsync(dir, outFile, ctx.Log, ctx.Options.ThemeLinkMode, ct).ConfigureAwait(false);
+                        }
+                    }
+                    else
+                    {
+                        ctx.Log.Out("[ATLA] Mevcut trailer daha iyi/eşdeğer: yenisi silindi.");
+                        TryDeleteFile(tmpPath);
+                        if (ctx.Options.EnableThemeLink == 1)
+                        {
+                            await EnsureBackdropsThemeAsync(dir, outFile, ctx.Log, ctx.Options.ThemeLinkMode, ct).ConfigureAwait(false);
+                        }
+                        return DownloadOutcome.Skip;
+                    }
+                }
+                else
+                {
                     if (!TryMoveReplace(tmpPath, outFile))
                     {
                         ctx.Log.Err($"[HATA] mv başarısız, yazılamıyor: {outFile}");
@@ -754,45 +795,25 @@ public sealed class TrailerAutomationService
                         await EnsureBackdropsThemeAsync(dir, outFile, ctx.Log, ctx.Options.ThemeLinkMode, ct).ConfigureAwait(false);
                     }
                 }
-                else
+
+                await RefreshItemAsync(
+                    ctx,
+                    itemId,
+                    "Recursive=true&ImageRefreshMode=Default&MetadataRefreshMode=Default&RegenerateTrickplay=false&ReplaceAllMetadata=false",
+                    ct).ConfigureAwait(false);
+
+                ctx.Log.Out($"[OK] Eklendi ve yenilendi: {outFile}");
+                if (ctx.SleepSecs > 0)
                 {
-                    ctx.Log.Out("[ATLA] Mevcut trailer daha iyi/eşdeğer: yenisi silindi.");
-                    TryDeleteFile(tmpPath);
-                    if (ctx.Options.EnableThemeLink == 1)
-                    {
-                        await EnsureBackdropsThemeAsync(dir, outFile, ctx.Log, ctx.Options.ThemeLinkMode, ct).ConfigureAwait(false);
-                    }
-                    return DownloadOutcome.Skip;
+                    await Task.Delay(TimeSpan.FromSeconds(ctx.SleepSecs), ct).ConfigureAwait(false);
                 }
+
+                return DownloadOutcome.Ok;
             }
-            else
+            finally
             {
-                if (!TryMoveReplace(tmpPath, outFile))
-                {
-                    ctx.Log.Err($"[HATA] mv başarısız, yazılamıyor: {outFile}");
-                    TryDeleteFile(tmpPath);
-                    return DownloadOutcome.Fail;
-                }
-
-                if (ctx.Options.EnableThemeLink == 1)
-                {
-                    await EnsureBackdropsThemeAsync(dir, outFile, ctx.Log, ctx.Options.ThemeLinkMode, ct).ConfigureAwait(false);
-                }
+                TryDeleteDirectory(attemptWorkDir);
             }
-
-            await RefreshItemAsync(
-                ctx,
-                itemId,
-                "Recursive=true&ImageRefreshMode=Default&MetadataRefreshMode=Default&RegenerateTrickplay=false&ReplaceAllMetadata=false",
-                ct).ConfigureAwait(false);
-
-            ctx.Log.Out($"[OK] Eklendi ve yenilendi: {outFile}");
-            if (ctx.SleepSecs > 0)
-            {
-                await Task.Delay(TimeSpan.FromSeconds(ctx.SleepSecs), ct).ConfigureAwait(false);
-            }
-
-            return DownloadOutcome.Ok;
         }
 
         ctx.Log.Out($"[ATLA] Uygun indirilebilir trailer bulunamadı: {name} ({year})");
@@ -1258,21 +1279,32 @@ public sealed class TrailerAutomationService
         string tmpPath,
         string url,
         int minResolution,
-        int maxResolution)
+        int maxResolution,
+        string? ffmpegCommand)
     {
+        var canMerge = !string.IsNullOrWhiteSpace(ffmpegCommand);
         var ytDlpArgs = new List<string>
         {
             "--force-ipv4",
+            "--no-continue",
             "--no-part",
             "--no-progress",
             "--no-playlist",
             "--js-runtimes", jsRuntimeArg
         };
 
-        ytDlpArgs.Add("--merge-output-format");
-        ytDlpArgs.Add("mp4");
+        if (canMerge)
+        {
+            ytDlpArgs.Add("--ffmpeg-location");
+            ytDlpArgs.Add(Path.GetDirectoryName(ffmpegCommand!) ?? ffmpegCommand!);
+            ytDlpArgs.Add("--merge-output-format");
+            ytDlpArgs.Add("mp4");
+        }
+
         ytDlpArgs.Add("-f");
-        ytDlpArgs.Add(BuildPreferredTrailerFormatSelector(minResolution, maxResolution));
+        ytDlpArgs.Add(canMerge
+            ? BuildPreferredTrailerFormatSelector(minResolution, maxResolution)
+            : BuildSingleFileTrailerFormatSelector(minResolution, maxResolution));
         ytDlpArgs.Add("-o");
         ytDlpArgs.Add(tmpPath);
         ytDlpArgs.Add(url);
@@ -1281,6 +1313,9 @@ public sealed class TrailerAutomationService
 
     private static string BuildPreferredTrailerFormatSelector(int minResolution, int maxResolution)
         => $"bestvideo[ext=mp4][height<={maxResolution}][height>={minResolution}]+bestaudio[ext=m4a]/best[ext=mp4][height<={maxResolution}][height>={minResolution}]";
+
+    private static string BuildSingleFileTrailerFormatSelector(int minResolution, int maxResolution)
+        => $"best[ext=mp4][acodec!=none][vcodec!=none][height<={maxResolution}][height>={minResolution}]/best[ext=mp4][acodec!=none][vcodec!=none][height<={maxResolution}]/best[ext=mp4][acodec!=none][vcodec!=none]";
 
     private static void LogProcessFailure(StepLogger log, ProcessRunResult result)
     {
@@ -1570,15 +1605,15 @@ public sealed class TrailerAutomationService
         }
     }
 
-    private static async Task<double> ProbeDurationAsync(string path, CancellationToken ct)
+    private static async Task<double> ProbeDurationAsync(string? ffprobeCommand, string path, CancellationToken ct)
     {
-        if (!CommandExists("ffprobe"))
+        if (string.IsNullOrWhiteSpace(ffprobeCommand))
         {
             return 0d;
         }
 
         var result = await RunProcessAsync(
-            "ffprobe",
+            ffprobeCommand,
             [
                 "-v", "error",
                 "-show_entries", "format=duration",
@@ -1637,6 +1672,20 @@ public sealed class TrailerAutomationService
             if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
             {
                 File.Delete(path);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static void TryDeleteDirectory(string? path)
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(path) && Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
             }
         }
         catch
@@ -1959,6 +2008,20 @@ public sealed class TrailerAutomationService
 
             var ytDlp = await EnsureManagedYtDlpAsync(toolRoot, ct).ConfigureAwait(false);
             var deno = await EnsureManagedDenoAsync(toolRoot, ct).ConfigureAwait(false);
+
+            if (string.IsNullOrWhiteSpace(ResolveBundledFfToolPath("ffmpeg")) ||
+                string.IsNullOrWhiteSpace(ResolveBundledFfToolPath("ffprobe")))
+            {
+                try
+                {
+                    await EnsureManagedFfmpegAsync(toolRoot, ct).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[JMSFusion] ffmpeg/ffprobe yönetilen indirme başarısız.");
+                }
+            }
+
             var suite = new ManagedToolSuite(toolRoot, ytDlp, deno);
 
             if (AreManagedToolsReady(suite))
@@ -2077,6 +2140,41 @@ public sealed class TrailerAutomationService
         return new ManagedToolState("deno", installPath, installedVersion, latestVersion, false);
     }
 
+    private async Task EnsureManagedFfmpegAsync(string toolRoot, CancellationToken ct)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var ffmpegPath = Path.Combine(toolRoot, GetManagedToolFileName("ffmpeg"));
+        var ffprobePath = Path.Combine(toolRoot, GetManagedToolFileName("ffprobe"));
+        var installedVersion = ReadManagedToolVersionMarker(toolRoot, "jellyfin-ffmpeg");
+        var release = await TryGetLatestGitHubReleaseAsync(JellyfinFfmpegLatestReleaseApi, ct).ConfigureAwait(false);
+        var latestVersion = NormalizeVersion(release?.TagName);
+
+        if (File.Exists(ffmpegPath) &&
+            File.Exists(ffprobePath) &&
+            !string.IsNullOrWhiteSpace(installedVersion) &&
+            string.Equals(installedVersion, latestVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var downloadUrl = ResolveJellyfinFfmpegDownloadUrl(release);
+        if (string.IsNullOrWhiteSpace(downloadUrl))
+        {
+            return;
+        }
+
+        await DownloadJellyfinFfmpegBundleAsync(downloadUrl!, toolRoot, ct).ConfigureAwait(false);
+
+        if (File.Exists(ffmpegPath) && File.Exists(ffprobePath) && !string.IsNullOrWhiteSpace(latestVersion))
+        {
+            WriteManagedToolVersionMarker(toolRoot, "jellyfin-ffmpeg", latestVersion);
+        }
+    }
+
     private static string GetManagedToolFileName(string toolName)
     {
         var normalized = toolName.Trim().ToLowerInvariant();
@@ -2086,6 +2184,10 @@ public sealed class TrailerAutomationService
             "yt-dlp" => "yt-dlp",
             "deno" when OperatingSystem.IsWindows() => "deno.exe",
             "deno" => "deno",
+            "ffmpeg" when OperatingSystem.IsWindows() => "ffmpeg.exe",
+            "ffmpeg" => "ffmpeg",
+            "ffprobe" when OperatingSystem.IsWindows() => "ffprobe.exe",
+            "ffprobe" => "ffprobe",
             _ => normalized
         };
     }
@@ -2243,6 +2345,24 @@ public sealed class TrailerAutomationService
         return null;
     }
 
+    private static string? ResolveJellyfinFfmpegDownloadUrl(GitHubReleaseResponse? release)
+    {
+        if (!OperatingSystem.IsWindows() || release?.Assets == null || release.Assets.Count == 0)
+        {
+            return null;
+        }
+
+        var version = NormalizeVersion(release.TagName);
+        if (string.IsNullOrWhiteSpace(version))
+        {
+            return null;
+        }
+
+        var assetName = $"jellyfin-ffmpeg_{version}-portable_win64.zip";
+        var asset = release.Assets.FirstOrDefault(a => string.Equals(a.Name, assetName, StringComparison.OrdinalIgnoreCase));
+        return asset?.BrowserDownloadUrl;
+    }
+
     private async Task DownloadBinaryAsync(string url, string installPath, CancellationToken ct)
     {
         var tempPath = Path.Combine(Path.GetDirectoryName(installPath) ?? ".", $".{Path.GetFileName(installPath)}.{Guid.NewGuid():N}.tmp");
@@ -2299,6 +2419,56 @@ public sealed class TrailerAutomationService
         {
             TryDeleteFile(tempZip);
             TryDeleteFile(tempExtract);
+        }
+    }
+
+    private async Task DownloadJellyfinFfmpegBundleAsync(string url, string toolRoot, CancellationToken ct)
+    {
+        var tempZip = Path.Combine(toolRoot, $".jellyfin-ffmpeg.{Guid.NewGuid():N}.zip");
+        var tempExtractRoot = Path.Combine(toolRoot, $".jellyfin-ffmpeg.{Guid.NewGuid():N}.tmp");
+        TryDeleteFile(tempZip);
+
+        try
+        {
+            await DownloadToFileAsync(url, tempZip, ct).ConfigureAwait(false);
+            ZipFile.ExtractToDirectory(tempZip, tempExtractRoot, overwriteFiles: true);
+
+            var ffmpegDir = Directory.EnumerateFiles(tempExtractRoot, GetManagedToolFileName("ffmpeg"), SearchOption.AllDirectories)
+                .Select(Path.GetDirectoryName)
+                .FirstOrDefault(path => !string.IsNullOrWhiteSpace(path));
+
+            if (string.IsNullOrWhiteSpace(ffmpegDir))
+            {
+                throw new FileNotFoundException("İndirilen ffmpeg paketinde ffmpeg.exe bulunamadı.");
+            }
+
+            foreach (var file in Directory.EnumerateFiles(ffmpegDir, "*", SearchOption.TopDirectoryOnly))
+            {
+                var ext = Path.GetExtension(file);
+                if (!string.Equals(ext, ".exe", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(ext, ".dll", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var destination = Path.Combine(toolRoot, Path.GetFileName(file));
+                File.Copy(file, destination, overwrite: true);
+                EnsureExecutable(destination);
+            }
+        }
+        finally
+        {
+            TryDeleteFile(tempZip);
+            try
+            {
+                if (Directory.Exists(tempExtractRoot))
+                {
+                    Directory.Delete(tempExtractRoot, recursive: true);
+                }
+            }
+            catch
+            {
+            }
         }
     }
 
@@ -2379,6 +2549,35 @@ public sealed class TrailerAutomationService
         }
     }
 
+    private static string? ReadManagedToolVersionMarker(string toolRoot, string toolKey)
+    {
+        try
+        {
+            var markerPath = Path.Combine(toolRoot, $".{toolKey}.version");
+            if (!File.Exists(markerPath))
+            {
+                return null;
+            }
+
+            return NormalizeVersion(File.ReadAllText(markerPath));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void WriteManagedToolVersionMarker(string toolRoot, string toolKey, string version)
+    {
+        try
+        {
+            File.WriteAllText(Path.Combine(toolRoot, $".{toolKey}.version"), NormalizeVersion(version));
+        }
+        catch
+        {
+        }
+    }
+
     private static void EnsureExecutable(string path)
     {
         try
@@ -2399,31 +2598,68 @@ public sealed class TrailerAutomationService
 
     private static bool CommandExists(string commandName)
     {
+        return !string.IsNullOrWhiteSpace(ResolveCommandFromPathEnvironment(commandName));
+    }
+
+    private string? ResolveCommandPath(string commandName)
+    {
         if (string.IsNullOrWhiteSpace(commandName))
         {
-            return false;
+            return null;
         }
 
-        var pathEnv = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrWhiteSpace(pathEnv))
+        var normalized = commandName.Trim();
+        if (normalized.IndexOf(Path.DirectorySeparatorChar) >= 0 ||
+            normalized.IndexOf(Path.AltDirectorySeparatorChar) >= 0)
         {
-            return false;
+            return File.Exists(normalized) ? normalized : null;
         }
 
-        var names = OperatingSystem.IsWindows()
-            ? new[] { commandName, $"{commandName}.exe", $"{commandName}.cmd", $"{commandName}.bat" }
-            : new[] { commandName };
-
-        foreach (var dir in pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        if (string.Equals(normalized, "ffmpeg", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalized, "ffprobe", StringComparison.OrdinalIgnoreCase))
         {
-            foreach (var name in names)
+            var bundledPath = ResolveBundledFfToolPath(normalized);
+            if (!string.IsNullOrWhiteSpace(bundledPath))
+            {
+                return bundledPath;
+            }
+
+            var managedPath = GetManagedToolPath(normalized);
+            if (!string.IsNullOrWhiteSpace(managedPath))
+            {
+                return managedPath;
+            }
+
+            return ResolveCommandFromPathEnvironment(normalized);
+        }
+
+        var managed = GetManagedToolPath(normalized);
+        if (!string.IsNullOrWhiteSpace(managed))
+        {
+            return managed;
+        }
+
+        return ResolveCommandFromPathEnvironment(normalized);
+    }
+
+    private string? ResolveBundledFfToolPath(string commandName)
+    {
+        if (string.IsNullOrWhiteSpace(commandName))
+        {
+            return null;
+        }
+
+        var fileNames = GetCommandFileNames(commandName);
+        foreach (var directory in EnumerateFfmpegSearchDirectories())
+        {
+            foreach (var fileName in fileNames)
             {
                 try
                 {
-                    var fullPath = Path.Combine(dir, name);
-                    if (File.Exists(fullPath))
+                    var candidate = Path.Combine(directory, fileName);
+                    if (File.Exists(candidate))
                     {
-                        return true;
+                        return candidate;
                     }
                 }
                 catch
@@ -2432,7 +2668,178 @@ public sealed class TrailerAutomationService
             }
         }
 
-        return false;
+        return null;
+    }
+
+    private IEnumerable<string> EnumerateFfmpegSearchDirectories()
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var root in EnumerateFfmpegSearchRoots())
+        {
+            foreach (var candidate in ExpandLikelyBinaryDirectories(root))
+            {
+                if (string.IsNullOrWhiteSpace(candidate))
+                {
+                    continue;
+                }
+
+                if (seen.Add(candidate))
+                {
+                    yield return candidate;
+                }
+            }
+        }
+    }
+
+    private IEnumerable<string> EnumerateFfmpegSearchRoots()
+    {
+        yield return AppContext.BaseDirectory;
+        yield return Path.GetDirectoryName(Environment.ProcessPath ?? string.Empty) ?? string.Empty;
+
+        foreach (var value in EnumerateApplicationPathValues())
+        {
+            yield return value;
+        }
+    }
+
+    private IEnumerable<string> EnumerateApplicationPathValues()
+    {
+        foreach (var property in _applicationPaths.GetType().GetProperties(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public))
+        {
+            if (property.PropertyType != typeof(string) ||
+                !property.Name.EndsWith("Path", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            string? value = null;
+            try
+            {
+                value = property.GetValue(_applicationPaths) as string;
+            }
+            catch
+            {
+            }
+
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                yield return value!;
+            }
+        }
+    }
+
+    private static IEnumerable<string> ExpandLikelyBinaryDirectories(string rawPath)
+    {
+        var normalized = NormalizeSearchRoot(rawPath);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            yield break;
+        }
+
+        foreach (var candidate in BuildLikelyBinaryDirectories(normalized))
+        {
+            yield return candidate;
+        }
+
+        var parent = Directory.GetParent(normalized)?.FullName;
+        if (!string.IsNullOrWhiteSpace(parent))
+        {
+            foreach (var candidate in BuildLikelyBinaryDirectories(parent))
+            {
+                yield return candidate;
+            }
+        }
+
+        var grandParent = !string.IsNullOrWhiteSpace(parent) ? Directory.GetParent(parent)?.FullName : null;
+        if (!string.IsNullOrWhiteSpace(grandParent))
+        {
+            foreach (var candidate in BuildLikelyBinaryDirectories(grandParent))
+            {
+                yield return candidate;
+            }
+        }
+    }
+
+    private static IEnumerable<string> BuildLikelyBinaryDirectories(string root)
+    {
+        yield return root;
+        yield return Path.Combine(root, "ffmpeg");
+        yield return Path.Combine(root, "ffmpeg", "bin");
+        yield return Path.Combine(root, "bin");
+        yield return Path.Combine(root, "jellyfin-ffmpeg");
+        yield return Path.Combine(root, "jellyfin-ffmpeg", "bin");
+        yield return Path.Combine(root, "Server");
+        yield return Path.Combine(root, "Server", "ffmpeg");
+        yield return Path.Combine(root, "Jellyfin Server");
+        yield return Path.Combine(root, "Jellyfin Server", "ffmpeg");
+    }
+
+    private static string? NormalizeSearchRoot(string rawPath)
+    {
+        if (string.IsNullOrWhiteSpace(rawPath))
+        {
+            return null;
+        }
+
+        var candidate = rawPath.Trim();
+        if (File.Exists(candidate))
+        {
+            return Path.GetDirectoryName(candidate);
+        }
+
+        return candidate.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
+
+    private static string? ResolveCommandFromPathEnvironment(string commandName)
+    {
+        if (string.IsNullOrWhiteSpace(commandName))
+        {
+            return null;
+        }
+
+        var pathEnv = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrWhiteSpace(pathEnv))
+        {
+            return null;
+        }
+
+        var names = GetCommandFileNames(commandName);
+        foreach (var dir in pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            foreach (var name in names)
+            {
+                try
+                {
+                    var fullPath = Path.Combine(dir, name);
+                    if (File.Exists(fullPath))
+                    {
+                        return fullPath;
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static IReadOnlyList<string> GetCommandFileNames(string commandName)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return [commandName];
+        }
+
+        return
+        [
+            commandName,
+            $"{commandName}.exe",
+            $"{commandName}.cmd",
+            $"{commandName}.bat"
+        ];
     }
 
     private static async Task<ProcessRunResult> RunProcessAsync(string fileName, IEnumerable<string> args, CancellationToken ct)

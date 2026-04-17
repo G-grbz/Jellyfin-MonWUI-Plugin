@@ -1,5 +1,5 @@
 import { getConfig } from "../config.js";
-import { bindCheckboxKontrol, createCheckbox, createSection } from "../settings.js";
+import { bindCheckboxKontrol, createCheckbox, createSection } from "./shared.js";
 
 export function createPausePanel(_config, labels) {
   const config = getConfig();

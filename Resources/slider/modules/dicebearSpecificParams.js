@@ -1,5 +1,5 @@
 import { getConfig } from "./config.js";
-import { createCheckbox, createSection, createNumberInput, createTextInput, createSelect } from "./settings.js";
+import { createCheckbox, createSection, createNumberInput, createTextInput, createSelect } from "./settings/shared.js";
 import { getLanguageLabels, getDefaultLanguage } from '../language/index.js';
 import { clearAvatarCache, cleanAvatars, updateHeaderUserAvatar } from "./userAvatar.js";
 import { applyRawConfig, applySettings } from './settings/applySettings.js';

@@ -1,5 +1,5 @@
 import { getConfig } from "../config.js";
-import { createCheckbox, createImageTypeSelect, bindCheckboxKontrol, bindTersCheckboxKontrol } from "../settings.js";
+import { createCheckbox, createImageTypeSelect, bindCheckboxKontrol, bindTersCheckboxKontrol } from "./shared.js";
 import { applySettings, applyRawConfig } from "./applySettings.js";
 
 export function createAnimationPanel(config, labels) {

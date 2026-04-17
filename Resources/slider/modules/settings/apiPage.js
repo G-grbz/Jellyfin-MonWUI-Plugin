@@ -1,4 +1,4 @@
-import { createCheckbox, createSection } from "../settings.js";
+import { createCheckbox, createSection } from "./shared.js";
 
 const DEFAULT_CONTENT_TYPES = ["Movie", "Series"];
 const DEFAULT_IMAGE_TYPES = ["Logo", "Backdrop"];
