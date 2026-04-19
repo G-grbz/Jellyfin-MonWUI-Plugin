@@ -1,11 +1,30 @@
 import { getConfig } from "./config.js";
 import { getSessionInfo, makeApiRequest, getAuthHeader, playNow, fetchItemDetails, getEmbyHeaders, jms } from "/Plugins/JMSFusion/runtime/api.js";
 import { openSettings } from "./settingsLoader.js";
-import { loadAvailableDevices, getDeviceIcon, startPlayback, showNotification, hideNotification } from './castModule.js';
 import { getProviderUrl } from './utils.js';
 import { applyContainerStyles } from './positionUtils.js';
 import { withServer } from "./jfUrl.js";
 import { ensureWatchlistLoaded, getCachedWatchlistMembership, getWatchlistButtonText } from "./watchlist.js";
+
+let __castModulePromise = null;
+
+async function getCastModule() {
+  if (!__castModulePromise) {
+    __castModulePromise = import("./castModule.js").catch((error) => {
+      __castModulePromise = null;
+      throw error;
+    });
+  }
+
+  return __castModulePromise;
+}
+
+async function castShowNotification(message, type) {
+  try {
+    const mod = await getCastModule();
+    mod?.showNotification?.(message, type);
+  } catch {}
+}
 
 let _menuCloserAttached = false;
 function attachGlobalMenuCloser() {
@@ -380,12 +399,12 @@ async function castToCurrentDevice(itemId) {
     const config = getConfig();
     const success = await playNow(itemId);
     if (!success) {
-      showNotification(config.languageLabels.casthata, 'error');
+      await castShowNotification(config.languageLabels.casthata, 'error');
     }
   } catch (error) {
     console.error('Cast işlemi sırasında hata:', error);
     const config = getConfig();
-    showNotification(`${config.languageLabels.casthata}: ${error.message}`, 'error');
+    await castShowNotification(`${config.languageLabels.casthata}: ${error.message}`, 'error');
   }
 }
 
@@ -403,12 +422,12 @@ async function startNowPlayback(itemId, sessionId) {
       throw new Error(`${config.languageLabels.castoynatmahata}: ${response.statusText}`);
     }
 
-    showNotification(config.languageLabels.castbasarili, 'success');
+    await castShowNotification(config.languageLabels.castbasarili, 'success');
     return true;
   } catch (error) {
     console.error("Oynatma hatası:", error);
     const config = getConfig();
-    showNotification(`${config.languageLabels.castoynatmahata}: ${error.message}`, 'error');
+    await castShowNotification(`${config.languageLabels.castoynatmahata}: ${error.message}`, 'error');
     return false;
   }
 }
@@ -422,7 +441,7 @@ export function createProviderContainer({ config, ProviderIds, RemoteTrailers, i
   applyContainerStyles(container, 'provider');
 
   const canEnrichLater = Boolean(itemId) && (config.showTrailerIcon || config.showProviderInfo);
-  if (!pids && !config.showSettingsLink && !(config.showTrailerIcon && trailers.length) && !config.showCast && !canEnrichLater) {
+  if (!pids && !config.showSettingsLink && !(config.showTrailerIcon && trailers.length) && !(config.enableCastModule !== false && config.showCast) && !canEnrichLater) {
     return container;
   }
 
@@ -494,7 +513,7 @@ export function createProviderContainer({ config, ProviderIds, RemoteTrailers, i
     ensureProviderDivMounted();
   }
 
- if (config.showCast) {
+ if (config.enableCastModule !== false && config.showCast) {
     const castContainer = document.createElement("div");
     castContainer.className = "monwui-cast-container monwui-provider-link";
 
@@ -513,6 +532,7 @@ export function createProviderContainer({ config, ProviderIds, RemoteTrailers, i
       e.stopPropagation();
 
       if (deviceDropdown.classList.contains('hide')) {
+        const { loadAvailableDevices } = await getCastModule();
         await loadAvailableDevices(itemId, deviceDropdown);
 
         deviceDropdown.classList.remove('hide');

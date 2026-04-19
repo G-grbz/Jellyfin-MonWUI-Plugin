@@ -104,6 +104,12 @@ namespace Jellyfin.Plugin.JMSFusion
         [JsonPropertyName("watchlistRevision")]
         public long WatchlistRevision { get; set; } = 0;
 
+        [JsonPropertyName("itemComments")]
+        public List<ItemCommentEntry> ItemComments { get; set; } = new();
+
+        [JsonPropertyName("itemCommentsRevision")]
+        public long ItemCommentsRevision { get; set; } = 0;
+
         [JsonPropertyName("studioHubVideoEntries")]
         public List<StudioHubVideoEntry> StudioHubVideoEntries { get; set; } = new();
 
@@ -133,6 +139,12 @@ namespace Jellyfin.Plugin.JMSFusion
 
         [JsonPropertyName("parentalPinTrustMinutes")]
         public int ParentalPinTrustMinutes { get; set; } = 60;
+
+        [JsonPropertyName("enableCastModule")]
+        public bool EnableCastModule { get; set; } = true;
+
+        [JsonPropertyName("allowSharedCastViewerForUsers")]
+        public bool AllowSharedCastViewerForUsers { get; set; } = false;
     }
 
     public class SharedRadioStationEntry
@@ -194,6 +206,17 @@ namespace Jellyfin.Plugin.JMSFusion
         public string? TargetUserName { get; set; }
         public string? Note { get; set; }
         public long SharedAtUtc { get; set; }
+    }
+
+    public class ItemCommentEntry
+    {
+        public string? Id { get; set; }
+        public string? ItemId { get; set; }
+        public string? Content { get; set; }
+        public string? OwnerUserId { get; set; }
+        public string? OwnerUserName { get; set; }
+        public long CreatedAtUtc { get; set; }
+        public long UpdatedAtUtc { get; set; }
     }
 
     public class StudioHubVideoEntry

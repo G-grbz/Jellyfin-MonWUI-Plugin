@@ -196,6 +196,10 @@ export function getWebClientHints() {
         ac._sessionId || ac.sessionId || ac?.connectionManager?._session?.Id || null;
       hints.deviceId =
         ac._deviceId || (typeof ac.deviceId === "function" ? ac.deviceId() : ac.deviceId) || null;
+      hints.deviceName =
+        ac._deviceName ||
+        (typeof ac.getDeviceName === "function" ? ac.getDeviceName() : ac.deviceName) ||
+        null;
       hints.accessToken =
         ac._authToken ||
         (typeof ac.accessToken === "function" ? ac.accessToken() : ac.accessToken) ||

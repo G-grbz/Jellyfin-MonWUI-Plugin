@@ -8,6 +8,18 @@ import { faIconHtml } from "./faIcons.js";
 import { openDetailsModal } from "./detailsModalLoader.js";
 
 const config = getConfig();
+let __castModulePromise = null;
+
+async function getCastModule() {
+  if (!__castModulePromise) {
+    __castModulePromise = import("./castModule.js").catch((error) => {
+      __castModulePromise = null;
+      throw error;
+    });
+  }
+
+  return __castModulePromise;
+}
 
 function getLiveConfig() {
   try {
@@ -74,6 +86,8 @@ let notifState = {
   isModalOpen: false,
   _systemAllowed: false,
 };
+let __castTabMount = null;
+let __castTabSyncPromise = null;
 
 function isHoverCapable() {
   try {
@@ -396,7 +410,19 @@ function loadThemePreference() {
   setTheme(theme);
 }
 
+function applyNotifCssThemeNumber(themeNumber) {
+  const normalized =
+    themeNumber === "2" || themeNumber === "3" || themeNumber === "4"
+      ? themeNumber
+      : "1";
+
+  document.documentElement.setAttribute("data-jf-notif-css-theme", normalized);
+  document.body?.setAttribute?.("data-jf-notif-css-theme", normalized);
+  document.getElementById("jfNotifModal")?.setAttribute("data-jf-notif-css-theme", normalized);
+}
+
 function setTheme(themeNumber) {
+  applyNotifCssThemeNumber(themeNumber);
   const link = ensureNotifStylesheet();
   const href =
     themeNumber === '1' ? resolveSliderAssetHref("/slider/src/notifications.css")  :
@@ -616,6 +642,7 @@ function ensureUI() {
   const liveConfig = getLiveConfig();
   if (liveConfig.enableNotifications === false) return;
   injectCriticalNotifCSS();
+  ensureCastTabStyles();
   const header = findHeaderContainer();
   if (header) ensureNotifButtonIn(header);
   startHeaderIconSentinel();
@@ -711,18 +738,113 @@ function ensureUI() {
     if (crt) crt.remove();
   }).catch(()=>{});
 
-  document.querySelectorAll(".jf-notif-tab").forEach(tabBtn => {
-    tabBtn.addEventListener("click", () => {
-      const tabName = tabBtn.getAttribute("data-tab");
-      document.querySelectorAll(".jf-notif-tab").forEach(b => b.classList.toggle("active", b === tabBtn));
-      document.querySelectorAll(".jf-notif-tab-content").forEach(c => {
-        c.style.display = (c.getAttribute("data-tab") === tabName) ? "" : "none";
-      });
-    });
-  });
+  document.querySelectorAll(".jf-notif-tab").forEach(bindNotifTabButton);
   __uiReady = true;
 ensureSystemTabPresence();
+ void ensureCastTabPresence();
  }
+
+function cleanupCastTabMount() {
+  try {
+    __castTabMount?.destroy?.();
+  } catch {}
+  __castTabMount = null;
+}
+
+function activateNotifTab(tabName = "new") {
+  document.querySelectorAll(".jf-notif-tab").forEach((button) => {
+    button.classList.toggle("active", button.getAttribute("data-tab") === tabName);
+  });
+
+  document.querySelectorAll(".jf-notif-tab-content").forEach((content) => {
+    content.style.display = (content.getAttribute("data-tab") === tabName) ? "" : "none";
+  });
+
+  if (tabName === "cast") {
+    void mountCastTabPanel();
+  } else {
+    cleanupCastTabMount();
+  }
+}
+
+function bindNotifTabButton(tabBtn) {
+  if (!tabBtn || tabBtn.__jmsNotifTabBound) return;
+  tabBtn.__jmsNotifTabBound = true;
+  tabBtn.addEventListener("click", () => {
+    activateNotifTab(tabBtn.getAttribute("data-tab") || "new");
+  });
+}
+
+async function mountCastTabPanel() {
+  const host = document.getElementById("jfCastPanelHost");
+  if (!host) return;
+
+  cleanupCastTabMount();
+  host.innerHTML = `<div class="jf-loading">${escapeHtml(getLiveLabels()?.loadingText || "Yukleniyor...")}</div>`;
+  const { mountCastViewerPanel } = await getCastModule();
+  __castTabMount = await mountCastViewerPanel(host, { refreshMs: 4000, variant: "notification" }).catch((error) => {
+    host.innerHTML = `<div class="jf-error">${escapeHtml(String(error?.message || getLiveLabels()?.listError || "Liste yuklenemedi."))}</div>`;
+    return null;
+  });
+}
+
+async function ensureCastTabPresence() {
+  if (__castTabSyncPromise) return __castTabSyncPromise;
+
+  __castTabSyncPromise = (async () => {
+    const liveConfig = getLiveConfig();
+    const tabs = document.querySelector(".jf-notif-tabs");
+    const contentHost = document.querySelector(".jf-notif-content");
+    if (!tabs || !contentHost) return;
+
+    let access = null;
+    try {
+      const { getCastAccess } = await getCastModule();
+      access = await getCastAccess();
+    } catch {}
+
+    const allowed = access?.canViewShared === true;
+    const existingTab = tabs.querySelector('[data-tab="cast"]');
+    const existingPane = contentHost.querySelector('.jf-notif-tab-content[data-tab="cast"]');
+    const wasCastActive = !!document.querySelector('.jf-notif-tab.active[data-tab="cast"]');
+
+    if (!allowed) {
+      existingTab?.remove();
+      existingPane?.remove();
+      cleanupCastTabMount();
+      if (wasCastActive) {
+        activateNotifTab("new");
+      }
+      return;
+    }
+
+    if (!existingTab) {
+      const btn = document.createElement("button");
+      btn.className = "jf-notif-tab";
+      btn.setAttribute("data-tab", "cast");
+      btn.textContent = liveConfig.languageLabels.castTab || "İzleme Akışı";
+      tabs.appendChild(btn);
+      bindNotifTabButton(btn);
+    }
+
+    if (!existingPane) {
+      const pane = document.createElement("div");
+      pane.className = "jf-notif-tab-content";
+      pane.setAttribute("data-tab", "cast");
+      pane.style.display = "none";
+      pane.innerHTML = `<div class="jf-cast-panel-host" id="jfCastPanelHost"></div>`;
+      contentHost.appendChild(pane);
+    }
+
+    if (document.querySelector('.jf-notif-tab.active[data-tab="cast"]')) {
+      void mountCastTabPanel();
+    }
+  })().finally(() => {
+    __castTabSyncPromise = null;
+  });
+
+  return __castTabSyncPromise;
+}
 
 function ensureSystemTabPresence() {
   const liveConfig = getLiveConfig();
@@ -743,12 +865,7 @@ function ensureSystemTabPresence() {
     pane.style.display = "none";
     pane.innerHTML = `<ul class="jf-activity-list" id="jfActivityList"></ul>`;
     contentHost.appendChild(pane);
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".jf-notif-tab").forEach(b => b.classList.toggle("active", b === btn));
-      document.querySelectorAll(".jf-notif-tab-content").forEach(c => {
-        c.style.display = (c.getAttribute("data-tab") === "system") ? "" : "none";
-      });
-    });
+    bindNotifTabButton(btn);
   }
 }
 
@@ -786,6 +903,78 @@ function injectCriticalNotifCSS() {
   style.textContent = `
     #jfNotifModal { display: none !important; }
     #jfNotifModal.open { display: block !important; }
+  `;
+  document.head.appendChild(style);
+}
+
+function ensureCastTabStyles() {
+  if (document.getElementById("jfCastTabInlineStyle")) return;
+  const style = document.createElement("style");
+  style.id = "jfCastTabInlineStyle";
+  style.textContent = `
+    #jfNotifModal .jf-notif-tab-content[data-tab="cast"] {
+      padding-top: 6px;
+    }
+    #jfNotifModal .jf-cast-panel-host {
+      width: 100%;
+      min-width: 0;
+    }
+    #jfNotifModal[data-jf-notif-css-theme="1"] {
+      --jms-cast-embed-panel-bg: var(--jf-notif-card-bg);
+      --jms-cast-embed-panel-bg-2: var(--jf-notif-bg);
+      --jms-cast-embed-soft: var(--jf-notif-hover);
+      --jms-cast-embed-text: var(--jf-notif-text);
+      --jms-cast-embed-muted: var(--jf-notif-subtext);
+      --jms-cast-embed-border: var(--jf-notif-border);
+      --jms-cast-embed-accent: var(--jf-notif-accent);
+      --jms-cast-embed-accent-2: var(--jf-notif-warning);
+      --jms-cast-embed-shadow: var(--jf-notif-shadow);
+      --jms-cast-embed-chip-bg: var(--jf-notif-hover);
+      --jms-cast-embed-hero-hover: var(--jf-notif-hover);
+      --jms-cast-embed-progress-bg: var(--jf-notif-hover);
+    }
+    #jfNotifModal[data-jf-notif-css-theme="2"] {
+      --jms-cast-embed-panel-bg: var(--ntf-panel);
+      --jms-cast-embed-panel-bg-2: var(--ntf-surface);
+      --jms-cast-embed-soft: var(--ntf-surface-hover);
+      --jms-cast-embed-text: var(--ntf-text);
+      --jms-cast-embed-muted: var(--ntf-text-muted);
+      --jms-cast-embed-border: var(--ntf-divider);
+      --jms-cast-embed-accent: var(--ntf-accent);
+      --jms-cast-embed-accent-2: var(--ntf-warning);
+      --jms-cast-embed-shadow: var(--ntf-shadow);
+      --jms-cast-embed-chip-bg: var(--ntf-surface);
+      --jms-cast-embed-hero-hover: var(--ntf-surface-hover);
+      --jms-cast-embed-progress-bg: var(--ntf-surface);
+    }
+    #jfNotifModal[data-jf-notif-css-theme="3"] {
+      --jms-cast-embed-panel-bg: var(--panel-bg);
+      --jms-cast-embed-panel-bg-2: var(--head-bg);
+      --jms-cast-embed-soft: var(--row-hover);
+      --jms-cast-embed-text: var(--nft-text-primary);
+      --jms-cast-embed-muted: var(--nft-text-secondary);
+      --jms-cast-embed-border: var(--border-color);
+      --jms-cast-embed-accent: var(--notif-accent);
+      --jms-cast-embed-accent-2: var(--notif-amber);
+      --jms-cast-embed-shadow: var(--notif-shadow-md);
+      --jms-cast-embed-chip-bg: var(--head-bg);
+      --jms-cast-embed-hero-hover: var(--row-hover);
+      --jms-cast-embed-progress-bg: var(--head-bg);
+    }
+    #jfNotifModal[data-jf-notif-css-theme="4"] {
+      --jms-cast-embed-panel-bg: var(--jf-notif-surface);
+      --jms-cast-embed-panel-bg-2: var(--jf-notif-surface-2);
+      --jms-cast-embed-soft: var(--jf-notif-surface-2);
+      --jms-cast-embed-text: var(--jf-notif-text);
+      --jms-cast-embed-muted: var(--jf-notif-text-dim);
+      --jms-cast-embed-border: var(--jf-notif-border);
+      --jms-cast-embed-accent: var(--jf-notif-accent);
+      --jms-cast-embed-accent-2: var(--jf-notif-accent-2);
+      --jms-cast-embed-shadow: var(--jf-shadow-1);
+      --jms-cast-embed-chip-bg: var(--jf-notif-surface-2);
+      --jms-cast-embed-hero-hover: var(--jf-notif-surface-2);
+      --jms-cast-embed-progress-bg: var(--jf-notif-surface-2);
+    }
   `;
   document.head.appendChild(style);
 }
@@ -868,6 +1057,7 @@ function openModal() {
   requestAnimationFrame(() => m.classList.add("open"));
   notifState.isModalOpen = true;
   renderNotifications();
+  void ensureCastTabPresence();
   if (liveConfig.enableRenderResume !== false) renderResume();
   if (notifState._systemAllowed) {
     pollActivities();
@@ -881,6 +1071,7 @@ function openModal() {
     m.classList.remove("open");
   }
   notifState.isModalOpen = false;
+  cleanupCastTabMount();
 
   if (notifState._systemAllowed && config.enableCounterSystem && Array.isArray(notifState.activities)) {
     const newest = notifState.activities.reduce((acc, a) => {
@@ -944,6 +1135,7 @@ function updateBadge() {
 async function renderNotifications() {
   const ul = document.querySelector("#jfNotifList");
   if (!ul) return;
+  void ensureCastTabPresence();
   const gen = ++notifRenderGen;
   const map = new Map();
   for (const n of notifState.list) {

@@ -37,8 +37,20 @@ async function getAuthHeaders() {
 
 function normalizePluginConfigResponse(payload) {
   if (!payload || typeof payload !== "object") return {};
-  if (payload.cfg && typeof payload.cfg === "object") return payload.cfg;
-  return payload;
+
+  const raw = (payload.cfg && typeof payload.cfg === "object")
+    ? payload.cfg
+    : payload;
+
+  if (!raw || typeof raw !== "object") return {};
+
+  return {
+    ...raw,
+    enableCastModule: raw.enableCastModule ?? raw.EnableCastModule,
+    allowSharedCastViewerForUsers:
+      raw.allowSharedCastViewerForUsers ?? raw.AllowSharedCastViewerForUsers,
+    tmdbApiKey: raw.tmdbApiKey ?? raw.TmdbApiKey
+  };
 }
 
 export function sanitizeTmdbApiKey(value) {

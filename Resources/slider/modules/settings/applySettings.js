@@ -1,4 +1,4 @@
-import { getAdminTargetProfile, getConfig, getDeviceProfileAuto, publishAdminSnapshotIfForced } from "../config.js";
+import { getAdminTargetProfile, getConfig, getDeviceProfileAuto, normalizeSettingsHotkey, publishAdminSnapshotIfForced, SETTINGS_HOTKEY_DEFAULT } from "../config.js";
 import { updateConfig } from "../configPersistence.js";
 import { loadCSS } from "../playerStyles.js";
 import { updateSlidePosition } from '../positionUtils.js';
@@ -6,6 +6,7 @@ import { createCheckbox, createImageTypeSelect, bindCheckboxKontrol, bindTersChe
 import { updateHeaderUserAvatar, updateAvatarStyles, clearAvatarCache } from "../userAvatar.js";
 import { showNotification } from "../player/ui/notification.js";
 import { updateJmsPluginConfig } from "../jmsPluginConfig.js";
+import { closeDetailsModalIfLoaded } from "../detailsModalLoader.js";
 import { saveStudioHubVisibility } from "../studioHubsShared.js";
 
 const _intOr = (v, def) => {
@@ -67,6 +68,45 @@ async function isAdminUser_apply() {
   }
 }
 
+async function getCurrentUserId_apply() {
+  try {
+    const user = await window.ApiClient?.getCurrentUser?.();
+    return String(user?.Id || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+async function updateCastModuleSettings_apply(patch = {}) {
+  const token = getEmbyTokenSafe_apply();
+  const userId = await getCurrentUserId_apply();
+  const headers = {
+    Accept: "application/json",
+    "Content-Type": "application/json"
+  };
+
+  if (token) headers["X-Emby-Token"] = token;
+  if (userId) headers["X-Emby-UserId"] = userId;
+
+  const res = await fetch("/Plugins/JMSFusion/cast/settings", {
+    method: "POST",
+    cache: "no-store",
+    headers,
+    body: JSON.stringify(patch || {})
+  });
+
+  if (!res.ok) {
+    let msg = `Cast settings HTTP ${res.status}`;
+    try {
+      const raw = await res.text();
+      if (raw) msg = raw;
+    } catch {}
+    throw new Error(msg);
+  }
+
+  return res.json().catch(() => ({}));
+}
+
 function pick(obj, keys) {
   const out = {};
   keys.forEach(k => { if (obj && Object.prototype.hasOwnProperty.call(obj, k)) out[k] = obj[k]; });
@@ -94,7 +134,8 @@ const USER_ONLY_KEYS = [
   "avatarRefreshTime",
   "randomDicebearAvatar",
   "dicebearParams",
-  "playerTheme"
+  "playerTheme",
+  "settingsHotkey"
 ];
 
   export async function applySettings(reload = false) {
@@ -106,6 +147,19 @@ const USER_ONLY_KEYS = [
         const form = document.querySelector('#settings-modal form');
         if (!form) return;
         const formData = new FormData(form);
+        const hasNamedControl = (name) => {
+          try {
+            return !!form.querySelector(`[name="${name}"]`);
+          } catch {
+            return false;
+          }
+        };
+        const hasCastPolicyFields =
+          hasNamedControl('enableCastModule') ||
+          hasNamedControl('allowSharedCastViewerForUsers');
+        const isRealAdmin = hasCastPolicyFields
+          ? await isAdminUser_apply()
+          : false;
         const config = getConfig();
         const oldTheme = getConfig().playerTheme;
         const oldPlayerStyle = getConfig().playerStyle;
@@ -152,10 +206,24 @@ const USER_ONLY_KEYS = [
         const sapUseIdle = formData.get('sapUseIdleDetection') === 'on';
         const sapRespect = formData.get('sapRespectPiP') === 'on';
         const sapIgnoreShort = _intOr(formData.get('sapIgnoreShortUnderSec'), 300);
+        const boolFromFd = (name, fallback) => {
+          const control = form.querySelector(`[name="${name}"]`);
+          if (control && control.type === 'checkbox') {
+            return control.checked === true;
+          }
+          return formData.has(name) ? (formData.get(name) === 'on') : (fallback ?? false);
+        };
+        const enableCastModule = boolFromFd(
+          'enableCastModule',
+          config.enableCastModule !== false
+        );
+        const showCast = enableCastModule && formData.get('showCast') === 'on';
+        const allowSharedCastViewerForUsers = enableCastModule && boolFromFd(
+          'allowSharedCastViewerForUsers',
+          config.allowSharedCastViewerForUsers === true
+        );
         const pauseOverlayMinDurMin =
             _clamp(_floatOr(formData.get('pauseOverlayMinVideoMinutes'), 5), 1, _MAX_MIN);
-        const boolFromFd = (name, fallback) =>
-          (formData.has(name) ? (formData.get(name) === 'on') : (fallback ?? false));
         const updatedConfig = {
             ...config,
             smartAutoPause: {
@@ -185,7 +253,7 @@ const USER_ONLY_KEYS = [
             albumArtBackgroundOpacity: parseFloat(formData.get('albumArtBackgroundOpacity')),
             shuffleSeedLimit: parseInt(formData.get('shuffleSeedLimit'), 10),
             balanceItemTypes: formData.get('balanceItemTypes') === 'on',
-            showCast: formData.get('showCast') === 'on',
+            showCast,
             showProgressBar: false,
             showProgressAsSeconds: formData.get('showProgressAsSeconds') === 'on',
             enableTrailerPlayback: formData.get('enableTrailerPlayback') === 'on',
@@ -255,8 +323,17 @@ const USER_ONLY_KEYS = [
             enablePauseFeaturesMaster: formData.get('enablePauseFeaturesMaster') === 'on',
             enableSubtitleCustomizerModule: formData.get('enableSubtitleCustomizerModule') === 'on',
             enableParentalPinModule: formData.get('enableParentalPinModule') === 'on',
+            enableDetailsModalModule: formData.get('enableDetailsModalModule') === 'on',
+            enableCastModule,
+            allowSharedCastViewerForUsers,
+            detailsModalTmdbReviewsEnabled: formData.get('detailsModalTmdbReviewsEnabled') === 'on',
+            detailsModalLocalCommentsEnabled: formData.get('detailsModalLocalCommentsEnabled') === 'on',
             enableCustomSplashScreen: formData.get('enableCustomSplashScreen') === 'on',
             customSplashTitle: String(formData.get('customSplashTitle') || '').trim(),
+            settingsHotkey: normalizeSettingsHotkey(
+              formData.get('settingsHotkey'),
+              config.settingsHotkey || SETTINGS_HOTKEY_DEFAULT
+            ),
 
             enableDirectorRows: formData.get('enableDirectorRows') === 'on',
             showDirectorRowsHeroCards: formData.get('showDirectorRowsHeroCards') === 'on',
@@ -706,6 +783,12 @@ const USER_ONLY_KEYS = [
           localStorage.setItem('pauseOverlay', JSON.stringify(updatedConfig.pauseOverlay));
         } catch {}
 
+        if (updatedConfig.enableDetailsModalModule === false) {
+          try {
+            await closeDetailsModalIfLoaded();
+          } catch {}
+        }
+
         if (!useGlobalStudioHubsVisibility) {
           try {
             await saveStudioHubVisibility(studioHubsHiddenValue, {
@@ -740,6 +823,13 @@ const USER_ONLY_KEYS = [
         }
 
         await flushManagedStorageSnapshot();
+
+        if (hasCastPolicyFields && isRealAdmin) {
+          await updateCastModuleSettings_apply({
+            EnableCastModule: updatedConfig.enableCastModule,
+            AllowSharedCastViewerForUsers: updatedConfig.allowSharedCastViewerForUsers
+          });
+        }
 
         if (isAdmin && hasTmdbApiKeyField) {
           await updateJmsPluginConfig({ TmdbApiKey: tmdbApiKey });

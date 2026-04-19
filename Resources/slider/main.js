@@ -3,6 +3,7 @@ import {
   getConfig,
   getHomeSectionsRuntimeConfig,
   getPauseFeaturesRuntimeConfig,
+  isDetailsModalModuleEnabled,
   isSubtitleCustomizerModuleEnabled
 } from "./modules/config.js";
 import { getLanguageLabels, getDefaultLanguage } from "./language/index.js";
@@ -17,7 +18,6 @@ import { cachedFetchJson, createCachedItemDetailsFetcher, startLibraryDeltaWatch
 import { forceHomeSectionsTop, forceSkinHeaderPointerEvents } from "./modules/positionOverrides.js";
 import { initAvatarSystem } from "./modules/userAvatar.js";
 import { initializeQualityBadges, primeQualityFromItems, annotateDomWithQualityHints } from "./modules/qualityBadges.js";
-import { initNotifications, forcejfNotifBtnPointerEvents } from "./modules/notifications.js";
 import { startUpdatePolling } from "./modules/update.js";
 import { updateSlidePosition } from "./modules/positionUtils.js";
 import { teardownAnimations, hardCleanupSlide } from "./modules/animations.js";
@@ -30,6 +30,7 @@ import { initProfileChooser, syncProfileChooserHeaderButtonVisibility } from "./
 export { loadCSS } from "./modules/playerStyles.js";
 export { waitForAnyVisible };
 const idle = window.requestIdleCallback || ((cb) => setTimeout(cb, 0));
+const cancelIdle = window.cancelIdleCallback || ((id) => clearTimeout(id));
 const MATERIAL_ICONS_REPAIR_STYLE_ID = "jms-material-icons-utf8-repair";
 const MATERIAL_ICONS_PROBE_CLASS = "_10k";
 const MATERIAL_ICONS_PROBE_CONTENT = "\ue951";
@@ -48,6 +49,7 @@ const CUSTOM_SPLASH_CLEANUP_MS = 420;
 const CUSTOM_SPLASH_EXIT_SYNC_MS = 120;
 const AUTH_CONTEXT_REBOOT_DEBOUNCE_MS = 180;
 let materialIconsRepairPromise = null;
+let __notificationsModulePromise = null;
 let __detailsModalLoaderPromise = null;
 let __hoverTrailerModulePromise = null;
 let __personalRecommendationsModulePromise = null;
@@ -71,6 +73,32 @@ const __customSplashProgressState = {
   createdSlides: 0,
   poolCount: 0
 };
+
+async function getNotificationsModule() {
+  if (!__notificationsModulePromise) {
+    __notificationsModulePromise = import("./modules/notifications.js").catch((error) => {
+      __notificationsModulePromise = null;
+      throw error;
+    });
+  }
+
+  return __notificationsModulePromise;
+}
+
+function bootNotificationsOnce() {
+  if (window.__jmsNotificationsBooted) return;
+  window.__jmsNotificationsBooted = true;
+
+  void getNotificationsModule()
+    .then(async (mod) => {
+      try { mod?.forcejfNotifBtnPointerEvents?.(); } catch {}
+      await mod?.initNotifications?.();
+    })
+    .catch((error) => {
+      window.__jmsNotificationsBooted = false;
+      console.warn("initNotifications failed:", error);
+    });
+}
 
 function getDomObserveRoot() {
   return document.body || document.documentElement;
@@ -1015,6 +1043,12 @@ function cleanupStudioHubsLazy() {
 
 let homeSectionMountSeq = 0;
 const homeSectionMountTimers = new Set();
+let managedHomeSectionRecoverySeq = 0;
+const managedHomeSectionRecoveryTimers = new Set();
+
+function homeSectionLog() {}
+
+function homeSectionWarn() {}
 
 function clearHomeSectionMountTimers() {
   for (const timer of homeSectionMountTimers) {
@@ -1033,36 +1067,252 @@ function scheduleHomeSectionMount(seq, fn, delayMs = 0) {
   homeSectionMountTimers.add(timer);
 }
 
+function clearManagedHomeSectionRecoveryTimers() {
+  managedHomeSectionRecoverySeq += 1;
+  for (const timer of Array.from(managedHomeSectionRecoveryTimers)) {
+    clearTimeout(timer);
+    managedHomeSectionRecoveryTimers.delete(timer);
+  }
+}
+
+function hasRenderableDom(selector) {
+  try {
+    return !!document.querySelector(selector);
+  } catch {
+    return false;
+  }
+}
+
+function hasRenderablePersonalRecommendationUi(cfg = getMainConfig()) {
+  const homeSectionsConfig = getHomeSectionsRuntimeConfig(cfg);
+  const personalOk =
+    !homeSectionsConfig.enablePersonalRecommendations ||
+    hasRenderableDom(
+      "#personal-recommendations .personal-recs-row .personal-recs-card:not(.skeleton), #personal-recommendations .personal-recs-row .no-recommendations"
+    );
+  const becauseYouWatchedOk =
+    !homeSectionsConfig.enableBecauseYouWatched ||
+    hasRenderableDom(
+      '[id^="because-you-watched--"] .byw-row .personal-recs-card:not(.skeleton), [id^="because-you-watched--"] .byw-row .no-recommendations, #because-you-watched .byw-row .personal-recs-card:not(.skeleton), #because-you-watched .byw-row .no-recommendations'
+    );
+  const genreOk =
+    !homeSectionsConfig.enableGenreHubs ||
+    hasRenderableDom(
+      "#genre-hubs .genre-hub-section .genre-row .personal-recs-card:not(.skeleton), #genre-hubs .genre-hub-section .genre-row .no-recommendations"
+    );
+  return personalOk && becauseYouWatchedOk && genreOk;
+}
+
+function hasRenderableRecentRowsUi(cfg = getMainConfig()) {
+  if (!shouldRenderRecentRowsUi(cfg)) return true;
+  return hasRenderableDom(
+    "#recent-rows .recent-row-section .personal-recs-card:not(.skeleton), #recent-rows .recent-row-section .no-recommendations, #recent-rows .recent-row-section .dir-row-hero"
+  );
+}
+
+function hasRenderableDirectorRowsUi(cfg = getMainConfig()) {
+  if (!shouldRenderDirectorRowsUi(cfg)) return true;
+  return hasRenderableDom(
+    "#director-rows .dir-row-section .personal-recs-card:not(.skeleton), #director-rows .dir-row-section .no-recommendations, #director-rows .dir-row-section .dir-row-hero"
+  );
+}
+
+function hasRenderableStudioHubsUi(cfg = getMainConfig()) {
+  if (!shouldRenderStudioHubsUi(cfg)) return true;
+  return hasRenderableDom(
+    "#studio-hubs .studio-hub-card, #studio-hubs .studio-card, #studio-hubs .no-recommendations"
+  );
+}
+
+function getManagedHomeSectionStatus(cfg = getMainConfig()) {
+  return {
+    studio: hasRenderableStudioHubsUi(cfg),
+    personal: hasRenderablePersonalRecommendationUi(cfg),
+    recent: hasRenderableRecentRowsUi(cfg),
+    director: hasRenderableDirectorRowsUi(cfg),
+  };
+}
+
+function needsManagedHomeSectionRecovery(cfg = getMainConfig()) {
+  const status = getManagedHomeSectionStatus(cfg);
+  return !(status.studio && status.personal && status.recent && status.director);
+}
+
+async function runManagedHomeSectionRecovery({
+  eagerStudioHubs = true,
+  seq = managedHomeSectionRecoverySeq,
+} = {}) {
+  if (managedHomeSectionRecoverySeq !== seq) return false;
+  if (!isHomeRouteActive()) {
+    homeSectionWarn("managedRecovery:skip:not-home-route", { seq, eagerStudioHubs });
+    return false;
+  }
+  const visible = await waitForVisibleIndexPage(12000);
+  if (managedHomeSectionRecoverySeq !== seq) return false;
+  if (!visible || !isHomeVisible()) {
+    homeSectionWarn("managedRecovery:skip:not-visible", {
+      seq,
+      eagerStudioHubs,
+      visible,
+    });
+    return false;
+  }
+
+  const cfg = getMainConfig();
+  const statusBefore = getManagedHomeSectionStatus(cfg);
+  homeSectionLog("managedRecovery:start", {
+    seq,
+    eagerStudioHubs,
+    statusBefore,
+  });
+  if (!needsManagedHomeSectionRecovery(cfg)) {
+    homeSectionLog("managedRecovery:skip:already-rendered", {
+      seq,
+      statusBefore,
+    });
+    return true;
+  }
+
+  const results = await Promise.allSettled([
+    shouldRenderStudioHubsUi(cfg)
+      ? ensureStudioHubsMountedLazy({ eager: eagerStudioHubs })
+      : Promise.resolve(),
+    shouldRenderPersonalRecommendationUi(cfg)
+      ? renderPersonalRecommendationsLazy()
+      : Promise.resolve(),
+    shouldRenderRecentRowsUi(cfg)
+      ? mountRecentRowsLazyModule()
+      : Promise.resolve(),
+    shouldRenderDirectorRowsUi(cfg)
+      ? mountDirectorRowsLazyModule()
+      : Promise.resolve(),
+  ]);
+
+  const statusAfter = getManagedHomeSectionStatus(cfg);
+  const ok = !needsManagedHomeSectionRecovery(cfg);
+  homeSectionLog("managedRecovery:complete", {
+    seq,
+    ok,
+    statusBefore,
+    statusAfter,
+    moduleResults: {
+      studio: results[0]?.status || null,
+      personal: results[1]?.status || null,
+      recent: results[2]?.status || null,
+      director: results[3]?.status || null,
+    },
+  });
+  return ok;
+}
+
+function scheduleManagedHomeSectionRecovery({
+  delaysMs = [300, 1200, 2600, 4800, 7600],
+  eagerStudioHubs = true,
+} = {}) {
+  clearManagedHomeSectionRecoveryTimers();
+  const seq = managedHomeSectionRecoverySeq;
+  homeSectionLog("managedRecovery:schedule", {
+    seq,
+    delaysMs: Array.isArray(delaysMs) ? delaysMs.slice() : [],
+    eagerStudioHubs,
+  });
+
+  for (const rawDelay of delaysMs) {
+    const delayMs = Math.max(0, Number(rawDelay) || 0);
+    const timer = window.setTimeout(() => {
+      managedHomeSectionRecoveryTimers.delete(timer);
+      if (managedHomeSectionRecoverySeq !== seq) return;
+      void runManagedHomeSectionRecovery({ eagerStudioHubs, seq }).then((ok) => {
+        if (ok && managedHomeSectionRecoverySeq === seq) {
+          clearManagedHomeSectionRecoveryTimers();
+        }
+      });
+    }, delayMs);
+    managedHomeSectionRecoveryTimers.add(timer);
+  }
+}
+
 function bootHomeSections(cfg, { eagerStudioHubs = false, forceManagedSections = false } = {}) {
   homeSectionMountSeq += 1;
   const seq = homeSectionMountSeq;
   clearHomeSectionMountTimers();
   let delayMs = 0;
+  const sections = {
+    studio: shouldRenderStudioHubsUi(cfg),
+    personal: shouldRenderPersonalRecommendationUi(cfg),
+    recent: shouldRenderRecentRowsUi(cfg),
+    director: shouldRenderDirectorRowsUi(cfg),
+  };
+  homeSectionLog("bootHomeSections", {
+    seq,
+    eagerStudioHubs,
+    forceManagedSections,
+    sections,
+  });
 
-  if (shouldRenderStudioHubsUi(cfg)) {
+  if (sections.studio) {
     scheduleHomeSectionMount(seq, () => {
       void ensureStudioHubsMountedLazy({ eager: eagerStudioHubs });
     }, delayMs);
     delayMs += 180;
   }
 
-  if (shouldRenderPersonalRecommendationUi(cfg)) {
+  if (sections.personal) {
     scheduleHomeSectionMount(seq, () => {
       void renderPersonalRecommendationsLazy({ force: forceManagedSections });
     }, delayMs);
     delayMs += 180;
   }
-  if (shouldRenderRecentRowsUi(cfg)) {
+  if (sections.recent) {
     scheduleHomeSectionMount(seq, () => {
       void mountRecentRowsLazyModule({ force: forceManagedSections });
     }, delayMs);
     delayMs += 180;
   }
-  if (shouldRenderDirectorRowsUi(cfg)) {
+  if (sections.director) {
     scheduleHomeSectionMount(seq, () => {
       void mountDirectorRowsLazyModule({ force: forceManagedSections });
     }, delayMs);
     delayMs += 180;
+  }
+}
+
+function kickManagedHomeSectionsNow(
+  cfg = getMainConfig(),
+  {
+    eagerStudioHubs = true,
+    forceManagedSections = false,
+    reason = "direct-kick",
+  } = {}
+) {
+  const sections = {
+    studio: shouldRenderStudioHubsUi(cfg),
+    personal: shouldRenderPersonalRecommendationUi(cfg),
+    recent: shouldRenderRecentRowsUi(cfg),
+    director: shouldRenderDirectorRowsUi(cfg),
+  };
+
+  homeSectionLog("kickManagedHomeSectionsNow", {
+    reason,
+    eagerStudioHubs,
+    forceManagedSections,
+    sections,
+  });
+
+  if (sections.studio) {
+    void ensureStudioHubsMountedLazy({
+      eager: eagerStudioHubs,
+      force: forceManagedSections,
+    });
+  }
+  if (sections.personal) {
+    void renderPersonalRecommendationsLazy({ force: forceManagedSections });
+  }
+  if (sections.recent) {
+    void mountRecentRowsLazyModule({ force: forceManagedSections });
+  }
+  if (sections.director) {
+    void mountDirectorRowsLazyModule({ force: forceManagedSections });
   }
 }
 
@@ -1181,8 +1431,67 @@ window.__jmsFirstSlideReady = window.__jmsFirstSlideReady || false;
 window.__jmsNonCriticalBooted = window.__jmsNonCriticalBooted || false;
 window.__jmsNotificationsBooted = window.__jmsNotificationsBooted || false;
 window.__jmsMusicSchedulerBooted = window.__jmsMusicSchedulerBooted || false;
+window.__jmsSliderBootToken = Number(window.__jmsSliderBootToken || 0);
+window.__jmsSlidesInitToken = Number(window.__jmsSlidesInitToken || 0);
+window.__jmsSliderResetToken = Number(window.__jmsSliderResetToken || 0);
+window.__jmsStartWhenAllReadyHandler = window.__jmsStartWhenAllReadyHandler || null;
+window.__jmsSliderIdleHandles = window.__jmsSliderIdleHandles || new Set();
 
-function markFirstSlideReady() {
+function clearStartWhenAllReadyHandler() {
+  const handler = window.__jmsStartWhenAllReadyHandler;
+  if (typeof handler === "function") {
+    try { document.removeEventListener("jms:all-slides-ready", handler); } catch {}
+  }
+  window.__jmsStartWhenAllReadyHandler = null;
+}
+
+function clearPendingSliderIdleTasks() {
+  const handles = window.__jmsSliderIdleHandles;
+  if (!(handles instanceof Set) || !handles.size) return;
+  for (const handle of Array.from(handles)) {
+    try { cancelIdle(handle); } catch {}
+    handles.delete(handle);
+  }
+}
+
+function invalidateSliderBootSession() {
+  window.__jmsSliderBootToken = (Number(window.__jmsSliderBootToken) || 0) + 1;
+  clearStartWhenAllReadyHandler();
+  clearPendingSliderIdleTasks();
+}
+
+function beginSliderBootSession() {
+  invalidateSliderBootSession();
+  return Number(window.__jmsSliderBootToken) || 0;
+}
+
+function isSliderBootTokenCurrent(token, { requireHomeVisible = true, requireContainer = false } = {}) {
+  if (!Number.isFinite(token) || token <= 0) return false;
+  if ((Number(window.__jmsSliderBootToken) || 0) !== token) return false;
+  if (requireHomeVisible && !isHomeVisible()) return false;
+  if (requireContainer) {
+    return !!document.querySelector(
+      "#indexPage:not(.hide) #monwui-slides-container, #homePage:not(.hide) #monwui-slides-container"
+    );
+  }
+  return true;
+}
+
+function scheduleSliderIdleTask(cb) {
+  const handles = window.__jmsSliderIdleHandles instanceof Set
+    ? window.__jmsSliderIdleHandles
+    : (window.__jmsSliderIdleHandles = new Set());
+  let handle = 0;
+  handle = idle(() => {
+    handles.delete(handle);
+    try { cb?.(); } catch (e) { console.warn("scheduleSliderIdleTask hata:", e); }
+  });
+  handles.add(handle);
+  return handle;
+}
+
+function markFirstSlideReady(bootToken = Number(window.__jmsSliderBootToken) || 0) {
+  if (!isSliderBootTokenCurrent(bootToken, { requireHomeVisible: false })) return;
   if (window.__jmsFirstSlideReady) return;
   window.__jmsFirstSlideReady = true;
   syncCustomSplashProgress({ firstSlideReady: true });
@@ -1372,16 +1681,22 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
   }
 
   function isDetailsModalCssActive(cfg) {
+    const modalDomPresent = matchesAny([
+      '#jms-details-modal-root',
+      '.jmsdm-backdrop',
+      '.jmsdm-card'
+    ]);
+
+    if (!isDetailsModalModuleEnabled(cfg)) {
+      return modalDomPresent;
+    }
+
     return (
       isSliderCssActive(cfg) ||
       isNotificationsCssActive(cfg) ||
       isRecommendationCssActive(cfg) ||
       isStudioHubsCssActive(cfg) ||
-      matchesAny([
-        '#jms-details-modal-root',
-        '.jmsdm-backdrop',
-        '.jmsdm-card'
-      ])
+      modalDomPresent
     );
   }
 
@@ -1721,7 +2036,8 @@ function isCustomSplashBlockingNow() {
   }
 }
 
-function markSlideCreated() {
+function markSlideCreated(bootToken = Number(window.__jmsSliderBootToken) || 0) {
+  if (!isSliderBootTokenCurrent(bootToken, { requireHomeVisible: false })) return;
   window.__slidesCreated = (window.__slidesCreated || 0) + 1;
   const totalSlides = Math.max(0, Number(window.__totalSlidesPlanned) || 0);
   const createdSlides = Math.max(0, Number(window.__slidesCreated) || 0);
@@ -1842,7 +2158,7 @@ async function scheduleSliderRebuild(reason = "cycle-complete") {
     document.querySelectorAll(".monwui-dot-navigation-container").forEach(n => n.remove());
     await new Promise(r => setTimeout(r, 30));
     window.__initOnHomeOnce = false;
-    initializeSliderOnHome();
+    initializeSliderOnHome({ forceManagedSectionsBoot: true });
   } finally {
     window.__rebuildingSlider = false;
   }
@@ -2137,13 +2453,26 @@ const shuffleArray = (array) => {
   return array;
 };
 
-function isHomeVisible() {
-  return !!document.querySelector("#indexPage:not(.hide), #homePage:not(.hide)");
-}
-
 function isHomeRouteActive() {
   const hash = String(window.location.hash || "").toLowerCase().trim();
   return hash.startsWith("#/home") || hash.startsWith("#/index") || hash === "" || hash === "#";
+}
+
+function getVisibleHomePageEl() {
+  return document.querySelector("#indexPage:not(.hide), #homePage:not(.hide)");
+}
+
+function getVisibleHomeSectionsContainerEl(page = getVisibleHomePageEl()) {
+  const container = page?.querySelector?.(".homeSectionsContainer");
+  return container?.isConnected ? container : null;
+}
+
+function hasVisibleHomePage() {
+  return !!getVisibleHomePageEl();
+}
+
+function isHomeVisible() {
+  return hasVisibleHomePage() && isHomeRouteActive();
 }
 
 function uniqueByIdStable(arr) {
@@ -2210,10 +2539,7 @@ function runNonCriticalUiBootOnce() {
       try {
         const liveCfg = getMainConfig();
         if (liveCfg.enableNotifications !== false) {
-          if (!window.__jmsNotificationsBooted) {
-            window.__jmsNotificationsBooted = true;
-            initNotifications();
-          }
+          bootNotificationsOnce();
         } else {
           document.getElementById("jfNotifBtn")?.remove();
           document.getElementById("jfNotifModal")?.remove();
@@ -2241,21 +2567,11 @@ window.__jmsRefreshOptionalModules = (options = {}) => {
 void refreshOptionalModules();
 
 const NOTIF_ENABLED = getMainConfig().enableNotifications !== false;
-forcejfNotifBtnPointerEvents();
 try {
   if (!window.cleanupProfileChooser) {
     window.cleanupProfileChooser = initProfileChooser();
   }
 } catch {}
-
-if (NOTIF_ENABLED) {
-  try {
-    if (!window.__jmsNotificationsBooted) {
-      window.__jmsNotificationsBooted = true;
-      initNotifications();
-    }
-  } catch {}
-}
 
 if (!NOTIF_ENABLED) {
   document.documentElement.dataset.jmsNotif = "0";
@@ -2277,10 +2593,13 @@ window.__jmsIndexerAutoStartTimer = window.__jmsIndexerAutoStartTimer || null;
 window.__jmsIndexerAutoStartReady = window.__jmsIndexerAutoStartReady || false;
 window.__jmsIndexerAutoStartPending = window.__jmsIndexerAutoStartPending || false;
 
-function fullSliderReset({ preserveHomeSections = true } = {}) {
+function fullSliderReset({ preserveHomeSections = true, invalidateBoot = true } = {}) {
   try { teardownAnimations(); } catch {}
   forceSkinHeaderPointerEvents();
   forceHomeSectionsTop();
+  if (invalidateBoot) {
+    invalidateSliderBootSession();
+  }
 
   if (window.intervalChangeSlide) {
     clearInterval(window.intervalChangeSlide);
@@ -2300,7 +2619,7 @@ function fullSliderReset({ preserveHomeSections = true } = {}) {
   try { window.__cleanupActiveWatch?.(); } catch {}
   window.__cleanupActiveWatch = null;
   clearQueuedHomeSectionsBoot();
-  cleanupSlider({ preserveHomeSections });
+  cleanupSlider({ preserveHomeSections, invalidateBoot: false });
   clearCycleArm();
   try { window.__peakBooting = true; } catch {}
   window.__jmsFirstSlideReady = false;
@@ -2482,7 +2801,12 @@ function upsertSlidesContainerAtTop(indexPage) {
 }
 
 async function waitForVisibleIndexPage(timeout = 20000) {
-  const candidates = ["#indexPage:not(.hide)", "#homePage:not(.hide)", ".homeSectionsContainer"];
+  const candidates = [
+    "#indexPage:not(.hide) .homeSectionsContainer",
+    "#homePage:not(.hide) .homeSectionsContainer",
+    "#indexPage:not(.hide)",
+    "#homePage:not(.hide)"
+  ];
   return await waitForAnyVisible(candidates, { timeout });
 }
 
@@ -2855,25 +3179,41 @@ export async function slidesInit() {
     return;
   }
   if (window.__slidesInitRunning) {
-    console.debug("[JMS] slidesInit() skipped (already running)");
-    return;
+    const runningToken = Number(window.__jmsSlidesInitToken) || 0;
+    if (isSliderBootTokenCurrent(runningToken, { requireHomeVisible: false })) {
+      console.debug("[JMS] slidesInit() skipped (already running)");
+      return;
+    }
+    window.__slidesInitRunning = false;
   }
-   if (!isHomeVisible()) {
+  if (!isHomeVisible()) {
     console.debug("[JMS] slidesInit() skipped (home not visible)");
     return;
   }
+  const bootToken = beginSliderBootSession();
+  window.__jmsSlidesInitToken = bootToken;
+  const isBootActive = ({ requireHomeVisible = true, requireContainer = false } = {}) =>
+    isSliderBootTokenCurrent(bootToken, { requireHomeVisible, requireContainer });
   window.__slidesInitRunning = true;
   try {
     await waitAuthWarmupFallback(5000);
   } catch {}
+  if (!isBootActive({ requireHomeVisible: false })) return;
   syncCustomSplashProgress({ authReady: true });
   try {
     forceSkinHeaderPointerEvents();
     forceHomeSectionsTop();
 
+    const activeResetToken = Number(window.__jmsSliderResetToken) || 0;
+    if (window.sliderResetInProgress && !isSliderBootTokenCurrent(activeResetToken, { requireHomeVisible: false })) {
+      window.sliderResetInProgress = false;
+      window.__jmsSliderResetToken = 0;
+    }
+    if (!isBootActive()) return;
     if (window.sliderResetInProgress) return;
     window.sliderResetInProgress = true;
-    fullSliderReset();
+    window.__jmsSliderResetToken = bootToken;
+    fullSliderReset({ invalidateBoot: false });
 
     let userId = null, accessToken = null;
     let fetchItemDetailsCached = window.__jmsFetchItemDetailsCached || null;
@@ -2947,6 +3287,7 @@ export async function slidesInit() {
       console.error("Oturum bilgisi okunamadı:", e);
       return;
     }
+    if (!isBootActive()) return;
 
     if (!fetchItemDetailsCached) {
       const bulkBatchSize = Number(config?.detailsBulkBatchSize) || 60;
@@ -3023,6 +3364,7 @@ export async function slidesInit() {
         limit: Number(config?.libraryWatchLimit) || 50,
       });
     } catch {}
+    if (!isBootActive()) return;
 
     const cfgLimit =
       Number.isFinite(Number(config?.limit)) ? Number(config.limit) :
@@ -3326,6 +3668,7 @@ export async function slidesInit() {
       console.error("Slide verisi hazırlanırken hata:", err);
     }
 
+    if (!isBootActive()) return;
     try { primeQualityFromItems(items); } catch {}
     if (!items.length) {
     console.warn("Hiçbir slayt verisi elde edilemedi.");
@@ -3341,44 +3684,71 @@ export async function slidesInit() {
 
     const peakBatches = config.peakSlider ? buildPeakCreationBatches(items.length, getPeakDisplayOptions()) : [];
     const markSlideReadyWhenVisualSyncOpens = (slideEl) => {
+      if (!isBootActive({ requireHomeVisible: false })) return;
       if (typeof slideEl?.__waitForBackdropReady === "function") {
         slideEl.__waitForBackdropReady({
           timeoutMs: config.peakSlider ? 2200 : 1400
         }).finally(() => {
-          markFirstSlideReady();
+          markFirstSlideReady(bootToken);
         });
         return;
       }
-      markFirstSlideReady();
+      markFirstSlideReady(bootToken);
     };
     const createItemAt = async (itemIndex, options = {}) => {
+      if (!isBootActive()) return null;
       const item = items[itemIndex];
-      if (!item) return;
+      if (!item) return null;
       const slideEl = await createSlide(item, { insertAt: itemIndex, ...options });
+      if (!isBootActive()) {
+        const staleContainer = slideEl?.closest?.("#monwui-slides-container") || null;
+        try { slideEl?.__cleanupSlide?.(); } catch {}
+        try { slideEl?.remove?.(); } catch {}
+        try {
+          if (staleContainer && !staleContainer.querySelector(".monwui-slide")) {
+            staleContainer.remove();
+          }
+        } catch {}
+        return null;
+      }
       if (itemIndex === 0) {
         markSlideReadyWhenVisualSyncOpens(slideEl);
       }
       try { annotateDomWithQualityHints(document); } catch {}
-      markSlideCreated();
+      markSlideCreated(bootToken);
       return slideEl;
     };
 
     if (config.peakSlider) {
       const [firstBatch = [0]] = peakBatches;
       for (const itemIndex of firstBatch) {
+        if (!isBootActive()) return;
         await createItemAt(itemIndex, {
           suppressInitialDisplay: true,
           deferPeakReveal: itemIndex !== 0
         });
       }
     } else {
+      if (!isBootActive()) return;
       const first = items[0];
       const firstSlide = await createSlide(first);
+      if (!isBootActive()) {
+        const staleContainer = firstSlide?.closest?.("#monwui-slides-container") || null;
+        try { firstSlide?.__cleanupSlide?.(); } catch {}
+        try { firstSlide?.remove?.(); } catch {}
+        try {
+          if (staleContainer && !staleContainer.querySelector(".monwui-slide")) {
+            staleContainer.remove();
+          }
+        } catch {}
+        return;
+      }
       markSlideReadyWhenVisualSyncOpens(firstSlide);
       try { annotateDomWithQualityHints(document); } catch {}
-      markSlideCreated();
+      markSlideCreated(bootToken);
     }
 
+    if (!isBootActive()) return;
     const idxPage = document.querySelector("#indexPage:not(.hide)") || document.querySelector("#homePage:not(.hide)");
     if (idxPage) upsertSlidesContainerAtTop(idxPage);
     try {
@@ -3388,22 +3758,26 @@ export async function slidesInit() {
     if (config.peakSlider) {
       window.__peakBooting = false;
     }
-    initializeSlider();
+    initializeSlider(bootToken);
     const rest = config.peakSlider
       ? peakBatches.slice(1)
       : chunkArray(items.map((_, index) => index).slice(1), 1);
-    idle(() => {
+    scheduleSliderIdleTask(() => {
       (async () => {
+        if (!isBootActive({ requireContainer: true })) return;
         for (const batch of rest) {
+          if (!isBootActive({ requireContainer: true })) return;
           try {
             const createdSlides = [];
             for (const itemIndex of batch) {
+              if (!isBootActive({ requireContainer: true })) return;
               const slideEl = await createItemAt(itemIndex, {
                 suppressInitialDisplay: true,
                 deferPeakReveal: config.peakSlider
               });
               if (slideEl) createdSlides.push(slideEl);
             }
+            if (!isBootActive({ requireContainer: true })) return;
             if (config.peakSlider) {
               const idxPage = document.querySelector('#indexPage:not(.hide), #homePage:not(.hide)');
               if (idxPage) syncPeakStructureNow(idxPage);
@@ -3438,13 +3812,20 @@ export async function slidesInit() {
   } catch (e) {
     console.error("slidesInit hata:", e);
   } finally {
+    if ((Number(window.__jmsSlidesInitToken) || 0) === bootToken) {
+      window.__jmsSlidesInitToken = 0;
+    }
+    if ((Number(window.__jmsSliderResetToken) || 0) === bootToken) {
+      window.__jmsSliderResetToken = 0;
+    }
     window.sliderResetInProgress = false;
     window.__slidesInitRunning = false;
   }
 }
 
-function initializeSlider() {
+function initializeSlider(bootToken = Number(window.__jmsSliderBootToken) || 0) {
   try {
+    if (!isSliderBootTokenCurrent(bootToken, { requireContainer: true })) return;
     const indexPage =
       document.querySelector("#indexPage:not(.hide)") ||
       document.querySelector("#homePage:not(.hide)") ||
@@ -3492,6 +3873,14 @@ function queueHardResetNextFrame() {
 }
 
 function startWhenAllReady() {
+  if (!isSliderBootTokenCurrent(bootToken, { requireContainer: true })) {
+    if (window.__jmsStartWhenAllReadyHandler === startWhenAllReady) {
+      window.__jmsStartWhenAllReadyHandler = null;
+    }
+    try { document.removeEventListener("jms:all-slides-ready", startWhenAllReady); } catch {}
+    return;
+  }
+
   const shouldStartTimer = !hasStartedCycleClock() && !isCustomSplashBlockingNow();
 
   try {
@@ -3534,9 +3923,14 @@ function startWhenAllReady() {
   try { window.__cleanupActiveWatch?.(); } catch {}
   window.__cleanupActiveWatch = watchActiveSlideChanges();
 
+  if (window.__jmsStartWhenAllReadyHandler === startWhenAllReady) {
+    window.__jmsStartWhenAllReadyHandler = null;
+  }
   document.removeEventListener("jms:all-slides-ready", startWhenAllReady);
 }
 
+clearStartWhenAllReadyHandler();
+window.__jmsStartWhenAllReadyHandler = startWhenAllReady;
 if (window.__totalSlidesPlanned > 0 && window.__slidesCreated >= window.__totalSlidesPlanned) {
   startWhenAllReady();
 } else {
@@ -3643,6 +4037,12 @@ function setupNavigationObserver() {
     const nowOnHomePage = isHomeVisible() || isHomeRouteActive();
 
     if (currentUrl !== previousUrl || nowOnHomePage !== isOnHomePage) {
+      homeSectionLog("navigation:page-change", {
+        fromUrl: previousUrl,
+        toUrl: currentUrl,
+        wasOnHomePage: isOnHomePage,
+        nowOnHomePage,
+      });
       previousUrl = currentUrl;
       isOnHomePage = nowOnHomePage;
 
@@ -3655,9 +4055,16 @@ function setupNavigationObserver() {
         }
         const ok = await waitForVisibleIndexPage(12000);
         if (ok) {
+          homeSectionLog("navigation:home-ready", {
+            currentUrl,
+            visible: ok,
+          });
           window.__initOnHomeOnce = false;
           initializeSliderOnHome({ forceManagedSectionsBoot: true });
         } else {
+          homeSectionWarn("navigation:home-not-ready:observe", {
+            currentUrl,
+          });
           const stop = observeWhenHomeReady(() => {
             window.__initOnHomeOnce = false;
             initializeSliderOnHome({ forceManagedSectionsBoot: true });
@@ -3665,6 +4072,9 @@ function setupNavigationObserver() {
           }, 20000);
         }
       } else {
+        homeSectionLog("navigation:left-home", {
+          currentUrl,
+        });
         cleanupSlider();
         window.__initOnHomeOnce = false;
       }
@@ -3728,11 +4138,15 @@ function setupNavigationObserver() {
   const onPopState = () => scheduleCheck();
   const onHashChange = () => scheduleCheck();
   const onPageShow = () => scheduleCheck();
+  const onViewShow = () => scheduleCheck();
+  const onViewShown = () => scheduleCheck();
   const onFocus = () => scheduleCheck(50);
 
   window.addEventListener("popstate", onPopState);
   window.addEventListener("hashchange", onHashChange);
   window.addEventListener("pageshow", onPageShow);
+  document.addEventListener("viewshow", onViewShow);
+  document.addEventListener("viewshown", onViewShown);
   window.addEventListener("focus", onFocus, { passive: true });
 
   return () => {
@@ -3747,12 +4161,15 @@ function setupNavigationObserver() {
     window.removeEventListener("popstate", onPopState);
     window.removeEventListener("hashchange", onHashChange);
     window.removeEventListener("pageshow", onPageShow);
+    document.removeEventListener("viewshow", onViewShow);
+    document.removeEventListener("viewshown", onViewShown);
     window.removeEventListener("focus", onFocus);
   };
 }
 
 let homeSectionsBootTimer = 0;
 let homeSectionsBootSeq = 0;
+const HOME_SECTIONS_BOOT_RETRY_DELAYS_MS = [700, 1400, 2400, 3800, 5600, 8000];
 
 function clearQueuedHomeSectionsBoot() {
   if (homeSectionsBootTimer) {
@@ -3766,7 +4183,8 @@ function queueHomeSectionsBoot({
   delayMs = 0,
   eagerStudioHubs = false,
   requireSliderDisabled = false,
-  forceManagedSections = false
+  forceManagedSections = false,
+  maxRetryCount = HOME_SECTIONS_BOOT_RETRY_DELAYS_MS.length
 } = {}) {
   homeSectionsBootSeq += 1;
   const seq = homeSectionsBootSeq;
@@ -3776,36 +4194,112 @@ function queueHomeSectionsBoot({
     homeSectionsBootTimer = 0;
   }
 
-  homeSectionsBootTimer = window.setTimeout(() => {
-    homeSectionsBootTimer = 0;
-    idle(() => {
-      if (homeSectionsBootSeq !== seq) return;
-      if (!isHomeVisible()) return;
-      if (requireSliderDisabled && isSliderEnabled()) return;
+  homeSectionLog("queueHomeSectionsBoot:schedule", {
+    seq,
+    delayMs,
+    eagerStudioHubs,
+    requireSliderDisabled,
+    forceManagedSections,
+    maxRetryCount,
+  });
 
-      try {
-        const cfg = (typeof getConfig === "function" ? getConfig() : {}) || {};
-        bootHomeSections(cfg, { eagerStudioHubs, forceManagedSections });
-      } catch (e) {
-        console.warn("queueHomeSectionsBoot hata:", e);
-      }
-    });
-  }, Math.max(0, delayMs | 0));
+  const scheduleAttempt = (waitMs, attemptIndex) => {
+    if (homeSectionsBootSeq !== seq) return;
+    if (homeSectionsBootTimer) {
+      clearTimeout(homeSectionsBootTimer);
+      homeSectionsBootTimer = 0;
+    }
+
+    homeSectionsBootTimer = window.setTimeout(() => {
+      homeSectionsBootTimer = 0;
+      idle(() => {
+        if (homeSectionsBootSeq !== seq) return;
+        if (!isHomeRouteActive()) {
+          homeSectionWarn("queueHomeSectionsBoot:skip:not-home-route", {
+            seq,
+            attemptIndex,
+            waitMs,
+            requireSliderDisabled,
+            forceManagedSections,
+          });
+          return;
+        }
+        if (requireSliderDisabled && isSliderEnabled()) {
+          homeSectionWarn("queueHomeSectionsBoot:skip:slider-still-enabled", {
+            seq,
+            attemptIndex,
+            waitMs,
+            requireSliderDisabled,
+            forceManagedSections,
+          });
+          return;
+        }
+
+        const visibleHomePage = getVisibleHomePageEl();
+        const visibleHomeSections = getVisibleHomeSectionsContainerEl(visibleHomePage);
+        const homeReady = !!(visibleHomePage && visibleHomeSections && isHomeVisible());
+        homeSectionLog("queueHomeSectionsBoot:attempt", {
+          seq,
+          attemptIndex,
+          waitMs,
+          eagerStudioHubs,
+          requireSliderDisabled,
+          forceManagedSections,
+          visiblePageId: visibleHomePage?.id || null,
+          hasVisibleHomeSections: !!visibleHomeSections,
+          homeReady,
+        });
+
+        if (homeReady) {
+          try {
+            const cfg = (typeof getConfig === "function" ? getConfig() : {}) || {};
+            bootHomeSections(cfg, { eagerStudioHubs, forceManagedSections });
+          } catch (e) {
+            console.warn("queueHomeSectionsBoot hata:", e);
+          }
+        } else {
+          homeSectionWarn("queueHomeSectionsBoot:not-ready", {
+            seq,
+            attemptIndex,
+            waitMs,
+            eagerStudioHubs,
+            requireSliderDisabled,
+            forceManagedSections,
+          });
+        }
+
+        if (attemptIndex >= Math.max(0, maxRetryCount | 0)) return;
+        const nextDelay = HOME_SECTIONS_BOOT_RETRY_DELAYS_MS[
+          Math.min(attemptIndex, HOME_SECTIONS_BOOT_RETRY_DELAYS_MS.length - 1)
+        ] || 2000;
+        scheduleAttempt(nextDelay, attemptIndex + 1);
+      });
+    }, Math.max(0, waitMs | 0));
+  };
+
+  scheduleAttempt(delayMs, 0);
 }
 
 function initializeSliderOnHome({ forceManagedSectionsBoot = false } = {}) {
   try { window.__jmsHomeTabPaused = false; } catch {}
+  homeSectionLog("initializeSliderOnHome:start", {
+    forceManagedSectionsBoot,
+  });
 
   if (!isSliderEnabled()) {
     try { cleanupSlider(); } catch {}
     try { stopSlideTimer?.(); } catch {}
     try { clearCycleArm(); } catch {}
+    homeSectionWarn("initializeSliderOnHome:slider-disabled", {
+      forceManagedSectionsBoot,
+    });
 
     queueHomeSectionsBoot({
       delayMs: 500,
       requireSliderDisabled: true,
       forceManagedSections: forceManagedSectionsBoot
     });
+    scheduleManagedHomeSectionRecovery();
 
     return;
   }
@@ -3814,15 +4308,15 @@ function initializeSliderOnHome({ forceManagedSectionsBoot = false } = {}) {
   const willEarlyReturn = (window.__initOnHomeOnce && hasContainer);
 
   function bootPersonalRecsWires() {
-  if (window.__recsWiresBooted) return;
-  window.__recsWiresBooted = true;
+    if (window.__recsWiresBooted) return;
+    window.__recsWiresBooted = true;
 
-  const indexPage =
-    document.querySelector("#indexPage:not(.hide)") ||
-    document.querySelector("#homePage:not(.hide)");
-  if (!indexPage) return;
+    const indexPage =
+      document.querySelector("#indexPage:not(.hide)") ||
+      document.querySelector("#homePage:not(.hide)");
+    if (!indexPage) return;
 
-  let __recsBooted = false;
+    let __recsBooted = false;
     const onAllReady = () => {
       if (__recsBooted) return;
       __recsBooted = true;
@@ -3835,7 +4329,7 @@ function initializeSliderOnHome({ forceManagedSectionsBoot = false } = {}) {
       }
     };
 
-  document.addEventListener("jms:all-slides-ready", onAllReady, { once: true });
+    document.addEventListener("jms:all-slides-ready", onAllReady, { once: true });
     if (window.__totalSlidesPlanned > 0 && window.__slidesCreated >= window.__totalSlidesPlanned) {
       onAllReady();
     }
@@ -3851,12 +4345,26 @@ function initializeSliderOnHome({ forceManagedSectionsBoot = false } = {}) {
   }
 
   if (willEarlyReturn) {
+    homeSectionLog("initializeSliderOnHome:early-return", {
+      forceManagedSectionsBoot,
+      hasContainer,
+    });
     bootPersonalRecsWires();
+    queueHomeSectionsBoot({
+      delayMs: 600,
+      forceManagedSections: true
+    });
+    scheduleManagedHomeSectionRecovery();
     return;
   }
   window.__initOnHomeOnce = true;
   const indexPage = document.querySelector("#indexPage:not(.hide)") || document.querySelector("#homePage:not(.hide)");
-  if (!indexPage) return;
+  if (!indexPage) {
+    homeSectionWarn("initializeSliderOnHome:no-visible-index-page", {
+      forceManagedSectionsBoot,
+    });
+    return;
+  }
 
   fullSliderReset();
   bootPersonalRecsWires();
@@ -3890,17 +4398,35 @@ function initializeSliderOnHome({ forceManagedSectionsBoot = false } = {}) {
     delayMs: 1800,
     forceManagedSections: forceManagedSectionsBoot
   });
-
-  if (shouldRenderStudioHubsUi(getMainConfig())) {
-    void ensureStudioHubsMountedLazy({ eager: true });
-  }
+  scheduleManagedHomeSectionRecovery();
+  homeSectionLog("initializeSliderOnHome:booted", {
+    forceManagedSectionsBoot,
+    indexPageId: indexPage.id,
+  });
 }
 
-function cleanupSlider({ preserveHomeSections = false } = {}) {
+function cleanupSlider({ preserveHomeSections = false, invalidateBoot = true } = {}) {
+  homeSectionLog("cleanupSlider:start", {
+    preserveHomeSections,
+    invalidateBoot,
+  });
+  const shouldPreserveManagedHomeSectionBoot =
+    preserveHomeSections && isHomeRouteActive();
   try { teardownAnimations(); } catch {}
-  clearHomeSectionMountTimers();
-  homeSectionMountSeq += 1;
-  clearQueuedHomeSectionsBoot();
+  if (invalidateBoot) {
+    invalidateSliderBootSession();
+  }
+  if (!shouldPreserveManagedHomeSectionBoot) {
+    clearHomeSectionMountTimers();
+    clearManagedHomeSectionRecoveryTimers();
+    homeSectionMountSeq += 1;
+    clearQueuedHomeSectionsBoot();
+  } else {
+    homeSectionLog("cleanupSlider:preserving-home-section-boot", {
+      preserveHomeSections,
+      invalidateBoot,
+    });
+  }
   if (!preserveHomeSections) {
     void cleanupRecentRowsLazy();
     void cleanupDirectorRowsLazy();
@@ -4008,18 +4534,31 @@ function observeWhenHomeReady(cb, maxMs = 20000) {
   const start = Date.now();
   const mo = new MutationObserver(() => {
     const ready =
+      document.querySelector("#indexPage:not(.hide) .homeSectionsContainer") ||
+      document.querySelector("#homePage:not(.hide) .homeSectionsContainer") ||
       document.querySelector("#indexPage:not(.hide)") ||
-      document.querySelector("#homePage:not(.hide)") ||
-      document.querySelector(".homeSectionsContainer");
+      document.querySelector("#homePage:not(.hide)");
     if (ready) {
+      homeSectionLog("observeWhenHomeReady:ready", {
+        maxMs,
+        waitedMs: Date.now() - start,
+      });
       cleanup();
       cb();
     } else if (Date.now() - start > maxMs) {
+      homeSectionWarn("observeWhenHomeReady:timeout", {
+        maxMs,
+        waitedMs: Date.now() - start,
+      });
       cleanup();
     }
   });
   mo.observe(getDomObserveRoot(), { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
   const to = setTimeout(() => {
+    homeSectionWarn("observeWhenHomeReady:hard-timeout", {
+      maxMs,
+      waitedMs: Date.now() - start,
+    });
     cleanup();
   }, maxMs + 1000);
   function cleanup() {
@@ -4283,11 +4822,11 @@ function observeWhenHomeReady(cb, maxMs = 20000) {
     const fastIndex = document.querySelector("#indexPage:not(.hide), #homePage:not(.hide)");
     if (fastIndex) {
       startPauseOverlayOnce();
-      initializeSliderOnHome();
+      initializeSliderOnHome({ forceManagedSectionsBoot: true });
     } else {
       const stop = observeWhenHomeReady(() => {
         startPauseOverlayOnce();
-        initializeSliderOnHome();
+        initializeSliderOnHome({ forceManagedSectionsBoot: true });
         stop();
       }, 15000);
     }

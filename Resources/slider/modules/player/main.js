@@ -1,16 +1,161 @@
 import { initPlayer, togglePlayerVisibility, isPlayerInitialized } from "./utils/mainIndex.js";
+import { musicPlayerState, saveUserSettings } from "./core/state.js";
 import { refreshPlaylist, playTrackById, playAlbumById } from "./core/playlist.js";
 import { updateProgress, updateDuration } from "./player/progress.js";
 import { syncDbIncremental, syncDbFullscan } from "./ui/artistModal.js";
 import { loadJSMediaTags } from "./lyrics/id3Reader.js";
 import { getConfig } from "../config.js";
-import { initializeControlStates } from "./ui/controls.js";
+import { initializeControlStates, toggleMute, updateVolumeIcon } from "./ui/controls.js";
+import { togglePlayPause } from "./player/playback.js";
 import { faIconHtml } from "../faIcons.js";
 import { loadCSS } from "../playerStyles.js";
 
 export { isMobileDevice } from "../playerStyles.js";
 
 const config = getConfig();
+
+function clamp(value, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return min;
+  return Math.min(max, Math.max(min, number));
+}
+
+function settle(ms = 60) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function getGmmpPlaybackState() {
+  const audio = musicPlayerState?.audio;
+  const track = musicPlayerState?.currentTrack || musicPlayerState?.playlist?.[musicPlayerState?.currentIndex] || null;
+  const runtimeSeconds = Number.isFinite(audio?.duration) && audio.duration > 0
+    ? audio.duration
+    : (Number.isFinite(musicPlayerState?.currentTrackDuration) ? musicPlayerState.currentTrackDuration : 0);
+  const currentVolume = clamp(
+    Math.round((audio?.muted ? 0 : Number(audio?.volume ?? musicPlayerState?.userSettings?.volume ?? 0)) * 100),
+    0,
+    100
+  );
+
+  return {
+    hasCurrentTrack: !!track,
+    trackId: track?.Id ? String(track.Id) : "",
+    isPaused: !!audio?.paused,
+    isMuted: !!audio?.muted || currentVolume <= 0,
+    volumeLevel: currentVolume,
+    positionTicks: Math.max(0, Math.floor(Number(audio?.currentTime || 0) * 10_000_000)),
+    runtimeTicks: Math.max(0, Math.floor(Number(runtimeSeconds || 0) * 10_000_000)),
+    isLiveStream: !!musicPlayerState?.isLiveStream
+  };
+}
+
+async function setGmmpPaused(paused) {
+  await ensureGmmpInit({ show: false });
+  const audio = musicPlayerState?.audio;
+  if (!audio) {
+    throw new Error("GMMP audio bulunamadi");
+  }
+
+  if (!!audio.paused !== !!paused) {
+    if (typeof togglePlayPause === "function") {
+      togglePlayPause();
+      await settle(paused ? 20 : 80);
+    }
+
+    if (!!audio.paused !== !!paused) {
+      if (paused) {
+        audio.pause();
+      } else {
+        await audio.play();
+      }
+    }
+  }
+
+  try {
+    if ("mediaSession" in navigator) {
+      navigator.mediaSession.playbackState = paused ? "paused" : "playing";
+    }
+  } catch {}
+
+  return getGmmpPlaybackState();
+}
+
+async function setGmmpMuted(muted) {
+  await ensureGmmpInit({ show: false });
+  const audio = musicPlayerState?.audio;
+  if (!audio) {
+    throw new Error("GMMP audio bulunamadi");
+  }
+
+  const nextMuted = !!muted;
+  if (!nextMuted && Number(audio.volume || 0) <= 0) {
+    const restored = clamp(
+      Math.round(Number(musicPlayerState?.userSettings?.volume ?? 0.7) * 100),
+      1,
+      100
+    ) / 100;
+    audio.volume = restored;
+    if (musicPlayerState?.userSettings) {
+      musicPlayerState.userSettings.volume = restored;
+    }
+  }
+
+  if (!!audio.muted !== nextMuted && typeof toggleMute === "function") {
+    toggleMute();
+  }
+  if (!!audio.muted !== nextMuted) {
+    audio.muted = nextMuted;
+  }
+
+  if (musicPlayerState?.volumeSlider) {
+    try {
+      musicPlayerState.volumeSlider.value = String(nextMuted ? 0 : Number(audio.volume || 0));
+    } catch {}
+  }
+
+  try {
+    updateVolumeIcon(nextMuted ? 0 : Number(audio.volume || 0));
+  } catch {}
+
+  try {
+    saveUserSettings?.();
+  } catch {}
+
+  return getGmmpPlaybackState();
+}
+
+async function setGmmpVolume(volumeLevel) {
+  await ensureGmmpInit({ show: false });
+  const audio = musicPlayerState?.audio;
+  if (!audio) {
+    throw new Error("GMMP audio bulunamadi");
+  }
+
+  const normalized = clamp(volumeLevel, 0, 100) / 100;
+  audio.volume = normalized;
+  audio.muted = normalized <= 0;
+
+  if (musicPlayerState?.userSettings) {
+    musicPlayerState.userSettings.volume = normalized;
+  }
+
+  if (musicPlayerState?.volumeSlider) {
+    try {
+      musicPlayerState.volumeSlider.value = String(normalized);
+    } catch {}
+  }
+
+  try {
+    updateVolumeIcon(normalized);
+  } catch {}
+
+  try {
+    saveUserSettings?.();
+  } catch {}
+
+  return getGmmpPlaybackState();
+}
 
 export async function ensureGmmpInit({ show = true } = {}) {
   try {
@@ -262,6 +407,10 @@ if (typeof window !== "undefined") {
     playTrackById,
     playAlbumById,
     ensureInit: ensureGmmpInit,
-    destroy: destroyGmmp
+    destroy: destroyGmmp,
+    getPlaybackState: getGmmpPlaybackState,
+    setPaused: setGmmpPaused,
+    setMuted: setGmmpMuted,
+    setVolume: setGmmpVolume
   });
 }

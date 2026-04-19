@@ -5,6 +5,51 @@ let __globalOverride =
     ? window.__JMS_MANAGED_STORAGE__.bootstrapOverride
     : null;
 let __globalApplied = false;
+export const SETTINGS_HOTKEY_DEFAULT = "F2";
+
+const SETTINGS_HOTKEY_ALIASES = new Map([
+  [" ", "Space"],
+  ["Spacebar", "Space"],
+  ["Esc", "Escape"],
+  ["Del", "Delete"],
+  ["Left", "ArrowLeft"],
+  ["Right", "ArrowRight"],
+  ["Up", "ArrowUp"],
+  ["Down", "ArrowDown"]
+]);
+
+const SETTINGS_HOTKEY_ALLOWED_KEYS = new Set([
+  "Backspace",
+  "Delete",
+  "End",
+  "Enter",
+  "Escape",
+  "Home",
+  "Insert",
+  "PageDown",
+  "PageUp",
+  "Space",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "ArrowUp"
+]);
+
+const SETTINGS_HOTKEY_MODIFIER_KEYS = new Set([
+  "Alt",
+  "AltGraph",
+  "CapsLock",
+  "Control",
+  "Fn",
+  "Hyper",
+  "Meta",
+  "NumLock",
+  "OS",
+  "ScrollLock",
+  "Shift",
+  "Super",
+  "Symbol"
+]);
 
 function getManagedStorageBridge() {
   try {
@@ -26,6 +71,38 @@ function maybeBootstrapManagedStorage(snapshot) {
   try {
     getManagedStorageBridge()?.maybeBootstrapFromLocal?.(snapshot);
   } catch {}
+}
+
+export function normalizeSettingsHotkey(value, fallback = SETTINGS_HOTKEY_DEFAULT) {
+  if (value === " ") return "Space";
+
+  const raw = String(value ?? "").trim();
+  if (!raw) return fallback;
+
+  const aliased = SETTINGS_HOTKEY_ALIASES.get(raw) || raw;
+  if (SETTINGS_HOTKEY_MODIFIER_KEYS.has(aliased)) return fallback;
+
+  if (/^F(?:[1-9]|1[0-9]|2[0-4])$/i.test(aliased)) {
+    return aliased.toUpperCase();
+  }
+
+  if (SETTINGS_HOTKEY_ALLOWED_KEYS.has(aliased)) {
+    return aliased;
+  }
+
+  if (aliased.length === 1 && /\S/.test(aliased)) {
+    return aliased.toUpperCase();
+  }
+
+  return fallback;
+}
+
+export function getSettingsHotkey() {
+  try {
+    return normalizeSettingsHotkey(localStorage.getItem("settingsHotkey"));
+  } catch {
+    return SETTINGS_HOTKEY_DEFAULT;
+  }
 }
 
 export function getDeviceProfileAuto() {
@@ -284,6 +361,7 @@ export function getConfig() {
     showProviderInfo: localStorage.getItem('showProviderInfo') !== 'false',
     showDotNavigation: localStorage.getItem('showDotNavigation') !== 'false',
     showSettingsLink: localStorage.getItem("showSettingsLink") !== "false",
+    settingsHotkey: getSettingsHotkey(),
     showMusicIcon: localStorage.getItem("showMusicIcon") !== "false",
     showLogoOrTitle: localStorage.getItem('showLogoOrTitle') !== 'false',
     showTitleOnly: localStorage.getItem('showTitleOnly') === 'true' ? true : false,
@@ -349,7 +427,7 @@ export function getConfig() {
     useRandomContent: localStorage.getItem('useRandomContent') !== 'false',
     fullscreenMode: localStorage.getItem('fullscreenMode') === 'true' ? true : false,
     listLimit: 20,
-    version: "v2.5.2",
+    version: "v2.6.0",
     historySize: 20,
     updateInterval: 300000,
     nextTracksSource: localStorage.getItem('nextTracksSource') || 'playlist',
@@ -439,6 +517,11 @@ export function getConfig() {
     enablePauseFeaturesMaster: (localStorage.getItem('enablePauseFeaturesMaster') || 'true') !== 'false',
     enableSubtitleCustomizerModule: (localStorage.getItem('enableSubtitleCustomizerModule') || 'true') !== 'false',
     enableParentalPinModule: (localStorage.getItem('enableParentalPinModule') || 'true') !== 'false',
+    enableDetailsModalModule: (localStorage.getItem('enableDetailsModalModule') || 'true') !== 'false',
+    enableCastModule: (localStorage.getItem('enableCastModule') || 'true') !== 'false',
+    allowSharedCastViewerForUsers: localStorage.getItem('allowSharedCastViewerForUsers') === 'true',
+    detailsModalTmdbReviewsEnabled: (localStorage.getItem('detailsModalTmdbReviewsEnabled') || 'true') !== 'false',
+    detailsModalLocalCommentsEnabled: localStorage.getItem('detailsModalLocalCommentsEnabled') === 'true',
     enableCustomSplashScreen: (localStorage.getItem('enableCustomSplashScreen') || 'true') !== 'false',
     customSplashTitle: (localStorage.getItem('customSplashTitle') || '').trim(),
 
@@ -854,7 +937,7 @@ export function getConfig() {
   };
 
   registerManagedStorageKeys([
-    ...Object.keys(resolvedConfig),
+    ...Object.keys(resolvedConfig).filter((key) => key !== "settingsHotkey"),
     "jms:settingsTargetProfile",
     "settings.allowedTabs.v1",
     "lyricsMode",
@@ -917,10 +1000,27 @@ export function isParentalPinModuleEnabled(source = null) {
   return cfg?.enableParentalPinModule !== false;
 }
 
+export function isDetailsModalModuleEnabled(source = null) {
+  const cfg = source || getConfig();
+  return cfg?.enableDetailsModalModule !== false;
+}
+
+export function getDetailsModalRuntimeConfig(source = null) {
+  const cfg = source || getConfig() || {};
+  const enabled = isDetailsModalModuleEnabled(cfg);
+
+  return {
+    enabled,
+    showTmdbReviews: enabled && cfg.detailsModalTmdbReviewsEnabled !== false,
+    showLocalComments: enabled && cfg.detailsModalLocalCommentsEnabled === true
+  };
+}
+
 function pruneGlobalConfig(cfg) {
   const deny = new Set([
     "languageLabels",
     "currentUserIsAdmin",
+    "settingsHotkey",
     "version",
     "historySize",
     "updateInterval",

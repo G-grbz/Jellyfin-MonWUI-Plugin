@@ -4,6 +4,7 @@ import { getConfig } from "./config.js";
 import { withServer } from "./jfUrl.js";
 import { ensureStudioHubLogoFromTmdb, ensureStudioHubManualEntry, JMS_STUDIO_HUB_MANUAL_ENTRY_ADDED_EVENT } from "./studioHubsShared.js";
 import { showNotification } from "./player/ui/notification.js";
+import { closeDetailsModalIfLoaded } from "./detailsModalLoader.js";
 
 const WATCHLIST_ENDPOINT = "/Plugins/jmsFusion/watchlist";
 export const WATCHLIST_MODAL_ID = "monwui-watchlist-modal-root";
@@ -68,7 +69,23 @@ const WATCHLIST_COLLECTION_CACHE_TTL_MS = 2 * 24 * 60 * 60 * 1000;
 const WATCHLIST_COLLECTION_REFRESH_MS = 30_000;
 const WATCHLIST_COLLECTION_PREVIEW_LIMIT = 8;
 const WATCHLIST_COLLECTION_PAGE_SIZE = 200;
+const WATCHLIST_VIEW_FIELDS = [
+  "Type","Name","SeriesId","SeriesName","Album","AlbumId","AlbumArtist","Artists","Overview","Genres","RunTimeTicks",
+  "CumulativeRunTimeTicks",
+  "OfficialRating","ProductionYear","CommunityRating","CriticRating","ImageTags","PrimaryImageTag",
+  "AlbumPrimaryImageTag","BackdropImageTags","ParentBackdropImageTags","ParentBackdropItemId",
+  "SeriesBackdropImageTag","SeasonId","Series","UserData","MediaType","ChildCount"
+];
+const WATCHLIST_PROGRESSIVE_RENDER_THRESHOLD = 48;
+const WATCHLIST_PROGRESSIVE_INITIAL_BATCH = 24;
+const WATCHLIST_PROGRESSIVE_BATCH_SIZE = 32;
 const watchlistPreviewCache = new Map();
+const nextWatchlistFrame = typeof requestAnimationFrame === "function"
+  ? (cb) => requestAnimationFrame(cb)
+  : (cb) => setTimeout(cb, 16);
+let watchlistViewModelCacheKey = "";
+let watchlistViewModelCacheValue = null;
+let watchlistViewModelCachePromise = null;
 
 function cfg() {
   return getConfig?.() || {};
@@ -789,6 +806,55 @@ function normalizeDashboard(raw) {
   return normalized;
 }
 
+function invalidateWatchlistViewModelCache() {
+  watchlistViewModelCacheKey = "";
+  watchlistViewModelCacheValue = null;
+  watchlistViewModelCachePromise = null;
+}
+
+function getWatchlistViewModelCacheKey(dashboard) {
+  if (!dashboard || typeof dashboard !== "object") return "";
+
+  return [
+    text(dashboard?._userId),
+    Number(dashboard?.revision || 0),
+    Number(dashboard?._loadedAt || 0),
+    Array.isArray(dashboard?.myItems) ? dashboard.myItems.length : 0,
+    Array.isArray(dashboard?.sharedWithMe) ? dashboard.sharedWithMe.length : 0,
+    Array.isArray(dashboard?.outgoingShares) ? dashboard.outgoingShares.length : 0
+  ].join("|");
+}
+
+async function getCachedWatchlistViewModel(dashboard, { force = false } = {}) {
+  const cacheKey = getWatchlistViewModelCacheKey(dashboard);
+  if (!cacheKey) {
+    invalidateWatchlistViewModelCache();
+    return createEmptyWatchlistModel();
+  }
+
+  if (!force && watchlistViewModelCacheKey === cacheKey) {
+    if (watchlistViewModelCacheValue) return watchlistViewModelCacheValue;
+    if (watchlistViewModelCachePromise) return watchlistViewModelCachePromise;
+  }
+
+  watchlistViewModelCacheKey = cacheKey;
+  watchlistViewModelCacheValue = null;
+  watchlistViewModelCachePromise = buildViewModel(dashboard)
+    .then((model) => {
+      if (watchlistViewModelCacheKey === cacheKey) {
+        watchlistViewModelCacheValue = model;
+      }
+      return model;
+    })
+    .finally(() => {
+      if (watchlistViewModelCacheKey === cacheKey) {
+        watchlistViewModelCachePromise = null;
+      }
+    });
+
+  return watchlistViewModelCachePromise;
+}
+
 function buildMembershipSet(dashboard) {
   const set = new Set();
 
@@ -807,6 +873,7 @@ function buildMembershipSet(dashboard) {
 
 function refreshMembership(dashboard = dashboardCache) {
   if (!dashboard) return null;
+  invalidateWatchlistViewModelCache();
   dashboard._membership = buildMembershipSet(dashboard);
   dashboard._loadedAt = Date.now();
   dashboard._userId = getCurrentUserContext().userId;
@@ -832,6 +899,7 @@ export async function ensureWatchlistLoaded({ force = false } = {}) {
 
   dashboardPromise = (async () => {
     const raw = await requestWatchlist(`?ts=${Date.now()}`);
+    invalidateWatchlistViewModelCache();
     dashboardCache = normalizeDashboard(raw);
     return dashboardCache;
   })().finally(() => {
@@ -2418,10 +2486,21 @@ function ensureModalRoot() {
     }
   });
 
-  window.addEventListener("monwui:watchlist-changed", () => {
+  window.addEventListener("monwui:watchlist-changed", (event) => {
     if (!root.classList.contains("visible")) return;
-    const state = root.__state || {};
-    renderWatchlistModal(root, state).catch(() => {});
+    const detail = event?.detail || {};
+
+    void applyWatchlistChangeToOpenModal(root, detail)
+      .then((applied) => {
+        if (applied || !root.classList.contains("visible")) return;
+        const state = root.__state || {};
+        renderWatchlistModal(root, state).catch(() => {});
+      })
+      .catch(() => {
+        if (!root.classList.contains("visible")) return;
+        const state = root.__state || {};
+        renderWatchlistModal(root, state).catch(() => {});
+      });
   });
 
   return root;
@@ -3371,6 +3450,11 @@ function clearPreviewHoverTimer(root) {
   root.__pendingPreviewItemId = "";
 }
 
+function cancelProgressiveWatchlistRender(root) {
+  if (!root) return;
+  root.__progressiveRenderToken = Number(root.__progressiveRenderToken || 0) + 1;
+}
+
 function renderPreviewPanel(view, details, { loading = false, collectionLoading = false } = {}) {
   if (!view) return renderPreviewEmptyState();
 
@@ -3565,14 +3649,18 @@ function getInitialPreviewItemId(root) {
 }
 
 function setPreviewActiveCard(root, itemId) {
-  root.querySelectorAll(".monwuiwl-item.is-preview-active").forEach((card) => {
-    card.classList.remove("is-preview-active");
-  });
+  const previousCard = root?.__previewActiveCard;
+  if (previousCard?.classList?.contains("is-preview-active")) {
+    previousCard.classList.remove("is-preview-active");
+  }
+  root.__previewActiveCard = null;
 
   const id = text(itemId);
   if (!id) return;
 
-  root.querySelector(`[data-monwuiwl-item="${escapeAttrSelector(id)}"]`)?.classList?.add("is-preview-active");
+  const nextCard = root.querySelector(`[data-monwuiwl-item="${escapeAttrSelector(id)}"]`);
+  nextCard?.classList?.add("is-preview-active");
+  root.__previewActiveCard = nextCard || null;
 }
 
 function samePreviewAssetUrl(a, b) {
@@ -3630,10 +3718,7 @@ async function startWatchlistPlayback(triggerEl, itemId) {
 
   try {
     if (triggerEl) triggerEl.disabled = true;
-    try {
-      const detailsModule = await import("./detailsModal.js");
-      await detailsModule?.closeDetailsModal?.();
-    } catch {}
+    try { await closeDetailsModalIfLoaded(); } catch {}
     await closeWatchlistModal();
     const started = await playNow(id);
     if (!started) {
@@ -3945,13 +4030,7 @@ async function buildViewModel(dashboard) {
     ...(dashboard?.sharedWithMe || []).map((entry) => text(entry?.ItemId || entry?.itemId || entry?.Entry?.ItemId || entry?.entry?.itemId))
   ].filter(Boolean);
 
-  const { found } = await fetchItemsBulk(uniqueIds, [
-    "Type","Name","SeriesId","SeriesName","Album","AlbumId","AlbumArtist","Artists","Overview","Genres","RunTimeTicks",
-    "CumulativeRunTimeTicks",
-    "OfficialRating","ProductionYear","CommunityRating","CriticRating","ImageTags","PrimaryImageTag",
-    "AlbumPrimaryImageTag","BackdropImageTags","ParentBackdropImageTags","ParentBackdropItemId",
-    "SeriesBackdropImageTag","SeasonId","Series","UserData","MediaType","ChildCount"
-  ]).catch(() => ({ found: new Map() }));
+  const { found } = await fetchItemsBulk(uniqueIds, WATCHLIST_VIEW_FIELDS).catch(() => ({ found: new Map() }));
 
   const outgoingByItemId = new Map();
   for (const share of dashboard?.outgoingShares || []) {
@@ -4026,6 +4105,169 @@ async function buildViewModel(dashboard) {
   return model;
 }
 
+function createOutgoingSharesByItemId(shares = []) {
+  const map = new Map();
+
+  for (const share of Array.isArray(shares) ? shares : []) {
+    const itemId = text(share?.ItemId || share?.itemId || share?.Entry?.ItemId || share?.entry?.itemId);
+    if (!itemId) continue;
+    if (!map.has(itemId)) map.set(itemId, []);
+    map.get(itemId).push(share);
+  }
+
+  return map;
+}
+
+async function buildPartialWatchlistItemModel(itemId, dashboard = dashboardCache) {
+  const id = text(itemId);
+  const model = createEmptyWatchlistModel();
+  if (!id || !dashboard) return model;
+
+  const ownEntries = (dashboard?.myItems || []).filter((entry) => text(entry?.ItemId || entry?.itemId) === id);
+  const sharedEntries = (dashboard?.sharedWithMe || []).filter((shared) => {
+    const entry = shared?.Entry || shared?.entry || shared;
+    return text(shared?.ItemId || shared?.itemId || entry?.ItemId || entry?.itemId) === id;
+  });
+
+  if (!ownEntries.length && !sharedEntries.length) {
+    return model;
+  }
+
+  const { found } = await fetchItemsBulk([id], WATCHLIST_VIEW_FIELDS).catch(() => ({ found: new Map() }));
+  const live = found?.get?.(id) || null;
+  const outgoingByItemId = createOutgoingSharesByItemId(dashboard?.outgoingShares || []);
+
+  for (const entry of ownEntries) {
+    const merged = mergeLiveItem(entry, live);
+    const tab = getWatchlistTabKey({ Type: merged.itemType, MediaType: merged.mediaType });
+    model[tab].own.push({
+      kind: "own",
+      key: `own:${id}`,
+      itemId: id,
+      entryId: text(entry?.Id || entry?.id),
+      addedAtUtc: Number(entry?.AddedAtUtc || entry?.addedAtUtc || 0),
+      outgoingShares: outgoingByItemId.get(id) || [],
+      item: merged
+    });
+  }
+
+  for (const shared of sharedEntries) {
+    const shareId = text(shared?.Id || shared?.id);
+    if (!shareId) continue;
+
+    const entry = shared?.Entry || shared?.entry || {};
+    const merged = mergeLiveItem(entry, live);
+    const tab = getWatchlistTabKey({ Type: merged.itemType, MediaType: merged.mediaType });
+    model[tab].shared.push({
+      kind: "shared",
+      key: `shared:${shareId}`,
+      shareId,
+      itemId: id,
+      ownerUserName: text(shared?.OwnerUserName || shared?.ownerUserName, L("unknownUser", "Bilinmeyen kullanıcı")),
+      note: text(shared?.Note || shared?.note),
+      sharedAtUtc: Number(shared?.SharedAtUtc || shared?.sharedAtUtc || 0),
+      item: merged
+    });
+  }
+
+  return model;
+}
+
+function mergePartialWatchlistItemModel(model, partialModel, detail = {}) {
+  const id = text(detail?.itemId);
+  const isItemAdd = !!id && detail?.inWatchlist === true;
+  const isShareAdd = !!id && detail?.shared === true;
+
+  if (!model || !id || (!isItemAdd && !isShareAdd)) {
+    return { applied: false };
+  }
+
+  const affectedTabs = new Set();
+  const ownInsertions = new Set();
+  const sharedInsertions = new Set();
+
+  let ownPlacement = null;
+  for (const tab of WATCHLIST_TABS) {
+    const bucket = model?.[tab.key];
+    if (!bucket) continue;
+
+    const existingIndex = bucket.own.findIndex((view) => text(view?.itemId) === id);
+    if (existingIndex >= 0 && !ownPlacement) {
+      ownPlacement = { tabKey: tab.key, index: existingIndex };
+    }
+
+    const nextOwn = bucket.own.filter((view) => text(view?.itemId) !== id);
+    if (nextOwn.length !== bucket.own.length) {
+      bucket.own = nextOwn;
+      affectedTabs.add(tab.key);
+    }
+  }
+
+  for (const tab of WATCHLIST_TABS) {
+    const nextOwnViews = (partialModel?.[tab.key]?.own || []).filter((view) => text(view?.itemId) === id);
+    if (!nextOwnViews.length) continue;
+
+    const bucket = model?.[tab.key];
+    if (!bucket) continue;
+
+    const insertAt = isItemAdd
+      ? 0
+      : (ownPlacement?.tabKey === tab.key
+        ? Math.min(Number(ownPlacement.index || 0), bucket.own.length)
+        : 0);
+
+    bucket.own.splice(insertAt, 0, ...nextOwnViews);
+    affectedTabs.add(tab.key);
+    nextOwnViews.forEach((view) => ownInsertions.add(text(view?.key)));
+  }
+
+  if (isShareAdd) {
+    const sharedPlacementByTab = new Map();
+
+    for (const tab of WATCHLIST_TABS) {
+      const bucket = model?.[tab.key];
+      if (!bucket) continue;
+
+      const existingIndex = bucket.shared.findIndex((view) => text(view?.itemId) === id);
+      if (existingIndex >= 0) {
+        sharedPlacementByTab.set(tab.key, existingIndex);
+      }
+
+      const nextShared = bucket.shared.filter((view) => text(view?.itemId) !== id);
+      if (nextShared.length !== bucket.shared.length) {
+        bucket.shared = nextShared;
+        affectedTabs.add(tab.key);
+      }
+    }
+
+    for (const tab of WATCHLIST_TABS) {
+      const nextSharedViews = (partialModel?.[tab.key]?.shared || []).filter((view) => text(view?.itemId) === id);
+      if (!nextSharedViews.length) continue;
+
+      const bucket = model?.[tab.key];
+      if (!bucket) continue;
+
+      const insertAt = Math.min(
+        Number(sharedPlacementByTab.get(tab.key) ?? 0),
+        bucket.shared.length
+      );
+      bucket.shared.splice(insertAt, 0, ...nextSharedViews);
+      affectedTabs.add(tab.key);
+      nextSharedViews.forEach((view) => sharedInsertions.add(text(view?.key)));
+    }
+  }
+
+  return {
+    applied: affectedTabs.size > 0 || ownInsertions.size > 0 || sharedInsertions.size > 0,
+    affectedTabs,
+    ownInsertions,
+    sharedInsertions,
+    itemId: id,
+    isItemAdd,
+    isShareAdd
+  };
+}
+
 function renderShareSummary(outgoingShares = []) {
   if (!Array.isArray(outgoingShares) || !outgoingShares.length) return "";
   const names = outgoingShares
@@ -4083,7 +4325,7 @@ function renderItemCard(view) {
     : "";
 
   return `
-    <article class="monwuiwl-item ${isPlayed ? "is-played" : ""}" tabindex="0" data-monwuiwl-item="${escapeHtml(view.itemId)}" data-monwuiwl-kind="${escapeHtml(view.kind)}">
+    <article class="monwuiwl-item ${isPlayed ? "is-played" : ""}" tabindex="0" data-monwuiwl-item="${escapeHtml(view.itemId)}" data-monwuiwl-kind="${escapeHtml(view.kind)}" data-monwuiwl-view-key="${escapeHtml(text(view?.key, `${view?.kind === "shared" ? "shared" : "own"}:${view?.kind === "shared" ? text(view?.shareId) : text(view?.itemId)}`))}" ${view.kind === "shared" && text(view?.shareId) ? `data-monwuiwl-share-id="${escapeHtml(text(view.shareId))}"` : ""}>
       <div class="monwuiwl-item-poster">
         ${poster}
         ${isPlayed ? renderPlayedOverlayMarkup() : ""}
@@ -4106,12 +4348,37 @@ function renderItemCard(view) {
   `;
 }
 
-function renderSection(title, items) {
-  const sectionTitle = items.length ? `${title} (${items.length})` : title;
+function getWatchlistInitialRenderCount(items = []) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return 0;
+  if (list.length <= WATCHLIST_PROGRESSIVE_RENDER_THRESHOLD) return list.length;
+  return Math.min(WATCHLIST_PROGRESSIVE_INITIAL_BATCH, list.length);
+}
 
-  if (!items.length) {
+function getWatchlistSectionTitle(title, items = []) {
+  const list = Array.isArray(items) ? items : [];
+  return list.length ? `${title} (${list.length})` : title;
+}
+
+function findWatchlistSectionElement(root, sectionKey) {
+  const key = text(sectionKey);
+  if (!root || !key) return null;
+
+  const directMatch = root.querySelector?.(`[data-monwuiwl-section="${escapeAttrSelector(key)}"]`);
+  if (directMatch) return directMatch;
+
+  const sections = root.querySelectorAll?.(".monwuiwl-main .monwuiwl-section");
+  if (!sections?.length) return null;
+  return sections[key === "shared" ? 1 : 0] || null;
+}
+
+function renderSection(title, items, sectionKey = "") {
+  const list = Array.isArray(items) ? items : [];
+  const sectionTitle = getWatchlistSectionTitle(title, list);
+
+  if (!list.length) {
     return `
-      <section class="monwuiwl-section">
+      <section class="monwuiwl-section" ${sectionKey ? `data-monwuiwl-section="${escapeHtml(sectionKey)}"` : ""}>
         <div class="monwuiwl-section-head">
           <h3 class="monwuiwl-section-title">${escapeHtml(sectionTitle)}</h3>
         </div>
@@ -4120,29 +4387,120 @@ function renderSection(title, items) {
     `;
   }
 
+  const initialCount = getWatchlistInitialRenderCount(list);
+  const initialItems = list.slice(0, initialCount);
+  const showLoader = !!sectionKey && initialCount < list.length;
+
   return `
-    <section class="monwuiwl-section">
+    <section class="monwuiwl-section" ${sectionKey ? `data-monwuiwl-section="${escapeHtml(sectionKey)}"` : ""}>
       <div class="monwuiwl-section-head">
         <h3 class="monwuiwl-section-title">${escapeHtml(sectionTitle)}</h3>
       </div>
-      <div class="monwuiwl-grid">
-        ${items.map(renderItemCard).join("")}
-      </div>
+      <div class="monwuiwl-grid" ${sectionKey ? `data-monwuiwl-section-grid="${escapeHtml(sectionKey)}"` : ""}>${initialItems.map(renderItemCard).join("")}</div>
+      ${showLoader ? `<div class="monwuiwl-loading" data-monwuiwl-section-loading="${escapeHtml(sectionKey)}">${escapeHtml(L("loading", "Yükleniyor..."))}</div>` : ""}
     </section>
   `;
 }
 
-function renderModalShell(model, activeTab) {
+function getRenderedTabData(model, activeTab) {
   const currentTab = normalizeWatchlistTabKey(activeTab);
   const ownItems = model?.[currentTab]?.own || [];
   const sharedItems = model?.[currentTab]?.shared || [];
-  const tabTitle = getWatchlistTabLabel(currentTab);
   const ownTitle = currentTab === "albums"
     ? L("watchlistOwnAlbums", "Albüm listen")
     : L("watchlistOwnItems", "Senin listen");
   const sharedTitle = currentTab === "albums"
     ? L("watchlistSharedAlbums", "Seninle paylaşılan albümler")
     : L("watchlistSharedItems", "Seninle paylaşılanlar");
+
+  return {
+    currentTab,
+    ownItems,
+    sharedItems,
+    ownTitle,
+    sharedTitle
+  };
+}
+
+function syncDeferredWatchlistFocus(root) {
+  const focusItemId = text(root?.__state?.focusItemId);
+  if (!focusItemId || root?.__focusItemApplied === focusItemId) return;
+
+  const focusCard = root.querySelector?.(`[data-monwuiwl-item="${escapeAttrSelector(focusItemId)}"]`);
+  if (!focusCard) return;
+
+  root.__focusItemApplied = focusItemId;
+  nextWatchlistFrame(() => {
+    focusCard.scrollIntoView?.({
+      behavior: "smooth",
+      block: "nearest"
+    });
+  });
+}
+
+function scheduleWatchlistSectionRender(root, sectionKey, items = [], startIndex = 0, renderToken = 0) {
+  const list = Array.isArray(items) ? items : [];
+  if (!root || !sectionKey || startIndex >= list.length) return;
+
+  const run = () => {
+    if (!root.isConnected || Number(root.__progressiveRenderToken || 0) !== renderToken) return;
+
+    const grid = root.querySelector(`[data-monwuiwl-section-grid="${escapeAttrSelector(sectionKey)}"]`);
+    if (!grid) return;
+
+    const nextItems = list.slice(startIndex, startIndex + WATCHLIST_PROGRESSIVE_BATCH_SIZE);
+    if (!nextItems.length) {
+      root.querySelector(`[data-monwuiwl-section-loading="${escapeAttrSelector(sectionKey)}"]`)?.remove();
+      return;
+    }
+
+    grid.insertAdjacentHTML("beforeend", nextItems.map(renderItemCard).join(""));
+    startIndex += nextItems.length;
+
+    const previewItemId = text(root?.__state?.previewItemId);
+    if (previewItemId) {
+      setPreviewActiveCard(root, previewItemId);
+    }
+    syncDeferredWatchlistFocus(root);
+
+    if (startIndex < list.length) {
+      nextWatchlistFrame(run);
+      return;
+    }
+
+    root.querySelector(`[data-monwuiwl-section-loading="${escapeAttrSelector(sectionKey)}"]`)?.remove();
+  };
+
+  nextWatchlistFrame(run);
+}
+
+function scheduleProgressiveWatchlistSections(root, model, activeTab) {
+  if (!root) return;
+  cancelProgressiveWatchlistRender(root);
+
+  const renderToken = Number(root.__progressiveRenderToken || 0);
+  const { ownItems, sharedItems } = getRenderedTabData(model, activeTab);
+  const ownStart = getWatchlistInitialRenderCount(ownItems);
+  const sharedStart = getWatchlistInitialRenderCount(sharedItems);
+
+  if (ownStart < ownItems.length) {
+    scheduleWatchlistSectionRender(root, "own", ownItems, ownStart, renderToken);
+  } else {
+    root.querySelector('[data-monwuiwl-section-loading="own"]')?.remove();
+  }
+
+  if (sharedStart < sharedItems.length) {
+    scheduleWatchlistSectionRender(root, "shared", sharedItems, sharedStart, renderToken);
+  } else {
+    root.querySelector('[data-monwuiwl-section-loading="shared"]')?.remove();
+  }
+}
+
+function renderModalShell(model, activeTab) {
+  const {
+    currentTab,
+  } = getRenderedTabData(model, activeTab);
+  const tabTitle = getWatchlistTabLabel(currentTab);
 
   return `
     <div class="monwuiwl-backdrop">
@@ -4167,8 +4525,7 @@ function renderModalShell(model, activeTab) {
         <div class="monwuiwl-body">
           <div class="monwuiwl-layout">
             <div class="monwuiwl-main">
-              ${renderSection(ownTitle, ownItems)}
-              ${renderSection(sharedTitle, sharedItems)}
+              ${renderCurrentWatchlistTabSections(model, currentTab)}
             </div>
             <aside class="monwuiwl-preview" aria-live="polite">
               ${renderPreviewEmptyState()}
@@ -4180,10 +4537,460 @@ function renderModalShell(model, activeTab) {
   `;
 }
 
+function renderCurrentWatchlistTabSections(model, activeTab) {
+  const {
+    ownItems,
+    sharedItems,
+    ownTitle,
+    sharedTitle
+  } = getRenderedTabData(model, activeTab);
+
+  return `
+    ${renderSection(ownTitle, ownItems, "own")}
+    ${renderSection(sharedTitle, sharedItems, "shared")}
+  `;
+}
+
+function getWatchlistCardViewKey(card) {
+  if (!card) return "";
+
+  const explicitKey = text(card.getAttribute?.("data-monwuiwl-view-key"));
+  if (explicitKey) return explicitKey;
+
+  const kind = text(card.getAttribute?.("data-monwuiwl-kind"));
+  const shareId = text(card.getAttribute?.("data-monwuiwl-share-id"));
+  const itemId = text(card.getAttribute?.("data-monwuiwl-item"));
+  if (kind === "shared" && shareId) return `shared:${shareId}`;
+  if (kind && itemId) return `${kind}:${itemId}`;
+  return itemId ? `own:${itemId}` : "";
+}
+
+function createWatchlistCardElement(view) {
+  if (!view) return null;
+
+  const template = document.createElement("template");
+  template.innerHTML = renderItemCard(view).trim();
+  return template.content.firstElementChild;
+}
+
+function updateWatchlistTabButtons(root, model, activeTab) {
+  if (!root) return;
+
+  const currentTab = normalizeWatchlistTabKey(activeTab);
+  root.querySelectorAll("[data-monwuiwl-tab]").forEach((button) => {
+    const tabKey = normalizeWatchlistTabKey(button.getAttribute("data-monwuiwl-tab"));
+    const tab = WATCHLIST_TABS.find((entry) => entry.key === tabKey);
+    if (!tab) return;
+
+    const count = (model?.[tabKey]?.own || []).length + (model?.[tabKey]?.shared || []).length;
+    button.textContent = `${L(tab.labelKey, tab.fallback)} (${count})`;
+    button.classList.toggle("active", tabKey === currentTab);
+  });
+}
+
+function renderCurrentWatchlistTabContent(root, model, { preserveScroll = false } = {}) {
+  const main = root?.querySelector?.(".monwuiwl-main");
+  if (!root || !main) return false;
+
+  const previousScrollTop = preserveScroll ? main.scrollTop : 0;
+  root.__focusItemApplied = "";
+  root.__previewActiveCard = null;
+  main.innerHTML = renderCurrentWatchlistTabSections(model, root.__state?.activeTab);
+  if (preserveScroll) {
+    main.scrollTop = previousScrollTop;
+  }
+  scheduleProgressiveWatchlistSections(root, model, root.__state?.activeTab);
+  return true;
+}
+
+function updateWatchlistSectionAfterRemoval(root, sectionKey, title, items, change = {}) {
+  const section = findWatchlistSectionElement(root, sectionKey);
+  if (!section) return false;
+
+  const list = Array.isArray(items) ? items : [];
+  const nextMarkup = renderSection(title, list, sectionKey);
+  if (!list.length) {
+    section.outerHTML = nextMarkup;
+    return true;
+  }
+
+  const grid = section.querySelector(`[data-monwuiwl-section-grid="${escapeAttrSelector(sectionKey)}"]`);
+  const titleEl = section.querySelector(".monwuiwl-section-title");
+  if (!grid || !titleEl) {
+    section.outerHTML = nextMarkup;
+    const initialCount = getWatchlistInitialRenderCount(list);
+    if (initialCount < list.length) {
+      scheduleWatchlistSectionRender(root, sectionKey, list, initialCount, Number(root.__progressiveRenderToken || 0));
+    }
+    return true;
+  }
+
+  titleEl.textContent = getWatchlistSectionTitle(title, list);
+
+  const removedViewKeys = change?.removedViewKeys instanceof Set ? change.removedViewKeys : new Set();
+  const updatedViewKeys = change?.updatedViewKeys instanceof Set ? change.updatedViewKeys : new Set();
+  const removedItemId = text(change?.removedItemId);
+  const removedShareId = text(change?.removedShareId);
+  const visibleCountBefore = grid.querySelectorAll(".monwuiwl-item").length;
+
+  Array.from(grid.querySelectorAll(".monwuiwl-item")).forEach((card) => {
+    const viewKey = getWatchlistCardViewKey(card);
+    const cardItemId = text(card.getAttribute("data-monwuiwl-item"));
+    const cardShareId = text(card.getAttribute("data-monwuiwl-share-id"));
+    const shouldRemove =
+      removedViewKeys.has(viewKey) ||
+      (!!removedItemId && cardItemId === removedItemId) ||
+      (!!removedShareId && cardShareId === removedShareId);
+
+    if (shouldRemove) {
+      card.remove();
+    }
+  });
+
+  if (updatedViewKeys.size) {
+    const viewMap = new Map(list.map((view) => [text(view?.key), view]));
+    Array.from(grid.querySelectorAll(".monwuiwl-item")).forEach((card) => {
+      const viewKey = getWatchlistCardViewKey(card);
+      if (!updatedViewKeys.has(viewKey)) return;
+
+      const nextView = viewMap.get(viewKey);
+      const nextCard = createWatchlistCardElement(nextView);
+      if (nextCard) {
+        card.replaceWith(nextCard);
+      }
+    });
+  }
+
+  const desiredRenderedCount = Math.min(
+    list.length,
+    Math.max(getWatchlistInitialRenderCount(list), visibleCountBefore)
+  );
+  const desiredViews = list.slice(0, desiredRenderedCount);
+  const desiredKeys = new Set(desiredViews.map((view) => text(view?.key)));
+
+  Array.from(grid.querySelectorAll(".monwuiwl-item")).forEach((card) => {
+    const viewKey = getWatchlistCardViewKey(card);
+    if (viewKey && !desiredKeys.has(viewKey)) {
+      card.remove();
+    }
+  });
+
+  const renderedKeys = new Set(
+    Array.from(grid.querySelectorAll(".monwuiwl-item"))
+      .map((card) => getWatchlistCardViewKey(card))
+      .filter(Boolean)
+  );
+
+  for (const view of desiredViews) {
+    const viewKey = text(view?.key);
+    if (!viewKey || renderedKeys.has(viewKey)) continue;
+
+    const card = createWatchlistCardElement(view);
+    if (!card) continue;
+    grid.appendChild(card);
+    renderedKeys.add(viewKey);
+  }
+
+  const loadingSelector = `[data-monwuiwl-section-loading="${escapeAttrSelector(sectionKey)}"]`;
+  const existingLoader = section.querySelector(loadingSelector);
+  if (desiredRenderedCount < list.length) {
+    if (!existingLoader) {
+      const loader = document.createElement("div");
+      loader.className = "monwuiwl-loading";
+      loader.setAttribute("data-monwuiwl-section-loading", sectionKey);
+      loader.textContent = L("loading", "Yükleniyor...");
+      section.appendChild(loader);
+    }
+
+    scheduleWatchlistSectionRender(
+      root,
+      sectionKey,
+      list,
+      desiredRenderedCount,
+      Number(root.__progressiveRenderToken || 0)
+    );
+  } else {
+    existingLoader?.remove();
+  }
+
+  return true;
+}
+
+function applyWatchlistChangeToModel(model, detail = {}) {
+  const itemId = text(detail?.itemId);
+  const shareId = text(detail?.shareId);
+  const isItemRemoval = !!itemId && detail?.inWatchlist === false;
+  const isShareRemoval = !!shareId && detail?.shared === false;
+
+  if (!model || (!isItemRemoval && !isShareRemoval)) {
+    return { applied: false };
+  }
+
+  const affectedTabs = new Set();
+  const removedItemIds = new Set();
+  const removedViewKeysBySection = {
+    own: new Set(),
+    shared: new Set()
+  };
+  const updatedViewKeysBySection = {
+    own: new Set(),
+    shared: new Set()
+  };
+
+  for (const tab of WATCHLIST_TABS) {
+    const bucket = model?.[tab.key];
+    if (!bucket) continue;
+
+    if (isItemRemoval) {
+      const nextOwn = [];
+      for (const view of bucket.own || []) {
+        if (text(view?.itemId) === itemId) {
+          removedItemIds.add(itemId);
+          removedViewKeysBySection.own.add(text(view?.key, `own:${itemId}`));
+          affectedTabs.add(tab.key);
+          continue;
+        }
+        nextOwn.push(view);
+      }
+      bucket.own = nextOwn;
+
+      const nextShared = [];
+      for (const view of bucket.shared || []) {
+        if (text(view?.itemId) === itemId) {
+          removedItemIds.add(itemId);
+          removedViewKeysBySection.shared.add(text(view?.key, `shared:${text(view?.shareId) || itemId}`));
+          affectedTabs.add(tab.key);
+          continue;
+        }
+        nextShared.push(view);
+      }
+      bucket.shared = nextShared;
+      continue;
+    }
+
+    const nextShared = [];
+    let sharedRemoved = false;
+    for (const view of bucket.shared || []) {
+      if (text(view?.shareId) === shareId) {
+        sharedRemoved = true;
+        removedItemIds.add(text(view?.itemId));
+        removedViewKeysBySection.shared.add(text(view?.key, `shared:${shareId}`));
+        continue;
+      }
+      nextShared.push(view);
+    }
+    if (sharedRemoved) {
+      bucket.shared = nextShared;
+      affectedTabs.add(tab.key);
+    }
+
+    for (const view of bucket.own || []) {
+      const shares = Array.isArray(view?.outgoingShares) ? view.outgoingShares : [];
+      const nextShares = shares.filter((share) => text(share?.Id || share?.id) !== shareId);
+      if (nextShares.length === shares.length) continue;
+
+      view.outgoingShares = nextShares;
+      updatedViewKeysBySection.own.add(text(view?.key, `own:${text(view?.itemId)}`));
+      affectedTabs.add(tab.key);
+    }
+  }
+
+  return {
+    applied: affectedTabs.size > 0,
+    affectedTabs,
+    removedItemId: itemId,
+    removedShareId: shareId,
+    removedItemIds,
+    removedViewKeysBySection,
+    updatedViewKeysBySection
+  };
+}
+
+async function applyWatchlistAdditionToOpenModal(root, detail = {}) {
+  const itemId = text(detail?.itemId);
+  const isItemAdd = !!itemId && detail?.inWatchlist === true;
+  const isShareAdd = !!itemId && detail?.shared === true;
+  if (!root || !root.__model || (!isItemAdd && !isShareAdd)) return false;
+
+  const dashboard = dashboardCache && !dashboardStale()
+    ? dashboardCache
+    : await ensureWatchlistLoaded().catch(() => null);
+  if (!dashboard) return false;
+
+  const partialModel = await buildPartialWatchlistItemModel(itemId, dashboard).catch(() => null);
+  if (!partialModel) return false;
+
+  const change = mergePartialWatchlistItemModel(root.__model, partialModel, detail);
+  if (!change.applied) return false;
+
+  const currentTab = normalizeWatchlistTabKey(root.__state?.activeTab);
+  const currentTabAffected = change.affectedTabs.has(currentTab);
+
+  updateWatchlistTabButtons(root, root.__model, currentTab);
+  if (!currentTabAffected) return true;
+
+  clearPreviewHoverTimer(root);
+  cancelProgressiveWatchlistRender(root);
+
+  if (!renderCurrentWatchlistTabContent(root, root.__model, { preserveScroll: true })) {
+    return false;
+  }
+
+  const currentPreviewItemId = text(root?.__state?.previewItemId);
+  const currentFocusItemId = text(root?.__state?.focusItemId);
+  const tabViews = getWatchlistTabViews(root.__model, currentTab);
+  const previewStillExists = currentPreviewItemId && tabViews.some((view) => text(view?.itemId) === currentPreviewItemId);
+  const focusStillExists = currentFocusItemId && tabViews.some((view) => text(view?.itemId) === currentFocusItemId);
+
+  root.__state = {
+    ...(root.__state || {}),
+    focusItemId: focusStillExists ? currentFocusItemId : "",
+    previewItemId: previewStillExists ? currentPreviewItemId : ""
+  };
+
+  const shouldRefreshPreview =
+    !previewStillExists ||
+    currentPreviewItemId === itemId ||
+    (!currentPreviewItemId && tabViews.length > 0);
+
+  if (shouldRefreshPreview) {
+    try {
+      root.__previewAbortController?.abort?.();
+    } catch {}
+  }
+
+  const nextPreviewItemId = getInitialPreviewItemId(root);
+  if (nextPreviewItemId && (shouldRefreshPreview || nextPreviewItemId !== currentPreviewItemId)) {
+    queuePreviewPanelUpdate(root, nextPreviewItemId, { immediate: true });
+  } else if (nextPreviewItemId) {
+    setPreviewActiveCard(root, nextPreviewItemId);
+  } else {
+    const panel = root.querySelector(".monwuiwl-preview");
+    if (panel) {
+      panel.scrollTop = 0;
+      applyPreviewPanelMarkup(panel, renderPreviewEmptyState());
+    }
+    setPreviewActiveCard(root, "");
+  }
+
+  syncDeferredWatchlistFocus(root);
+  return true;
+}
+
+async function applyWatchlistChangeToOpenModal(root, detail = {}) {
+  if (!root || !root.__model) return false;
+
+  const itemId = text(detail?.itemId);
+  const isItemAdd = !!itemId && detail?.inWatchlist === true;
+  const isShareAdd = !!itemId && detail?.shared === true;
+  if (isItemAdd || isShareAdd) {
+    return applyWatchlistAdditionToOpenModal(root, detail);
+  }
+
+  const change = applyWatchlistChangeToModel(root.__model, detail);
+  if (!change.applied) return false;
+
+  const currentTab = normalizeWatchlistTabKey(root.__state?.activeTab);
+  const currentTabAffected = change.affectedTabs.has(currentTab);
+
+  updateWatchlistTabButtons(root, root.__model, currentTab);
+
+  if (currentTabAffected) {
+    clearPreviewHoverTimer(root);
+    cancelProgressiveWatchlistRender(root);
+
+    const {
+      ownItems,
+      sharedItems,
+      ownTitle,
+      sharedTitle
+    } = getRenderedTabData(root.__model, currentTab);
+
+    const ownUpdated = change.updatedViewKeysBySection?.own || new Set();
+    const sharedUpdated = change.updatedViewKeysBySection?.shared || new Set();
+    const ownUpdatedIds = new Set(
+      Array.from(ownUpdated)
+        .filter((key) => key.startsWith("own:"))
+        .map((key) => key.slice(4))
+        .filter(Boolean)
+    );
+
+    const ownHandled = updateWatchlistSectionAfterRemoval(root, "own", ownTitle, ownItems, {
+      removedItemId: change.removedItemId,
+      removedShareId: change.removedShareId,
+      removedViewKeys: change.removedViewKeysBySection?.own,
+      updatedViewKeys: ownUpdated
+    });
+    const sharedHandled = updateWatchlistSectionAfterRemoval(root, "shared", sharedTitle, sharedItems, {
+      removedItemId: change.removedItemId,
+      removedShareId: change.removedShareId,
+      removedViewKeys: change.removedViewKeysBySection?.shared,
+      updatedViewKeys: sharedUpdated
+    });
+
+    if (!ownHandled || !sharedHandled) {
+      if (!renderCurrentWatchlistTabContent(root, root.__model)) {
+        return false;
+      }
+    }
+
+    const currentPreviewItemId = text(root?.__state?.previewItemId);
+    const currentFocusItemId = text(root?.__state?.focusItemId);
+    const tabViews = getWatchlistTabViews(root.__model, currentTab);
+    const previewStillExists = currentPreviewItemId && tabViews.some((view) => text(view?.itemId) === currentPreviewItemId);
+    const focusStillExists = currentFocusItemId && tabViews.some((view) => text(view?.itemId) === currentFocusItemId);
+
+    root.__state = {
+      ...(root.__state || {}),
+      focusItemId: focusStillExists ? currentFocusItemId : "",
+      previewItemId: previewStillExists ? currentPreviewItemId : ""
+    };
+
+    const shouldRefreshPreview =
+      !previewStillExists ||
+      change.removedItemIds.has(currentPreviewItemId) ||
+      ownUpdatedIds.has(currentPreviewItemId);
+
+    if (shouldRefreshPreview) {
+      try {
+        root.__previewAbortController?.abort?.();
+      } catch {}
+    }
+
+    const nextPreviewItemId = getInitialPreviewItemId(root);
+    if (nextPreviewItemId && (shouldRefreshPreview || nextPreviewItemId !== currentPreviewItemId)) {
+      queuePreviewPanelUpdate(root, nextPreviewItemId, { immediate: true });
+    } else if (nextPreviewItemId) {
+      setPreviewActiveCard(root, nextPreviewItemId);
+    } else {
+      const panel = root.querySelector(".monwuiwl-preview");
+      if (panel) {
+        panel.scrollTop = 0;
+        applyPreviewPanelMarkup(panel, renderPreviewEmptyState());
+      }
+      setPreviewActiveCard(root, "");
+    }
+
+    syncDeferredWatchlistFocus(root);
+  }
+
+  return true;
+}
+
+function renderWatchlistShellFromModel(root, model) {
+  root.__model = model;
+  root.__focusItemApplied = "";
+  root.__previewActiveCard = null;
+  root.innerHTML = renderModalShell(model, root.__state?.activeTab);
+  scheduleProgressiveWatchlistSections(root, model, root.__state?.activeTab);
+}
+
 async function renderWatchlistModal(root, state = {}) {
   const renderToken = Date.now();
   root.__renderToken = renderToken;
   clearPreviewHoverTimer(root);
+  cancelProgressiveWatchlistRender(root);
+  bindModalInteractions(root);
   try {
     root.__previewAbortController?.abort?.();
   } catch {}
@@ -4193,33 +5000,43 @@ async function renderWatchlistModal(root, state = {}) {
     previewItemId: text(state?.previewItemId)
   };
 
-  root.innerHTML = `
-    <div class="monwuiwl-backdrop">
-      <div class="monwuiwl-card" role="dialog" aria-modal="true" aria-label="${escapeHtml(L("watchlistOpen", "İzleme Listesi"))}">
-        <div class="monwuiwl-header">
-          <div>
-            <h2 class="monwuiwl-title">${escapeHtml(L("watchlistOpen", "İzleme Listesi"))}</h2>
-            <p class="monwuiwl-subtitle">${escapeHtml(L("loading", "Yükleniyor..."))}</p>
-          </div>
-          <div class="monwuiwl-header-actions">
-            <button class="monwuiwl-close" data-monwuiwl-close="1" aria-label="${escapeHtml(L("closeButton", "Kapat"))}">✕</button>
-          </div>
-        </div>
-        <div class="monwuiwl-body">
-          <div class="monwuiwl-loading">${escapeHtml(L("loading", "Yükleniyor..."))}</div>
-        </div>
-      </div>
-    </div>
-  `;
-
   try {
+    const hotDashboard = dashboardCache && !dashboardStale() ? dashboardCache : null;
+    const hotCacheKey = getWatchlistViewModelCacheKey(hotDashboard);
+    const hotModel = (hotCacheKey && watchlistViewModelCacheKey === hotCacheKey)
+      ? watchlistViewModelCacheValue
+      : null;
+
+    if (hotModel) {
+      renderWatchlistShellFromModel(root, hotModel);
+    } else {
+      root.innerHTML = `
+        <div class="monwuiwl-backdrop">
+          <div class="monwuiwl-card" role="dialog" aria-modal="true" aria-label="${escapeHtml(L("watchlistOpen", "İzleme Listesi"))}">
+            <div class="monwuiwl-header">
+              <div>
+                <h2 class="monwuiwl-title">${escapeHtml(L("watchlistOpen", "İzleme Listesi"))}</h2>
+                <p class="monwuiwl-subtitle">${escapeHtml(L("loading", "Yükleniyor..."))}</p>
+              </div>
+              <div class="monwuiwl-header-actions">
+                <button class="monwuiwl-close" data-monwuiwl-close="1" aria-label="${escapeHtml(L("closeButton", "Kapat"))}">✕</button>
+              </div>
+            </div>
+            <div class="monwuiwl-body">
+              <div class="monwuiwl-loading">${escapeHtml(L("loading", "Yükleniyor..."))}</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
     const dashboard = await ensureWatchlistLoaded();
-    const model = await buildViewModel(dashboard);
+    const model = await getCachedWatchlistViewModel(dashboard);
     if (root.__renderToken !== renderToken) return;
 
-    root.__model = model;
-    root.innerHTML = renderModalShell(model, root.__state.activeTab);
-    bindModalInteractions(root);
+    if (root.__model !== model) {
+      renderWatchlistShellFromModel(root, model);
+    }
     const previewItemId = getInitialPreviewItemId(root);
     if (previewItemId) {
       queuePreviewPanelUpdate(root, previewItemId, { immediate: true });
@@ -4232,16 +5049,7 @@ async function renderWatchlistModal(root, state = {}) {
       const panel = root.querySelector(".monwuiwl-preview");
       if (panel) panel.innerHTML = renderPreviewEmptyState();
     }
-
-    const focusItemId = root.__state.focusItemId;
-    if (focusItemId) {
-      requestAnimationFrame(() => {
-        root.querySelector(`[data-monwuiwl-item="${escapeAttrSelector(focusItemId)}"]`)?.scrollIntoView?.({
-          behavior: "smooth",
-          block: "nearest"
-        });
-      });
-    }
+    syncDeferredWatchlistFocus(root);
   } catch (error) {
     if (root.__renderToken !== renderToken) return;
     root.innerHTML = `
@@ -4266,44 +5074,91 @@ async function renderWatchlistModal(root, state = {}) {
 }
 
 function bindModalInteractions(root) {
-  root.querySelectorAll("[data-monwuiwl-tab]").forEach((button) => {
-    button.addEventListener("click", () => {
-      root.__state = {
-        ...(root.__state || {}),
-        activeTab: normalizeWatchlistTabKey(button.getAttribute("data-monwuiwl-tab"))
-      };
-      renderWatchlistModal(root, root.__state).catch(() => {});
-    });
-  });
+  if (!root || root.__watchlistDelegatedBindingsInstalled) return;
+  root.__watchlistDelegatedBindingsInstalled = true;
 
-  root.querySelectorAll(".monwuiwl-item").forEach((card) => {
-    const itemId = text(card.getAttribute("data-monwuiwl-item"));
-    if (!itemId) return;
-
-    card.addEventListener("mouseenter", () => {
-      queuePreviewPanelUpdate(root, itemId);
-    });
-    card.addEventListener("mouseleave", () => {
-      if (text(root.__pendingPreviewItemId) === itemId) {
+  root.addEventListener("mouseover", (event) => {
+    const preview = event.target?.closest?.(".monwuiwl-preview");
+    if (preview && root.contains(preview)) {
+      const previewRelated = event.relatedTarget;
+      if (!previewRelated || !preview.contains(previewRelated)) {
         clearPreviewHoverTimer(root);
       }
-    });
-    card.addEventListener("focusin", () => {
-      queuePreviewPanelUpdate(root, itemId, { immediate: true });
-    });
-    card.addEventListener("click", (event) => {
-      if (event.target?.closest?.(".monwuiwl-btn")) return;
-      queuePreviewPanelUpdate(root, itemId, { immediate: true });
-    });
+    }
+
+    const card = event.target?.closest?.(".monwuiwl-item");
+    if (!card || !root.contains(card)) return;
+
+    const related = event.relatedTarget;
+    if (related && card.contains(related)) return;
+
+    const itemId = text(card.getAttribute("data-monwuiwl-item"));
+    if (itemId) {
+      queuePreviewPanelUpdate(root, itemId);
+    }
   });
 
-  root.querySelector(".monwuiwl-preview")?.addEventListener("mouseenter", () => {
-    clearPreviewHoverTimer(root);
+  root.addEventListener("mouseout", (event) => {
+    const card = event.target?.closest?.(".monwuiwl-item");
+    if (!card || !root.contains(card)) return;
+
+    const related = event.relatedTarget;
+    if (related && card.contains(related)) return;
+
+    const itemId = text(card.getAttribute("data-monwuiwl-item"));
+    if (text(root.__pendingPreviewItemId) === itemId) {
+      clearPreviewHoverTimer(root);
+    }
   });
 
-  root.querySelector(".monwuiwl-preview")?.addEventListener("click", async (event) => {
+  root.addEventListener("focusin", (event) => {
+    const card = event.target?.closest?.(".monwuiwl-item");
+    if (!card || !root.contains(card)) return;
+
+    const itemId = text(card.getAttribute("data-monwuiwl-item"));
+    if (itemId) {
+      queuePreviewPanelUpdate(root, itemId, { immediate: true });
+    }
+  });
+
+  root.addEventListener("click", async (event) => {
+    if (event.target?.closest?.("[data-monwuiwl-close='1']")) return;
+
+    const tabButton = event.target?.closest?.("[data-monwuiwl-tab]");
+    if (tabButton && root.contains(tabButton)) {
+      const nextTab = normalizeWatchlistTabKey(tabButton.getAttribute("data-monwuiwl-tab"));
+      if (nextTab === normalizeWatchlistTabKey(root.__state?.activeTab)) return;
+
+      clearPreviewHoverTimer(root);
+      try {
+        root.__previewAbortController?.abort?.();
+      } catch {}
+
+      root.__state = {
+        ...(root.__state || {}),
+        activeTab: nextTab,
+        focusItemId: "",
+        previewItemId: ""
+      };
+
+      if (root.__model) {
+        renderWatchlistShellFromModel(root, root.__model);
+        const previewItemId = getInitialPreviewItemId(root);
+        if (previewItemId) {
+          queuePreviewPanelUpdate(root, previewItemId, { immediate: true });
+        } else {
+          setPreviewActiveCard(root, "");
+          const panel = root.querySelector(".monwuiwl-preview");
+          if (panel) panel.innerHTML = renderPreviewEmptyState();
+        }
+      } else {
+        renderWatchlistModal(root, root.__state).catch(() => {});
+      }
+      return;
+    }
+
     const studioButton = event.target?.closest?.("[data-monwuiwl-studio-id]");
-    if (studioButton) {
+    if (studioButton && root.contains(studioButton)) {
       event.preventDefault();
       event.stopPropagation();
 
@@ -4394,55 +5249,63 @@ function bindModalInteractions(root) {
       return;
     }
 
-    const button = event.target?.closest?.("[data-monwuiwl-preview-play]");
-    if (!button) return;
+    const previewPlayButton = event.target?.closest?.("[data-monwuiwl-preview-play]");
+    if (previewPlayButton && root.contains(previewPlayButton)) {
+      event.preventDefault();
+      event.stopPropagation();
 
-    event.preventDefault();
-    event.stopPropagation();
-
-    const itemId = text(button.getAttribute("data-monwuiwl-preview-play"));
-    if (!itemId) return;
-    await startWatchlistPlayback(button, itemId);
-  });
-
-  root.querySelectorAll("[data-monwuiwl-play-now]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      const itemId = text(button.getAttribute("data-monwuiwl-play-now"));
+      const itemId = text(previewPlayButton.getAttribute("data-monwuiwl-preview-play"));
       if (!itemId) return;
+      await startWatchlistPlayback(previewPlayButton, itemId);
+      return;
+    }
 
-      await startWatchlistPlayback(button, itemId);
-    });
-  });
+    const playNowButton = event.target?.closest?.("[data-monwuiwl-play-now]");
+    if (playNowButton && root.contains(playNowButton)) {
+      const itemId = text(playNowButton.getAttribute("data-monwuiwl-play-now"));
+      if (!itemId) return;
+      await startWatchlistPlayback(playNowButton, itemId);
+      return;
+    }
 
-  root.querySelectorAll("[data-monwuiwl-remove]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      const removeKind = text(button.getAttribute("data-monwuiwl-remove-kind"));
-      const targetId = text(button.getAttribute("data-monwuiwl-remove"));
+    const removeButton = event.target?.closest?.("[data-monwuiwl-remove]");
+    if (removeButton && root.contains(removeButton)) {
+      const removeKind = text(removeButton.getAttribute("data-monwuiwl-remove-kind"));
+      const targetId = text(removeButton.getAttribute("data-monwuiwl-remove"));
       if (!targetId) return;
 
       try {
-        button.disabled = true;
+        removeButton.disabled = true;
         if (removeKind === "shared") {
           await removeWatchlistShare(targetId);
         } else {
           await updateFavoriteStatus(targetId, false);
         }
         window.showMessage?.(L("watchlistRemoved", "Öğe listeden çıkarıldı"), "success");
-        await renderWatchlistModal(root, root.__state || {});
       } catch (error) {
         window.showMessage?.(error?.message || L("watchlistActionError", "İşlem başarısız"), "error");
       } finally {
-        button.disabled = false;
+        removeButton.disabled = false;
       }
-    });
-  });
+      return;
+    }
 
-  root.querySelectorAll("[data-monwuiwl-share]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      const itemId = text(button.getAttribute("data-monwuiwl-share"));
+    const shareButton = event.target?.closest?.("[data-monwuiwl-share]");
+    if (shareButton && root.contains(shareButton)) {
+      const itemId = text(shareButton.getAttribute("data-monwuiwl-share"));
       if (!itemId) return;
       await openShareOverlay(root, itemId);
-    });
+      return;
+    }
+
+    const card = event.target?.closest?.(".monwuiwl-item");
+    if (!card || !root.contains(card)) return;
+    if (event.target?.closest?.(".monwuiwl-btn")) return;
+
+    const itemId = text(card.getAttribute("data-monwuiwl-item"));
+    if (itemId) {
+      queuePreviewPanelUpdate(root, itemId, { immediate: true });
+    }
   });
 }
 
@@ -4516,7 +5379,6 @@ async function openShareOverlay(root, itemId) {
       await shareWatchlistItem(itemId, selectedUsers, note);
       window.showMessage?.(L("watchlistSharedSuccess", "Öğe kullanıcılarla paylaşıldı"), "success");
       closeOverlay();
-      await renderWatchlistModal(root, root.__state || {});
     } catch (error) {
       window.showMessage?.(error?.message || L("watchlistShareError", "Paylaşım başarısız"), "error");
     } finally {
@@ -4554,6 +5416,7 @@ export async function closeWatchlistModal() {
   const root = document.getElementById(WATCHLIST_MODAL_ID);
   if (!root) return;
   clearPreviewHoverTimer(root);
+  cancelProgressiveWatchlistRender(root);
   try {
     root.__previewAbortController?.abort?.();
   } catch {}

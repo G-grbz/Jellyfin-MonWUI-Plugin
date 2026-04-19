@@ -2,6 +2,7 @@ import { getConfig } from "../config.js";
 import { compareSemver, fetchLatestGitHubVersion } from "../update.js";
 import { createCheckbox, createSection, createImageTypeSelect, bindCheckboxKontrol, bindTersCheckboxKontrol } from "./shared.js";
 import { clearQualityBadgesCacheAndRefresh } from "../qualityBadges.js";
+import { fetchJmsPluginConfig } from "../jmsPluginConfig.js";
 
 export function createStatusRatingPanel(config, labels) {
         const panel = document.createElement('div');
@@ -369,7 +370,23 @@ export  function createProviderPanel(config, labels) {
     const section = createSection(labels.providerHeader || 'Dış Bağlantılar / Sağlayıcı Ayarları');
     section.appendChild(createCheckbox('showProviderInfo', labels.showProviderInfo || 'Metaveri Bağlantıları Göster', config.showProviderInfo));
 
-    section.appendChild(createCheckbox('showCast', labels.showCast || 'Chromecast\'ı Göster', config.showCast));
+    const castModuleCheckbox = createCheckbox(
+      'enableCastModule',
+      labels.enableCastModule || 'Cast modülünü etkinleştir',
+      config.enableCastModule
+    );
+    section.appendChild(castModuleCheckbox);
+
+    const castModuleSubOptions = document.createElement('div');
+    castModuleSubOptions.className = 'sub-options cast-module-sub-options';
+    castModuleSubOptions.appendChild(createCheckbox('showCast', labels.showCast || 'Chromecast\'ı Göster', config.showCast));
+    castModuleSubOptions.appendChild(createCheckbox(
+      'allowSharedCastViewerForUsers',
+      labels.allowSharedCastViewerForUsers || 'Tüm kullanıcılar cast modülünde kimin ne izlediğini görebilsin',
+      config.allowSharedCastViewerForUsers
+    ));
+    section.appendChild(castModuleSubOptions);
+    bindCheckboxKontrol('#enableCastModule', '.cast-module-sub-options');
 
     const settingsLinkDiv = document.createElement('div');
     settingsLinkDiv.id = 'settingsLinkContainer';
@@ -384,6 +401,53 @@ export  function createProviderPanel(config, labels) {
     description.className = 'description-text';
     description.textContent = labels.providerDescription || 'Bu ayar, metaveri bağlantılarının görünürlüğünü kontrol eder.';
     section.appendChild(description);
+
+    const castModuleInput = castModuleCheckbox.querySelector('input');
+    const showCastInput = castModuleSubOptions.querySelector('input[name="showCast"]');
+    const sharedViewerInput = castModuleSubOptions.querySelector('input[name="allowSharedCastViewerForUsers"]');
+
+    const syncCastOptionsWithModule = () => {
+      if (!castModuleInput) return;
+      if (!castModuleInput.checked) {
+        if (showCastInput) {
+          showCastInput.checked = false;
+        }
+        if (sharedViewerInput) {
+          sharedViewerInput.checked = false;
+        }
+      }
+    };
+
+    if (castModuleInput) {
+      castModuleInput.addEventListener('change', syncCastOptionsWithModule);
+      syncCastOptionsWithModule();
+    }
+
+    fetchJmsPluginConfig()
+      .then((pluginConfig) => {
+        const pluginEnableCastModule =
+          pluginConfig?.enableCastModule ?? pluginConfig?.EnableCastModule;
+        const pluginAllowSharedCastViewerForUsers =
+          pluginConfig?.allowSharedCastViewerForUsers ?? pluginConfig?.AllowSharedCastViewerForUsers;
+
+        if (castModuleInput) {
+          castModuleInput.checked = pluginEnableCastModule !== false;
+          castModuleInput.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        if (sharedViewerInput) {
+          sharedViewerInput.checked = pluginAllowSharedCastViewerForUsers === true;
+        }
+        syncCastOptionsWithModule();
+      })
+      .catch(() => {});
+
+    if (config?.currentUserIsAdmin !== true) {
+      [castModuleInput, sharedViewerInput].forEach((input) => {
+        if (!input) return;
+        input.disabled = true;
+        input.style.opacity = '0.6';
+      });
+    }
 
     panel.appendChild(section);
     return panel;

@@ -10,6 +10,8 @@ public class ConfigUpdateDto
     public bool?   AllowScriptExecution    { get; set; }
     public bool?   EnableTrailerDownloader { get; set; }
     public bool?   EnableTrailerUrlNfo     { get; set; }
+    public bool?   EnableCastModule { get; set; }
+    public bool?   AllowSharedCastViewerForUsers { get; set; }
     public string? JFBase        { get; set; }
     public string? JFApiKey      { get; set; }
     public string? TmdbApiKey    { get; set; }
@@ -57,6 +59,9 @@ public class ConfigController : ControllerBase
         if (incoming.AllowScriptExecution.HasValue)    cfg.AllowScriptExecution    = incoming.AllowScriptExecution.Value;
         if (incoming.EnableTrailerDownloader.HasValue) cfg.EnableTrailerDownloader = incoming.EnableTrailerDownloader.Value;
         if (incoming.EnableTrailerUrlNfo.HasValue)     cfg.EnableTrailerUrlNfo     = incoming.EnableTrailerUrlNfo.Value;
+        if (incoming.EnableCastModule.HasValue)        cfg.EnableCastModule = incoming.EnableCastModule.Value;
+        if (incoming.AllowSharedCastViewerForUsers.HasValue)
+            cfg.AllowSharedCastViewerForUsers = incoming.AllowSharedCastViewerForUsers.Value;
 
         if (!string.IsNullOrWhiteSpace(incoming.JFBase))        cfg.JFBase        = incoming.JFBase!;
         if (!string.IsNullOrWhiteSpace(incoming.JFApiKey))      cfg.JFApiKey      = incoming.JFApiKey!;

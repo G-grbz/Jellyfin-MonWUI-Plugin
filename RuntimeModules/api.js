@@ -9,6 +9,7 @@ const dotGenreCache = new Map();
 const CACHE_TTL = 24 * 60 * 60 * 1000;
 const USER_ID_KEY = "jf_userId";
 const DEVICE_ID_KEY = "jf_api_deviceId";
+const DEVICE_NAME_KEY = "jf_api_deviceName";
 const notFoundTombstone = new Map();
 const NOTFOUND_TTL = 30 * 60 * 1000;
 const MAX_ITEM_CACHE = 600;
@@ -268,6 +269,118 @@ function readStoredServerBase() {
   }
 }
 
+function cleanReadableDeviceName(value) {
+  const text = String(value || "")
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .trim();
+
+  if (!text) return "";
+  if (/^(web-client|unknown|null|undefined)$/i.test(text)) return "";
+  if (text.length > 96) return "";
+  if (/^[0-9a-f]{12,}$/i.test(text)) return "";
+  if (/^[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(text)) return "";
+  return text;
+}
+
+function getStoredDeviceName() {
+  try {
+    return cleanReadableDeviceName(
+      localStorage.getItem(DEVICE_NAME_KEY) ||
+      sessionStorage.getItem(DEVICE_NAME_KEY) ||
+      localStorage.getItem("persist_device_name") ||
+      sessionStorage.getItem("persist_device_name") ||
+      ""
+    );
+  } catch {
+    return "";
+  }
+}
+
+function persistDeviceName(value) {
+  const name = cleanReadableDeviceName(value);
+  if (!name) return "";
+  try {
+    localStorage.setItem(DEVICE_NAME_KEY, name);
+    sessionStorage.setItem(DEVICE_NAME_KEY, name);
+    localStorage.setItem("persist_device_name", name);
+    sessionStorage.setItem("persist_device_name", name);
+  } catch {}
+  return name;
+}
+
+function detectPlatformDeviceName() {
+  try {
+    const ua = String((typeof navigator !== "undefined" && navigator.userAgent) || "");
+    const uaData = (typeof navigator !== "undefined" && navigator.userAgentData) ? navigator.userAgentData : null;
+    const model = cleanReadableDeviceName(uaData?.model || "");
+    if (model) return model;
+    if (/iPhone/i.test(ua)) return "iPhone";
+    if (/iPad/i.test(ua)) return "iPad";
+    if (/Android/i.test(ua)) return "Android Device";
+    if (/Windows/i.test(ua)) return "Windows PC";
+    if (/Mac OS X|Macintosh|MacIntel/i.test(ua)) return "Mac";
+    if (/Linux/i.test(ua)) return "Linux PC";
+  } catch {}
+  return "";
+}
+
+function readApiClientDeviceName() {
+  try {
+    const api = (typeof window !== "undefined" && window.ApiClient) ? window.ApiClient : null;
+    if (!api) return "";
+
+    return cleanReadableDeviceName(
+      api._deviceName ||
+      (typeof api.getDeviceName === "function" ? api.getDeviceName() : "") ||
+      api.deviceName ||
+      api._device ||
+      ""
+    );
+  } catch {
+    return "";
+  }
+}
+
+let __deviceNameWarmupPromise = null;
+function warmReadableDeviceName() {
+  if (__deviceNameWarmupPromise) return __deviceNameWarmupPromise;
+
+  __deviceNameWarmupPromise = (async () => {
+    const immediate = cleanReadableDeviceName(
+      readApiClientDeviceName() ||
+      getStoredDeviceName() ||
+      detectPlatformDeviceName()
+    );
+    if (immediate) persistDeviceName(immediate);
+
+    try {
+      const uaData = (typeof navigator !== "undefined" && navigator.userAgentData) ? navigator.userAgentData : null;
+      if (uaData?.getHighEntropyValues) {
+        const info = await uaData.getHighEntropyValues(["model", "platform"]);
+        const modelName = cleanReadableDeviceName(info?.model || "");
+        if (modelName) {
+          persistDeviceName(modelName);
+          return modelName;
+        }
+      }
+    } catch {}
+
+    return immediate || "";
+  })().finally(() => {
+    __deviceNameWarmupPromise = null;
+  });
+
+  return __deviceNameWarmupPromise;
+}
+
+try {
+  if (typeof window !== "undefined") {
+    queueMicrotask(() => {
+      void warmReadableDeviceName().catch(() => "");
+    });
+  }
+} catch {}
+
 async function ensureAuthReadyFor(url, ms = 2500) {
   if (!requiresAuth(url)) return true;
   if (isAuthReadyStrict()) return true;
@@ -366,6 +479,7 @@ function dispatchAuthProfileChanged(detail) {
     const userId =
       (typeof api.getCurrentUserId === "function" ? api.getCurrentUserId() : api._currentUserId) || null;
     const deviceId = readApiClientDeviceId() || "web-client";
+    const deviceName = persistDeviceName(readApiClientDeviceName() || getStoredDeviceName() || detectPlatformDeviceName());
     const serverId = api._serverInfo?.SystemId || api._serverInfo?.Id || null;
     let serverBase = "";
     try {
@@ -384,7 +498,7 @@ function dispatchAuthProfileChanged(detail) {
     try { localStorage.setItem(DEVICE_ID_KEY, deviceId); sessionStorage.setItem(DEVICE_ID_KEY, deviceId); } catch {}
     try { persistUserId(userId); } catch {}
 
-    const result = { userId, accessToken: token || "", sessionId: api._sessionId || null, serverId, serverBase, deviceId,
+    const result = { userId, accessToken: token || "", sessionId: api._sessionId || null, serverId, serverBase, deviceId, deviceName,
                      clientName: "Jellyfin Web Client", clientVersion: "1.0.0" };
                      dbgAuth("persistAuthSnapshot:done");
     onAuthProfileChanged(__lastAuthSnapshot, result);
@@ -776,8 +890,14 @@ async function safeFetch(url, opts = {}) {
 }
 
 export function getAuthHeader() {
-  const { accessToken, clientName, deviceId, clientVersion } = getSessionInfo();
-  const base = `MediaBrowser Client="${clientName}", Device="${deviceId || 'web-client'}", DeviceId="${deviceId}", Version="${clientVersion}"`;
+  const { accessToken, clientName, deviceId, clientVersion, deviceName } = getSessionInfo();
+  const readableDeviceName = cleanReadableDeviceName(deviceName) || cleanReadableDeviceName(readApiClientDeviceName()) || getStoredDeviceName() || detectPlatformDeviceName() || "Web Client";
+  if (readableDeviceName) persistDeviceName(readableDeviceName);
+  const safeClient = String(clientName || "Jellyfin Web Client").replace(/"/g, "");
+  const safeDevice = String(readableDeviceName || "Web Client").replace(/"/g, "");
+  const safeDeviceId = String(deviceId || "web-client").replace(/"/g, "");
+  const safeVersion = String(clientVersion || "1.0.0").replace(/"/g, "");
+  const base = `MediaBrowser Client="${safeClient}", Device="${safeDevice}", DeviceId="${safeDeviceId}", Version="${safeVersion}"`;
   return accessToken ? `${base}, Token="${accessToken}"` : base;
 }
 
@@ -830,9 +950,10 @@ function readFromApiClient() {
       null;
 
     if (!token || !userId) return null;
+    const deviceName = persistDeviceName(readApiClientDeviceName() || getStoredDeviceName() || detectPlatformDeviceName());
     return {
       token, userId, sessionId: api._sessionId || null, serverId,
-      deviceId, clientName: "Jellyfin Web Client", clientVersion: "1.0.0"
+      deviceId, deviceName, clientName: "Jellyfin Web Client", clientVersion: "1.0.0"
     };
   } catch {
     return null;
@@ -904,6 +1025,15 @@ export function getSessionInfo() {
       getStoredDeviceId(),
       safeGet("persist_device_id")
     );
+    const deviceName = pickFirstString(
+      hints?.deviceName,
+      creds?.DeviceName,
+      creds?.ClientDeviceName,
+      readApiClientDeviceName(),
+      getStoredDeviceName(),
+      detectPlatformDeviceName()
+    );
+    persistDeviceName(deviceName);
 
     const clientName = pickFirstString(
       hints?.clientName,
@@ -923,6 +1053,7 @@ export function getSessionInfo() {
       userId,
       sessionId,
       deviceId,
+      deviceName,
       clientName,
       clientVersion,
       serverId: String(active?.Id || creds?.ServerId || ""),

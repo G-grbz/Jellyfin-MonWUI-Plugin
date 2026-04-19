@@ -51,7 +51,9 @@ const DIRECTOR_ROW_BATCH_SIZE = IS_MOBILE ? 2 : 1;
 const DIRECTOR_ROW_FILL_YIELD_MS = IS_MOBILE ? 48 : 24;
 const DIRECTOR_MOBILE_CARD_DELAY_MS = 90;
 const IMAGE_RETRY_LIMITS = { lq: 2, hi: 2 };
+
 function dirRowsLog() {}
+
 function dirRowsWarn() {}
 
 function clampConfiguredCount(value, fallback, max = UNIFIED_ROW_ITEM_LIMIT) {
@@ -110,6 +112,7 @@ let __dirEligibilityRefreshRunning = false;
 let __dirEligibilityRefreshScope = "";
 let __directorMountPromise = null;
 let __directorDeferredStartPromise = null;
+let __directorRowsRetryTo = null;
 let __directorDeferredSeq = 0;
 
 function isDirectorRowsWorkerActive() {
@@ -2505,30 +2508,109 @@ function hasRenderableDirectorRowsContent(wrap) {
   );
 }
 
+function clearDirectorRowsRetry() {
+  if (__directorRowsRetryTo) {
+    clearTimeout(__directorRowsRetryTo);
+    __directorRowsRetryTo = null;
+  }
+}
+
+function scheduleDirectorRowsRetry(ms = 1000, options = {}, reason = "retry") {
+  clearDirectorRowsRetry();
+  dirRowsWarn("retry:scheduled", {
+    delayMs: Math.max(120, ms | 0),
+    reason,
+    force: options?.force === true,
+  });
+  __directorRowsRetryTo = setTimeout(() => {
+    __directorRowsRetryTo = null;
+    void mountDirectorRowsLazy(options);
+  }, Math.max(120, ms | 0));
+}
+
 function scheduleDirectorInitWhenReady(wrap, { force = false } = {}) {
   if (force) {
     __directorDeferredSeq += 1;
     __directorDeferredStartPromise = null;
+    dirRowsWarn("deferred:start:force-reset", {
+      force,
+      seq: __directorDeferredSeq,
+    });
   }
 
   if (__directorDeferredStartPromise) {
+    dirRowsLog("deferred:reuse-existing-promise", {
+      force,
+      seq: __directorDeferredSeq,
+    });
     return __directorDeferredStartPromise;
   }
 
   const seq = __directorDeferredSeq;
   const run = (async () => {
     try {
-      await waitForManagedSectionGate("directorRows", { timeoutMs: 25000 });
-      if (seq !== __directorDeferredSeq) return false;
-      await waitForGenreHubsDone(25000);
-      if (seq !== __directorDeferredSeq) return false;
-      if (!wrap?.isConnected || !isHomeRoute()) return false;
-      if (!force && hasRenderableDirectorRowsContent(wrap)) return true;
-      if (STATE.started && STATE.wrapEl === wrap && wrap.isConnected) return true;
+      dirRowsLog("deferred:start", {
+        force,
+        seq,
+        wrapConnected: !!wrap?.isConnected,
+      });
+      if (!force) {
+        dirRowsLog("deferred:wait:managed-gate", { seq });
+        await waitForManagedSectionGate("directorRows", { timeoutMs: 25000 });
+        if (seq !== __directorDeferredSeq) return false;
+        dirRowsLog("deferred:wait:genre-hubs-done", { seq });
+        await waitForGenreHubsDone(25000);
+        if (seq !== __directorDeferredSeq) return false;
+      } else {
+        dirRowsLog("deferred:skip-gates:force", { seq });
+      }
+      if (!wrap?.isConnected || !isHomeRoute()) {
+        dirRowsWarn("deferred:abort:wrap-or-route-invalid", {
+          force,
+          seq,
+          wrapConnected: !!wrap?.isConnected,
+          homeRoute: !!isHomeRoute(),
+        });
+        return false;
+      }
+      if (!force && hasRenderableDirectorRowsContent(wrap)) {
+        dirRowsLog("deferred:skip:already-rendered", { seq });
+        return true;
+      }
+      if (STATE.started && STATE.wrapEl === wrap && wrap.isConnected) {
+        dirRowsLog("deferred:skip:state-started", { seq });
+        return true;
+      }
+      dirRowsLog("render:start", {
+        force,
+        seq,
+        wrapChildren: wrap.childElementCount,
+      });
       await initAndRenderFirstBatch(wrap);
+      if (!hasRenderableDirectorRowsContent(wrap)) {
+        dirRowsWarn("render:done-but-empty", {
+          force,
+          seq,
+          wrapChildren: wrap.childElementCount,
+        });
+        scheduleDirectorRowsRetry(1400, { force: true }, "render-done-but-empty");
+        return false;
+      }
+      dirRowsLog("render:success", {
+        force,
+        seq,
+        wrapChildren: wrap.childElementCount,
+      });
+      clearDirectorRowsRetry();
       return true;
     } catch (e) {
       console.error(e);
+      dirRowsWarn("render:error", {
+        force,
+        seq,
+        error: e?.message || String(e),
+      });
+      scheduleDirectorRowsRetry(1400, { force: true }, "render-error");
       try { cleanupDirectorRows(); } catch {}
       return false;
     }
@@ -2546,32 +2628,59 @@ function scheduleDirectorInitWhenReady(wrap, { force = false } = {}) {
 export async function mountDirectorRowsLazy(options = {}) {
   const force = options?.force === true;
   if (__directorMountPromise) {
-    if (!force) return __directorMountPromise;
+    if (!force) {
+      dirRowsLog("mount:skip:existing-promise", { force });
+      return __directorMountPromise;
+    }
+    dirRowsWarn("mount:force:await-existing-promise", { force });
     try { await __directorMountPromise; } catch {}
   }
   const cfg = getConfig();
   const homeSectionsConfig = getHomeSectionsRuntimeConfig(cfg);
   if (!homeSectionsConfig.enableDirectorRows) {
+    dirRowsLog("mount:skip:disabled", { force });
+    clearDirectorRowsRetry();
     try { cleanupDirectorRows(); } catch {}
     const existing = document.getElementById('director-rows');
     if (existing) { try { existing.remove(); } catch {} }
     return;
   }
   if (!isHomeRoute()) {
+    dirRowsWarn("mount:skip:not-home", { force });
     return;
   }
+  dirRowsLog("mount:start", {
+    force,
+    enableGenreHubs: homeSectionsConfig.enableGenreHubs,
+  });
 
   const run = (async () => {
     if (force) {
+      dirRowsWarn("mount:force:cleanup-before-render", { force });
       cleanupDirectorRows();
     }
 
     const host = await waitForVisibleHomeSections({
-      timeout: force ? 5000 : 12000
+      timeout: 12000
     });
-    if (!host?.container || !isHomeRoute()) return false;
+    if (!host?.container || !isHomeRoute()) {
+      dirRowsWarn("mount:retry:no-visible-home-sections", {
+        force,
+        hostPageId: host?.page?.id || null,
+        hasContainer: !!host?.container,
+      });
+      scheduleDirectorRowsRetry(1000, options, "no-visible-home-sections");
+      return false;
+    }
     const homeParent = host.page?.querySelector?.(".homeSectionsContainer");
-    if (!homeParent) return false;
+    if (!homeParent) {
+      dirRowsWarn("mount:retry:no-homeSectionsContainer", {
+        force,
+        hostPageId: host?.page?.id || null,
+      });
+      scheduleDirectorRowsRetry(900, options, "no-homeSectionsContainer");
+      return false;
+    }
     bindManagedSectionsBelowNative(homeParent);
 
     let wrap = document.getElementById('director-rows');
@@ -2590,13 +2699,24 @@ export async function mountDirectorRowsLazy(options = {}) {
       });
     } catch {}
 
-    if (!wrap.isConnected) return false;
+    if (!wrap.isConnected) {
+      dirRowsWarn("mount:retry:wrap-not-connected", {
+        force,
+        wrapChildren: wrap.childElementCount,
+      });
+      scheduleDirectorRowsRetry(700, options, "wrap-not-connected");
+      return false;
+    }
     if (!force && hasRenderableDirectorRowsContent(wrap)) {
+      dirRowsLog("mount:skip:already-rendered", {
+        force,
+        wrapChildren: wrap.childElementCount,
+      });
+      clearDirectorRowsRetry();
       return true;
     }
 
-    scheduleDirectorInitWhenReady(wrap, { force });
-    return true;
+    return await scheduleDirectorInitWhenReady(wrap, { force });
   })();
 
   __directorMountPromise = run;
@@ -3148,6 +3268,11 @@ async function fillRowWhenReady(row, dir, heroHost){
 
 export function cleanupDirectorRows() {
   try {
+    dirRowsLog("cleanup:start", {
+      started: !!STATE.started,
+      wrapConnected: !!STATE.wrapEl?.isConnected,
+    });
+    clearDirectorRowsRetry();
     __dirInitSeq++;
     __directorDeferredSeq++;
     __directorMountPromise = null;

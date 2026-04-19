@@ -100,6 +100,10 @@ function isPersonalRecsHeroEnabled() {
   return getConfig()?.showPersonalRecsHeroCards !== false;
 }
 
+function prcLog() {}
+
+function prcWarn() {}
+
 const PRC_DB_STATE = {
   db: null,
   scope: null,
@@ -453,6 +457,7 @@ let __genreHubsBusy = false;
 let __deferredHomeSectionSeq = 0;
 let __bywDeferredPromise = null;
 let __genreDeferredPromise = null;
+let __personalRecsRetryTo = null;
 
 function isPersonalRecsHomeRoute() {
   const h = String(window.location.hash || "").toLowerCase();
@@ -493,23 +498,60 @@ function hasActivePersonalRecsHomeSections() {
   return !!page?.querySelector?.(".homeSectionsContainer");
 }
 
+function clearPersonalRecsRetry() {
+  if (__personalRecsRetryTo) {
+    clearTimeout(__personalRecsRetryTo);
+    __personalRecsRetryTo = null;
+  }
+}
+
+function schedulePersonalRecsRetry(ms = 1000, options = {}, reason = "retry") {
+  clearPersonalRecsRetry();
+  prcWarn("retry:scheduled", {
+    delayMs: Math.max(120, ms | 0),
+    reason,
+    force: options?.force === true,
+  });
+  __personalRecsRetryTo = setTimeout(() => {
+    __personalRecsRetryTo = null;
+    void renderPersonalRecommendations(options);
+  }, Math.max(120, ms | 0));
+}
+
 function scheduleDeferredBecauseYouWatchedRender({ force = false, seq = __deferredHomeSectionSeq } = {}) {
   if (force) {
     __bywDeferredPromise = null;
+    prcWarn("BYW:force-reset", { force, seq });
   }
   if (__bywDeferredPromise) {
+    prcLog("BYW:reuse-existing-promise", { force, seq });
     return __bywDeferredPromise;
   }
 
   const run = (async () => {
     try {
-      await waitForManagedSectionGate("becauseYouWatched", { timeoutMs: 25000 });
-      if (seq !== __deferredHomeSectionSeq) return false;
-      if (!hasActivePersonalRecsHomeSections()) return false;
+      prcLog("BYW:start", { force, seq });
+      if (!force) {
+        prcLog("BYW:wait:managed-gate", { seq });
+        await waitForManagedSectionGate("becauseYouWatched", { timeoutMs: 25000 });
+        if (seq !== __deferredHomeSectionSeq) return false;
+      } else {
+        prcLog("BYW:skip-gate:force", { seq });
+      }
+      if (!hasActivePersonalRecsHomeSections()) {
+        prcWarn("BYW:abort:no-home-sections", { force, seq });
+        return false;
+      }
       await renderBecauseYouWatchedAuto(currentIndexPage(), { force });
+      prcLog("BYW:success", { force, seq });
       return true;
     } catch (e) {
       console.warn("BYW deferred render failed:", e);
+      prcWarn("BYW:error", {
+        force,
+        seq,
+        error: e?.message || String(e),
+      });
       setBywDone(true);
       return false;
     }
@@ -527,20 +569,37 @@ function scheduleDeferredBecauseYouWatchedRender({ force = false, seq = __deferr
 function scheduleDeferredGenreHubsRender({ force = false, seq = __deferredHomeSectionSeq } = {}) {
   if (force) {
     __genreDeferredPromise = null;
+    prcWarn("GENRE:force-reset", { force, seq });
   }
   if (__genreDeferredPromise) {
+    prcLog("GENRE:reuse-existing-promise", { force, seq });
     return __genreDeferredPromise;
   }
 
   const run = (async () => {
     try {
-      await waitForManagedSectionGate("genreHubs", { timeoutMs: 25000 });
-      if (seq !== __deferredHomeSectionSeq) return false;
-      if (!hasActivePersonalRecsHomeSections()) return false;
+      prcLog("GENRE:start", { force, seq });
+      if (!force) {
+        prcLog("GENRE:wait:managed-gate", { seq });
+        await waitForManagedSectionGate("genreHubs", { timeoutMs: 25000 });
+        if (seq !== __deferredHomeSectionSeq) return false;
+      } else {
+        prcLog("GENRE:skip-gate:force", { seq });
+      }
+      if (!hasActivePersonalRecsHomeSections()) {
+        prcWarn("GENRE:abort:no-home-sections", { force, seq });
+        return false;
+      }
       await renderGenreHubs(currentIndexPage());
+      prcLog("GENRE:success", { force, seq });
       return true;
     } catch (e) {
       console.error("Genre hubs deferred render hatası:", e);
+      prcWarn("GENRE:error", {
+        force,
+        seq,
+        error: e?.message || String(e),
+      });
       try { __signalGenreHubsDone(); } catch {}
       return false;
     }
@@ -1856,9 +1915,20 @@ export async function renderPersonalRecommendations(options = {}) {
     __deferredHomeSectionSeq += 1;
     __bywDeferredPromise = null;
     __genreDeferredPromise = null;
+    prcWarn("render:force-reset-deferred", {
+      force,
+      seq: __deferredHomeSectionSeq,
+    });
   }
   const deferredSeq = __deferredHomeSectionSeq;
   const runtimeConfig = getHomeRecommendationRuntimeConfig();
+  prcLog("render:start", {
+    force,
+    deferredSeq,
+    enablePersonalRecommendations: runtimeConfig.enablePersonalRecommendations,
+    enableGenreHubs: runtimeConfig.enableGenreHubs,
+    enableBecauseYouWatched: runtimeConfig.enableBecauseYouWatched,
+  });
   let activeIndexPage =
     document.querySelector("#indexPage:not(.hide)") ||
     document.querySelector("#homePage:not(.hide)");
@@ -1867,32 +1937,58 @@ export async function renderPersonalRecommendations(options = {}) {
     !runtimeConfig.enableGenreHubs &&
     !runtimeConfig.enableBecauseYouWatched
   ) {
+    prcLog("render:skip:disabled", { force, deferredSeq });
+    clearPersonalRecsRetry();
     resetPersonalRecsAndGenreState();
     return;
   }
 
   if (!activeIndexPage) {
-    if (!isPersonalRecsHomeRoute()) return;
+    if (!isPersonalRecsHomeRoute()) {
+      prcWarn("render:skip:not-home-route", { force, deferredSeq });
+      return;
+    }
     const host = await waitForVisibleHomeSections({
-      timeout: force ? 5000 : 12000
+      timeout: 12000
     });
     activeIndexPage = host?.page || null;
-    if (!activeIndexPage) return;
+    if (!activeIndexPage) {
+      prcWarn("render:retry:no-active-page-after-wait", {
+        force,
+        deferredSeq,
+        hostPageId: host?.page?.id || null,
+        hasContainer: !!host?.container,
+      });
+      schedulePersonalRecsRetry(1000, options, "no-active-page-after-wait");
+      return false;
+    }
   }
 
   if (!activeIndexPage.querySelector(".homeSectionsContainer")) {
     const host = await waitForVisibleHomeSections({
-      timeout: force ? 5000 : 12000
+      timeout: 12000
     });
     activeIndexPage = host?.page || activeIndexPage;
   }
 
   if (!activeIndexPage?.querySelector(".homeSectionsContainer")) {
     __personalRecsInitDone = false;
-    return;
+    prcWarn("render:retry:no-homeSectionsContainer", {
+      force,
+      deferredSeq,
+      activePageId: activeIndexPage?.id || null,
+    });
+    schedulePersonalRecsRetry(900, options, "no-homeSectionsContainer");
+    return false;
   }
 
   if (!force && hasMountedRecommendationUi(runtimeConfig, activeIndexPage)) {
+    prcLog("render:skip:already-rendered", {
+      force,
+      deferredSeq,
+      activePageId: activeIndexPage?.id || null,
+    });
+    clearPersonalRecsRetry();
     __personalRecsInitDone = true;
     if (runtimeConfig.enablePersonalRecommendations) {
       setPersonalRecsDone(true);
@@ -1918,13 +2014,24 @@ export async function renderPersonalRecommendations(options = {}) {
       !runtimeConfig.enableBecauseYouWatched ||
       (getBywDone() && hasRenderableBecauseYouWatchedContent(activeIndexPage));
     if (personalOk && genreOk && bywOk) {
+      prcLog("render:skip:init-already-complete", {
+        force,
+        deferredSeq,
+      });
       scheduleHomeScrollerRefresh(0);
       return;
     }
   }
   __personalRecsInitDone = true;
 
-  if (__personalRecsBusy) return;
+  if (__personalRecsBusy) {
+    prcWarn("render:retry:busy", {
+      force,
+      deferredSeq,
+    });
+    schedulePersonalRecsRetry(1200, options, "busy");
+    return false;
+  }
   __personalRecsBusy = true;
 
   try {
@@ -1936,14 +2043,25 @@ export async function renderPersonalRecommendations(options = {}) {
     const indexPage = activeIndexPage;
     if (!indexPage) {
       __personalRecsInitDone = false;
-      return;
+      prcWarn("render:retry:no-index-page-inside-run", {
+        force,
+        deferredSeq,
+      });
+      schedulePersonalRecsRetry(1000, options, "no-index-page-inside-run");
+      return false;
     }
     const hasHomeSections = !!(
       indexPage.querySelector(".homeSectionsContainer")
     );
     if (!hasHomeSections) {
       __personalRecsInitDone = false;
-      return;
+      prcWarn("render:retry:no-homeSections-inside-run", {
+        force,
+        deferredSeq,
+        indexPageId: indexPage?.id || null,
+      });
+      schedulePersonalRecsRetry(900, options, "no-homeSections-inside-run");
+      return false;
     }
 
     const tasks = [];
@@ -1989,6 +2107,14 @@ export async function renderPersonalRecommendations(options = {}) {
       scheduleDeferredGenreHubsRender({ force, seq: deferredSeq });
     }
 
+    prcLog("render:deferred-sections-scheduled", {
+      force,
+      deferredSeq,
+      personalTaskCount: tasks.length,
+      enableBecauseYouWatched: runtimeConfig.enableBecauseYouWatched,
+      enableGenreHubs: runtimeConfig.enableGenreHubs,
+    });
+
     if (tasks.length) {
       await Promise.allSettled(tasks);
     }
@@ -1998,8 +2124,33 @@ export async function renderPersonalRecommendations(options = {}) {
       enforceOrder(hsc);
     } catch {}
 
+    const personalMounted =
+      !runtimeConfig.enablePersonalRecommendations ||
+      hasRenderablePersonalRecsContent(indexPage);
+    if (personalMounted) {
+      prcLog("render:success:personal-block-ready", {
+        force,
+        deferredSeq,
+        indexPageId: indexPage?.id || null,
+      });
+      clearPersonalRecsRetry();
+    } else {
+      prcWarn("render:retry:personal-block-empty", {
+        force,
+        deferredSeq,
+        indexPageId: indexPage?.id || null,
+      });
+      schedulePersonalRecsRetry(1400, options, "personal-block-empty");
+    }
+
   } catch (error) {
     console.error("Kişisel öneriler / tür hub render hatası:", error);
+    prcWarn("render:error", {
+      force,
+      deferredSeq,
+      error: error?.message || String(error),
+    });
+    schedulePersonalRecsRetry(1400, options, "render-error");
   } finally {
     unlockDownScroll();
     __personalRecsBusy = false;
@@ -4135,6 +4286,10 @@ function escapeHtml(s) {
 }
 
 export function resetPersonalRecsAndGenreState() {
+  prcLog("cleanup:start", {
+    genreSections: GENRE_STATE.sections?.length || 0,
+  });
+  clearPersonalRecsRetry();
   try { detachGenreScrollIdleLoader(); } catch {}
   try { abortAllGenreFetches(); } catch {}
 

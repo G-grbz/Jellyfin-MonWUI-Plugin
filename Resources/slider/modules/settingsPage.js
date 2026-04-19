@@ -1,4 +1,4 @@
-import { getConfig, publishAdminSnapshotIfForced, getAdminTargetProfile, getDeviceProfileAuto } from "./config.js";
+import { getConfig, publishAdminSnapshotIfForced, getAdminTargetProfile, getDeviceProfileAuto, getSettingsHotkey, normalizeSettingsHotkey, SETTINGS_HOTKEY_DEFAULT } from "./config.js";
 import { isLocalStorageAvailable, updateConfig } from "./configPersistence.js";
 import { getLanguageLabels, getDefaultLanguage } from '../language/index.js';
 import { loadCSS } from "./playerStyles.js";
@@ -23,6 +23,7 @@ import { createProfileChooserPanel } from './settings/profileChooserPage.js';
 import { createWatchlistPanel } from './settings/watchlistPage.js';
 import { createParentalPinPanel } from './settings/parentalPinPage.js';
 import { createDbManagementPanel } from './settings/dbManagementPage.js';
+import { createDetailsModalPanel } from './settings/detailsModalPage.js';
 import { enhanceFormAccessibility } from './accessibility.js';
 
 export { isLocalStorageAvailable, updateConfig };
@@ -153,6 +154,7 @@ export function createSettingsModal() {
     const hoverTab = createTab('hover', 'fa-play-circle', labels.hoverTrailer || 'HoverTrailer Ayarları');
     const trailersTab = createTab('trailers', 'fa-video', labels.trailersHeader || 'Fragman İndirme / NFO Ayarları');
     const notificationsTab = createTab('notifications', 'fa-bell', labels.notificationsSettings || 'Bildirim Ayarları');
+    const detailsModalTab = createTab('details-modal', 'fa-circle-info', labels.detailsModalSettingsTab || 'Detaylar Modülü Ayarları');
     const avatarTab = createTab('avatar', 'fa-user', labels.avatarCreateInput || 'Avatar Ayarları');
     const parentalPinTab = config?.currentUserIsAdmin
       ? createTab('parental-pin', 'fa-key', labels.parentalPinTab || 'PIN Kontrolü Ayarları')
@@ -164,7 +166,7 @@ export function createSettingsModal() {
 
     const tabs = [
         mainTab, sliderTab, queryTab, musicTab, studioTab, profileChooserTab,
-        pauseTab, watchlistSettingsTab, hoverTab, trailersTab, notificationsTab,
+        pauseTab, watchlistSettingsTab, hoverTab, trailersTab, notificationsTab, detailsModalTab,
         avatarTab, parentalPinTab, positionTab, dbManagementTab, exporterTab, aboutTab
     ].filter(Boolean);
     tabContainer.append(...tabs);
@@ -192,6 +194,7 @@ export function createSettingsModal() {
     const exporterPanel = createExporterPanel(config, labels);
     const aboutPanel = createAboutPanel(labels);
     const notificationsPanel = createNotificationsPanel(config, labels);
+    const detailsModalPanel = createDetailsModalPanel(config, labels);
     const watchlistSettingsPanel = createWatchlistPanel(config, labels);
     const dbManagementPanel = createDbManagementPanel(config, labels);
     const parentalPinPanel = config?.currentUserIsAdmin
@@ -205,7 +208,8 @@ export function createSettingsModal() {
         studioPanel,
         hoverPanel,
         avatarPanel,
-        notificationsPanel
+        notificationsPanel,
+        providerPanel
     });
 
     [
@@ -225,7 +229,7 @@ export function createSettingsModal() {
 
     [
         mainPanel, sliderPanel, queryPanel, musicPanel, studioPanel, profileChooserPanel,
-        pausePanel, watchlistSettingsPanel, hoverPanel, trailersPanel, notificationsPanel,
+        pausePanel, watchlistSettingsPanel, hoverPanel, trailersPanel, notificationsPanel, detailsModalPanel,
         avatarPanel, parentalPinPanel, positionPanel, dbManagementPanel, exporterPanel, aboutPanel
     ].filter(Boolean).forEach(panel => {
         panel.style.display = 'none';
@@ -234,32 +238,20 @@ export function createSettingsModal() {
 
     const panels = [
         mainPanel, sliderPanel, queryPanel, musicPanel, studioPanel, profileChooserPanel,
-        pausePanel, watchlistSettingsPanel, hoverPanel, trailersPanel, notificationsPanel,
+        pausePanel, watchlistSettingsPanel, hoverPanel, trailersPanel, notificationsPanel, detailsModalPanel,
         avatarPanel, parentalPinPanel, positionPanel, dbManagementPanel, exporterPanel, aboutPanel
     ].filter(Boolean);
     tabContent.append(...panels);
 
     const interactiveTabs = [
         mainTab, sliderTab, queryTab, musicTab, studioTab, profileChooserTab,
-        pauseTab, watchlistSettingsTab, hoverTab, trailersTab, notificationsTab,
+        pauseTab, watchlistSettingsTab, hoverTab, trailersTab, notificationsTab, detailsModalTab,
         avatarTab, parentalPinTab, positionTab, dbManagementTab, exporterTab, aboutTab
     ].filter(Boolean);
     interactiveTabs.forEach(tab => {
         tab.addEventListener('click', () => {
-            interactiveTabs.forEach(t => {
-                t.classList.remove('active');
-            });
-            [
-                mainPanel, sliderPanel, queryPanel, musicPanel, studioPanel, profileChooserPanel,
-                pausePanel, watchlistSettingsPanel, hoverPanel, trailersPanel, notificationsPanel,
-                avatarPanel, parentalPinPanel, positionPanel, dbManagementPanel, exporterPanel, aboutPanel
-            ].filter(Boolean).forEach(panel => {
-                panel.style.display = 'none';
-            });
-
-            tab.classList.add('active');
             const panelId = tab.getAttribute('data-tab');
-            document.getElementById(`${panelId}-panel`).style.display = 'block';
+            activateSettingsPanel(modal, panelId);
 
             setTimeout(() => {
                 tab.scrollIntoView({
@@ -557,10 +549,6 @@ function prepareModalForLocalShell(modal) {
   modal.classList.remove(SETTINGS_EMBEDDED_CLASS);
   modal.removeAttribute('data-jms-settings-page');
 
-  if (title) {
-    title.style.display = 'block';
-  }
-
   let closeBtn = modalContent?.querySelector('.settings-close');
   if (!closeBtn && modalContent) {
     closeBtn = document.createElement('button');
@@ -648,7 +636,8 @@ function activateSettingsPanel(modal, tab = 'monwui') {
     if (!modal) return null;
 
     const tabs = modal.querySelectorAll('.settings-tab');
-    const panels = modal.querySelectorAll('.settings-tab-content > .settings-panel');
+    const tabContent = modal.querySelector('.settings-tab-content');
+    const panels = tabContent ? Array.from(tabContent.children) : [];
     tabs.forEach(tabElement => tabElement.classList.remove('active'));
     panels.forEach(panel => {
         panel.style.display = 'none';
@@ -660,6 +649,10 @@ function activateSettingsPanel(modal, tab = 'monwui') {
     if (targetTab && targetPanel) {
         targetTab.classList.add('active');
         targetPanel.style.display = 'block';
+        if (tabContent) {
+            tabContent.scrollTop = 0;
+            tabContent.scrollLeft = 0;
+        }
         return targetPanel;
     }
 
@@ -670,6 +663,10 @@ function activateSettingsPanel(modal, tab = 'monwui') {
 
     if (fallbackTab) fallbackTab.classList.add('active');
     if (fallbackPanel) fallbackPanel.style.display = 'block';
+    if (tabContent) {
+        tabContent.scrollTop = 0;
+        tabContent.scrollLeft = 0;
+    }
     return fallbackPanel;
 }
 
@@ -1044,6 +1041,82 @@ function extractCheckboxPair(root, inputName) {
     return wrap;
 }
 
+function createSettingsHotkeyField(labels, currentValue) {
+    const container = document.createElement('div');
+    container.className = 'hotkey-input-container';
+
+    container.style.display = 'flex';
+    container.style.flexWrap = 'wrap';
+    container.style.alignItems = 'center';
+    container.style.gap = '5px';
+
+    const label = document.createElement('label');
+    label.htmlFor = 'settingsHotkey';
+    label.textContent = labels.settingsHotkeyLabel || 'Ayarlar kısayol tuşu';
+
+    const controls = document.createElement('div');
+    controls.style.display = 'flex';
+    controls.style.flexWrap = 'wrap';
+    controls.style.gap = '10px';
+    controls.style.alignItems = 'center';
+    controls.style.width = '100%';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.id = 'settingsHotkey';
+    input.name = 'settingsHotkey';
+    input.readOnly = true;
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    input.value = normalizeSettingsHotkey(currentValue || getSettingsHotkey(), SETTINGS_HOTKEY_DEFAULT);
+    input.style.flex = '1 1 180px';
+
+    input.addEventListener('click', () => {
+        input.focus();
+        input.select();
+    });
+
+    input.addEventListener('focus', () => {
+        input.select();
+    });
+
+    input.addEventListener('keydown', (event) => {
+        if (event.key === 'Tab') return;
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+
+        const normalizedKey = normalizeSettingsHotkey(event.key, '');
+        if (!normalizedKey) return;
+
+        input.value = normalizedKey;
+        localStorage.setItem('settingsHotkey', normalizedKey);
+    });
+
+    const resetButton = document.createElement('button');
+    resetButton.type = 'button';
+    resetButton.id = 'settingsHotkeyReset';
+    resetButton.className = 'reset-button';
+    resetButton.textContent = labels.settingsHotkeyReset || "F2'ye sıfırla";
+    resetButton.addEventListener('click', () => {
+        input.value = SETTINGS_HOTKEY_DEFAULT;
+        localStorage.setItem('settingsHotkey', SETTINGS_HOTKEY_DEFAULT);
+    });
+
+    const help = document.createElement('div');
+    help.className = 'description-text';
+    help.textContent =
+        labels.settingsHotkeyHelp ||
+        'Alana odaklanıp kullanmak istediğiniz tuşa basın. Varsayılan: F2.';
+    help.style.margin = '2px 0 0';
+
+    controls.append(input, resetButton);
+    container.append(label, controls, help);
+    return container;
+}
+
 function createMainSettingsPanel(labels, panels) {
     const panel = document.createElement('div');
     panel.id = 'monwui-panel';
@@ -1052,6 +1125,7 @@ function createMainSettingsPanel(labels, panels) {
     const config = getConfig();
     const basicsSection = createSection(labels.mainCoreSettings || 'Temel Ayarlar');
     const enablesSection = createSection(labels.mainEnableSettings || 'Ana Etkinleştirmeler');
+    const hotkeySection = createSection(labels.settingsHotkeySection || 'Ayarlar Kısayolu');
 
     [
         extractContainerBySelect(panels.sliderPanel, 'defaultLanguage', '.setting-item'),
@@ -1089,6 +1163,43 @@ function createMainSettingsPanel(labels, panels) {
     ));
 
     enablesSection.appendChild(createCheckbox(
+        'enableDetailsModalModule',
+        labels.enableDetailsModalModule || 'Detaylar modülünü etkinleştir',
+        config.enableDetailsModalModule !== false
+    ));
+
+    const castModuleSetting = extractContainerByInput(
+        panels.providerPanel,
+        'enableCastModule',
+        '.setting-item'
+    );
+    if (castModuleSetting) {
+        enablesSection.appendChild(castModuleSetting);
+    }
+
+    const sharedCastViewerSetting = extractContainerByInput(
+        panels.providerPanel,
+        'allowSharedCastViewerForUsers',
+        '.setting-item'
+    );
+    if (sharedCastViewerSetting) {
+        const castModuleSubOptions = document.createElement('div');
+        castModuleSubOptions.className = 'sub-options cast-module-main-sub-options';
+        castModuleSubOptions.appendChild(sharedCastViewerSetting);
+        enablesSection.appendChild(castModuleSubOptions);
+        bindCheckboxKontrol('#enableCastModule', '.cast-module-main-sub-options');
+    }
+
+    if (config?.currentUserIsAdmin !== true && (castModuleSetting || sharedCastViewerSetting)) {
+        const castAdminHint = document.createElement('div');
+        castAdminHint.className = 'description-text';
+        castAdminHint.textContent =
+            labels.castModuleAdminOnlySettings ||
+            'Cast modülü ve kullanıcı görünürlüğü ayarları sadece yöneticiler tarafından değiştirilebilir.';
+        enablesSection.appendChild(castAdminHint);
+    }
+
+    enablesSection.appendChild(createCheckbox(
         'enableCustomSplashScreen',
         labels.enableCustomSplashScreen || 'Özel splash ekranını etkinleştir',
         config.enableCustomSplashScreen !== false
@@ -1109,7 +1220,9 @@ function createMainSettingsPanel(labels, panels) {
         enablesSection.appendChild(node);
     });
 
-    panel.append(basicsSection, enablesSection);
+    hotkeySection.appendChild(createSettingsHotkeyField(labels, config.settingsHotkey));
+
+    panel.append(basicsSection, enablesSection, hotkeySection);
     return panel;
 }
 
@@ -1623,6 +1736,10 @@ async function applyGlobalSettingsLockUI({
     }
 
     if (themeToggleBtn) avatarAllowed.add(themeToggleBtn);
+    const settingsHotkeyInput = modal.querySelector('#settingsHotkey');
+    const settingsHotkeyReset = modal.querySelector('#settingsHotkeyReset');
+    if (settingsHotkeyInput) avatarAllowed.add(settingsHotkeyInput);
+    if (settingsHotkeyReset) avatarAllowed.add(settingsHotkeyReset);
 
     modal.querySelectorAll('input, select, textarea, button').forEach(el => {
       if (el.classList.contains('settings-close')) return;

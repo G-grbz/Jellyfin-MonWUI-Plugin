@@ -1,5 +1,3 @@
-import { waitForAnyVisible } from "./domVisibility.js";
-
 const MANAGED_HOME_SECTION_IDS = new Set([
   "studio-hubs",
   "personal-recommendations",
@@ -145,23 +143,42 @@ export function bindManagedSectionsBelowNative(container) {
 }
 
 export async function waitForVisibleHomeSections({ timeout = 12000 } = {}) {
-  const visible = await waitForAnyVisible(
-    [
-      "#indexPage:not(.hide) .homeSectionsContainer",
-      "#homePage:not(.hide) .homeSectionsContainer",
-      "#indexPage:not(.hide)",
-      "#homePage:not(.hide)"
-    ],
-    { timeout }
-  );
+  return new Promise((resolve) => {
+    const timeoutMs = Math.max(0, timeout | 0);
 
-  if (!visible) return null;
+    const check = () => {
+      const page = getActiveHomePageEl();
+      if (!page?.isConnected) return false;
 
-  const page = getActiveHomePageEl();
-  if (!page) return null;
+      const container = page.querySelector(".homeSectionsContainer");
+      if (!container?.isConnected) return false;
 
-  const container = page.querySelector(".homeSectionsContainer") || page;
-  if (!container?.isConnected) return null;
+      cleanup();
+      resolve({ page, container });
+      return true;
+    };
 
-  return { page, container };
+    const observer = new MutationObserver(() => {
+      check();
+    });
+
+    const timeoutId = window.setTimeout(() => {
+      cleanup();
+      resolve(null);
+    }, timeoutMs);
+
+    function cleanup() {
+      window.clearTimeout(timeoutId);
+      try { observer.disconnect(); } catch {}
+    }
+
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["class"]
+    });
+
+    check();
+  });
 }

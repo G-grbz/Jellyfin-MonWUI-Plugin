@@ -27,7 +27,7 @@ import {
   resolveRadioStationArtUrl,
   resolveRadioStream
 } from "../core/radio.js";
-import { getVideoStreamUrl } from "/Plugins/JMSFusion/runtime/api.js";
+import { getVideoStreamUrl, getAuthHeader, getEmbyHeaders, getSessionInfo } from "/Plugins/JMSFusion/runtime/api.js";
 
 const config = getConfig();
 const SEEK_RETRY_DELAY = 0;
@@ -958,13 +958,23 @@ async function reportPlaybackStart(track) {
   try {
     const authToken = getAuthToken();
     if (!authToken) return;
+    const session = getSessionInfo?.() || {};
+    const authHeader = getAuthHeader?.() || `MediaBrowser Token="${authToken}"`;
+    const headers = getEmbyHeaders?.({
+      "Content-Type": "application/json",
+      "Authorization": authHeader
+    }) || {
+      "Authorization": authHeader,
+      "Content-Type": "application/json"
+    };
+    if (session?.userId) {
+      headers["X-Emby-UserId"] = session.userId;
+      headers["X-MediaBrowser-UserId"] = session.userId;
+    }
 
     const response = await fetch(apiUrl(`/Sessions/Playing`), {
       method: "POST",
-      headers: {
-        "Authorization": `MediaBrowser Token="${authToken}"`,
-        "Content-Type": "application/json"
-      },
+      headers,
       body: JSON.stringify({
         ItemId: track.Id,
         PlayMethod: "DirectStream",
@@ -989,13 +999,23 @@ async function reportPlaybackStopped(track, positionTicks) {
   try {
     const authToken = getAuthToken();
     if (!authToken) return;
+    const session = getSessionInfo?.() || {};
+    const authHeader = getAuthHeader?.() || `MediaBrowser Token="${authToken}"`;
+    const headers = getEmbyHeaders?.({
+      "Content-Type": "application/json",
+      "Authorization": authHeader
+    }) || {
+      "Authorization": authHeader,
+      "Content-Type": "application/json"
+    };
+    if (session?.userId) {
+      headers["X-Emby-UserId"] = session.userId;
+      headers["X-MediaBrowser-UserId"] = session.userId;
+    }
 
     const response = await fetch(apiUrl(`/Sessions/Playing/Stopped`), {
       method: "POST",
-      headers: {
-        "Authorization": `MediaBrowser Token="${authToken}"`,
-        "Content-Type": "application/json"
-      },
+      headers,
       body: JSON.stringify({
         ItemId: track.Id,
         PlayMethod: "DirectStream",

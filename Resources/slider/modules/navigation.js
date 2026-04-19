@@ -993,7 +993,6 @@ export function createDotNavigation() {
   const dotType = config.dotBackgroundImageType;
   const slidesContainer = getPeakViewportContainer();
   if (!slidesContainer) {
-    console.warn("Slayt konteynırı bulunamadı, nokta navigasyonu oluşturulamıyor");
     return;
   }
 

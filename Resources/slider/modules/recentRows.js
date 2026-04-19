@@ -112,6 +112,10 @@ function getRecentRowsRuntimeConfig(source = getLiveConfig()) {
   };
 }
 
+function recentRowsLog() {}
+
+function recentRowsWarn() {}
+
 const STATE = {
     started: false,
     wrapEl: null,
@@ -131,6 +135,7 @@ const __albumPreviewTrackCache = new Map();
 
 let __wrapInserted = false;
 let __recentMountPromise = null;
+let __recentRowsRetryTo = null;
 
 const TTL_RECENT_MS   = Number.isFinite(config.recentRowsCacheTTLms) ? Math.max(5_000, config.recentRowsCacheTTLms|0) : 90_000;
 const TTL_CONTINUE_MS = Number.isFinite(config.continueRowsCacheTTLms) ? Math.max(5_000, config.continueRowsCacheTTLms|0) : 45_000;
@@ -2637,13 +2642,38 @@ function hasRenderableRecentRowsContent(wrap) {
   );
 }
 
+function clearRecentRowsRetry() {
+  if (__recentRowsRetryTo) {
+    clearTimeout(__recentRowsRetryTo);
+    __recentRowsRetryTo = null;
+  }
+}
+
+function scheduleRecentRowsRetry(ms = 1000, options = {}, reason = "retry") {
+  clearRecentRowsRetry();
+  recentRowsWarn("retry:scheduled", {
+    delayMs: Math.max(120, ms | 0),
+    reason,
+    force: options?.force === true,
+  });
+  __recentRowsRetryTo = setTimeout(() => {
+    __recentRowsRetryTo = null;
+    void mountRecentRowsLazy(options);
+  }, Math.max(120, ms | 0));
+}
+
 export async function mountRecentRowsLazy(options = {}) {
   const force = options?.force === true;
   if (__recentMountPromise) {
-    if (!force) return __recentMountPromise;
+    if (!force) {
+      recentRowsLog("mount:skip:existing-promise", { force });
+      return __recentMountPromise;
+    }
+    recentRowsWarn("mount:force:await-existing-promise", { force });
     try { await __recentMountPromise; } catch {}
   }
   if (!getActiveHomePage() && !isRecentRowsHomeRoute()) {
+    recentRowsWarn("mount:skip:not-home", { force });
     return false;
   }
   const cfg = getConfig();
@@ -2662,21 +2692,44 @@ export async function mountRecentRowsLazy(options = {}) {
     runtimeCfg.enableOtherLibRows;
 
   if (!anyEnabled) {
+    recentRowsLog("mount:skip:disabled", { force });
+    clearRecentRowsRetry();
     cleanupRecentRows();
     return;
   }
+  recentRowsLog("mount:start", {
+    force,
+    anyRecent,
+    anyEnabled,
+  });
 
   const run = (async () => {
     if (force) {
+      recentRowsWarn("mount:force:cleanup-before-render", { force });
       cleanupRecentRows();
     }
 
     const host = await waitForVisibleHomeSections({
-      timeout: force ? 5000 : 12000
+      timeout: 12000
     });
-    if (!host?.container || !getActiveHomePage()) return false;
+    if (!host?.container || !getActiveHomePage()) {
+      recentRowsWarn("mount:retry:no-visible-home-sections", {
+        force,
+        hostPageId: host?.page?.id || null,
+        hasContainer: !!host?.container,
+      });
+      scheduleRecentRowsRetry(1000, options, "no-visible-home-sections");
+      return false;
+    }
     const homeParent = findRealHomeSectionsContainer();
-    if (!homeParent) return false;
+    if (!homeParent) {
+      recentRowsWarn("mount:retry:no-homeSectionsContainer", {
+        force,
+        hostPageId: host?.page?.id || null,
+      });
+      scheduleRecentRowsRetry(900, options, "no-homeSectionsContainer");
+      return false;
+    }
     bindManagedSectionsBelowNative(homeParent);
 
     let wrap = document.getElementById("recent-rows");
@@ -2693,17 +2746,51 @@ export async function mountRecentRowsLazy(options = {}) {
       __wrapInserted = false;
     }
 
-    if (!wrap.isConnected) return false;
+    if (!wrap.isConnected) {
+      recentRowsWarn("mount:retry:wrap-not-connected", {
+        force,
+        wrapChildren: wrap.childElementCount,
+      });
+      scheduleRecentRowsRetry(700, options, "wrap-not-connected");
+      return false;
+    }
     if (!force && hasRenderableRecentRowsContent(wrap)) {
+      recentRowsLog("mount:skip:already-rendered", {
+        force,
+        wrapChildren: wrap.childElementCount,
+      });
+      clearRecentRowsRetry();
       setRecentRowsDone(true);
       return true;
     }
 
     try {
+      recentRowsLog("render:start", {
+        force,
+        wrapChildren: wrap.childElementCount,
+      });
       await initAndRender(wrap);
+      if (!hasRenderableRecentRowsContent(wrap)) {
+        recentRowsWarn("render:done-but-empty", {
+          force,
+          wrapChildren: wrap.childElementCount,
+        });
+        scheduleRecentRowsRetry(1400, options, "render-done-but-empty");
+        return false;
+      }
+      recentRowsLog("render:success", {
+        force,
+        wrapChildren: wrap.childElementCount,
+      });
+      clearRecentRowsRetry();
       return true;
     } catch (e) {
       console.error(e);
+      recentRowsWarn("render:error", {
+        force,
+        error: e?.message || String(e),
+      });
+      scheduleRecentRowsRetry(1400, options, "render-error");
       return false;
     }
   })();
@@ -3181,6 +3268,11 @@ async function initAndRender(wrap) {
 
 export function cleanupRecentRows() {
   try {
+    recentRowsLog("cleanup:start", {
+      started: !!STATE.started,
+      wrapConnected: !!STATE.wrapEl?.isConnected,
+    });
+    clearRecentRowsRetry();
     __recentMountPromise = null;
     setRecentRowsDone(false);
     if (STATE.wrapEl) {

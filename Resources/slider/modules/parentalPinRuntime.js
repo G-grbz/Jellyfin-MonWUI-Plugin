@@ -1013,6 +1013,7 @@ function shouldIgnoreNativePlayInterception(element) {
     ".video-preview-modal",
     ".monwui-trailer-modal-overlay",
     ".monwui-castmodal",
+    ".jms-cast-modal",
     ".monwui-main-button-container",
     ".monwui-dot-play-container",
     ".preview-play-button",

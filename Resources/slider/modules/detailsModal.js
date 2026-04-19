@@ -1,6 +1,6 @@
-import { makeApiRequest, fetchItemDetailsFull, getDetailsUrl, playNow, fetchLocalTrailers, pickBestLocalTrailer, getVideoStreamUrl, updateFavoriteStatus } from "/Plugins/JMSFusion/runtime/api.js";
+import { makeApiRequest, fetchItemDetailsFull, getDetailsUrl, playNow, fetchLocalTrailers, pickBestLocalTrailer, getVideoStreamUrl, updateFavoriteStatus, getEmbyHeaders, getSessionInfo } from "/Plugins/JMSFusion/runtime/api.js";
 import { withServer } from "./jfUrl.js";
-import { getConfig } from "./config.js";
+import { getConfig, getDetailsModalRuntimeConfig } from "./config.js";
 import { getLanguageLabels } from "../language/index.js";
 import { CollectionCacheDB } from "./collectionCacheDb.js";
 import { formatOfficialRatingLabel, getYoutubeEmbedUrl } from "./utils.js";
@@ -319,7 +319,213 @@ function ensureRoot() {
   return root;
 }
 
+function ensureLocalCommentStyles() {
+  if (document.getElementById(LOCAL_COMMENT_STYLE_ID)) return;
+
+  const style = document.createElement("style");
+  style.id = LOCAL_COMMENT_STYLE_ID;
+  style.textContent = `
+    #${MODAL_ID} .jmsdm-local-comments {
+      border-top: 1px solid var(--monwui-border-light);
+      margin-top: var(--monwui-gap-xl);
+      padding-top: var(--monwui-gap-lg);
+    }
+
+    #${MODAL_ID} .jmsdm-local-comments-head {
+      margin-bottom: var(--monwui-gap-md);
+    }
+
+    #${MODAL_ID} .jmsdm-comments-compose {
+      background: linear-gradient(180deg, hsla(0,0%,100%,.05), hsla(0,0%,100%,.03));
+      border: 1px solid var(--monwui-border-light);
+      border-radius: var(--monwui-radius-card);
+      display: flex;
+      flex-direction: column;
+      gap: var(--monwui-gap-md);
+      margin-bottom: var(--monwui-gap-lg);
+      padding: var(--monwui-gap-lg);
+    }
+
+    #${MODAL_ID} .jmsdm-comments-textarea {
+      background: rgba(7,9,15,.52);
+      border: 1px solid hsla(0,0%,100%,.08);
+      border-radius: var(--monwui-radius-input);
+      color: var(--monwui-text-primary);
+      font: inherit;
+      line-height: 1.6;
+      min-height: 110px;
+      outline: none;
+      padding: 12px 14px;
+      resize: vertical;
+      transition: border-color var(--monwui-transition-fast), box-shadow var(--monwui-transition-fast);
+    }
+
+    #${MODAL_ID} .jmsdm-comments-textarea:focus {
+      border-color: rgba(255,183,3,.38);
+      box-shadow: 0 0 0 3px rgba(255,183,3,.12);
+    }
+
+    #${MODAL_ID} .jmsdm-comments-textarea::placeholder {
+      color: var(--monwui-text-muted);
+    }
+
+    #${MODAL_ID} .jmsdm-comments-textarea:disabled {
+      cursor: not-allowed;
+      opacity: .72;
+    }
+
+    #${MODAL_ID} .jmsdm-comments-compose-meta {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--monwui-gap-sm);
+      justify-content: space-between;
+    }
+
+    #${MODAL_ID} .jmsdm-comments-hint {
+      color: var(--monwui-text-tertiary);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    #${MODAL_ID} .jmsdm-comments-charcount {
+      color: var(--monwui-text-muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #${MODAL_ID} .jmsdm-comments-compose-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--monwui-gap-sm);
+    }
+
+    #${MODAL_ID} .jmsdm-comments-loading {
+      color: var(--monwui-text-tertiary);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    #${MODAL_ID} .jmsdm-review.is-local-own {
+      background: linear-gradient(180deg, rgba(255,183,3,.08), rgba(255,183,3,.02));
+      border-left-color: rgba(255,207,110,.92);
+    }
+
+    #${MODAL_ID} .jmsdm-review-author {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    #${MODAL_ID} .jmsdm-review-meta-row {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    #${MODAL_ID} .jmsdm-local-comment-badge,
+    #${MODAL_ID} .jmsdm-local-comment-edited {
+      background: rgba(255,183,3,.14);
+      border: 1px solid rgba(255,183,3,.22);
+      border-radius: var(--monwui-radius-chip);
+      color: #ffe1a1;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .04em;
+      padding: 3px 8px;
+      text-transform: uppercase;
+    }
+
+    #${MODAL_ID} .jmsdm-local-comment-edited {
+      background: hsla(0,0%,100%,.06);
+      border-color: hsla(0,0%,100%,.08);
+      color: var(--monwui-text-tertiary);
+    }
+
+    #${MODAL_ID} .jmsdm-local-comment-toolbar {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--monwui-gap-sm);
+      justify-content: space-between;
+      margin-top: var(--monwui-gap-sm);
+    }
+
+    #${MODAL_ID} .jmsdm-local-comment-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    #${MODAL_ID} .jmsdm-comment-action {
+      background: none;
+      border: 1px solid hsla(0,0%,100%,.1);
+      border-radius: var(--monwui-radius-chip);
+      color: var(--monwui-text-secondary);
+      cursor: pointer;
+      font: inherit;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .03em;
+      padding: 6px 10px;
+      transition: all var(--monwui-transition-fast);
+    }
+
+    #${MODAL_ID} .jmsdm-comment-action:hover:not(:disabled) {
+      background: hsla(0,0%,100%,.08);
+      border-color: hsla(0,0%,100%,.18);
+      color: var(--monwui-text-primary);
+    }
+
+    #${MODAL_ID} .jmsdm-comment-action.danger:hover:not(:disabled) {
+      background: rgba(255,82,82,.12);
+      border-color: rgba(255,82,82,.22);
+      color: #ffb3b3;
+    }
+
+    #${MODAL_ID} .jmsdm-comment-action:disabled {
+      cursor: not-allowed;
+      opacity: .55;
+    }
+
+    @media (max-width: 768px) {
+      #${MODAL_ID} .jmsdm-comments-compose {
+        padding: var(--monwui-gap-md);
+      }
+
+      #${MODAL_ID} .jmsdm-local-comment-toolbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      #${MODAL_ID} .jmsdm-local-comment-actions {
+        justify-content: flex-start;
+      }
+    }
+
+    @media (max-width: 480px) {
+      #${MODAL_ID} .jmsdm-comments-compose-meta {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      #${MODAL_ID} .jmsdm-comments-compose-actions .jmsdm-btn {
+        width: 100%;
+      }
+    }
+  `;
+
+  document.head.appendChild(style);
+}
+
 const LS_TMDB_LANG = 'jms_tmdb_reviews_lang';
+const LOCAL_COMMENTS_ENDPOINT = "/Plugins/JMSFusion/comments";
+const LOCAL_COMMENT_MAX_LENGTH = 2000;
+const LOCAL_COMMENT_STYLE_ID = "jms-details-modal-comments-style";
 
 
 async function getTmdbApiKey() {
@@ -329,6 +535,416 @@ async function getTmdbApiKey() {
     return await getGlobalTmdbApiKey();
   } catch {}
   return '';
+}
+
+function normalizeIdentity(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function getCommentsUserContext() {
+  let userId = "";
+  let userName = "";
+
+  try {
+    const api = window.ApiClient || window.apiClient || null;
+    userId = safeText(
+      api?.getCurrentUserId?.() ||
+      api?._currentUserId ||
+      getSessionInfo?.()?.userId,
+      ""
+    );
+    userName = safeText(
+      api?._currentUser?.Name ||
+      api?._currentUser?.Username ||
+      localStorage.getItem("currentUserName") ||
+      sessionStorage.getItem("currentUserName"),
+      ""
+    );
+  } catch {}
+
+  return { userId, userName };
+}
+
+function buildLocalCommentHeaders(extra = {}) {
+  const { userId, userName } = getCommentsUserContext();
+  const headers = getEmbyHeaders({
+    Accept: "application/json",
+    ...extra,
+  });
+
+  if (userId) headers["X-Emby-UserId"] = userId;
+  if (userName) headers["X-JMSFusion-UserName"] = userName;
+
+  return headers;
+}
+
+async function requestLocalComments(path = "", options = {}) {
+  const response = await fetch(withServer(`${LOCAL_COMMENTS_ENDPOINT}${path}`), {
+    method: options.method || "GET",
+    cache: "no-store",
+    credentials: "same-origin",
+    headers: buildLocalCommentHeaders(options.headers || {}),
+    body: options.body,
+    signal: options.signal,
+  });
+
+  if (!response.ok) {
+    let message = `HTTP ${response.status}`;
+    try {
+      const json = await response.json().catch(() => null);
+      message = safeText(json?.error || json?.message, message);
+    } catch {
+      const text = await response.text().catch(() => "");
+      message = safeText(text, message);
+    }
+    throw new Error(message);
+  }
+
+  if (response.status === 204) return null;
+  return response.json().catch(() => ({}));
+}
+
+async function fetchLocalComments(itemId, { signal } = {}) {
+  if (!itemId) return { comments: [] };
+  return requestLocalComments(`/items/${encodeURIComponent(itemId)}`, { signal });
+}
+
+async function upsertLocalComment(itemId, content, { signal } = {}) {
+  return requestLocalComments(`/items/${encodeURIComponent(itemId)}`, {
+    method: "POST",
+    signal,
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      content: String(content || ""),
+    }),
+  });
+}
+
+async function deleteLocalComment(commentId, { signal } = {}) {
+  if (!commentId) return null;
+  return requestLocalComments(`/${encodeURIComponent(commentId)}`, {
+    method: "DELETE",
+    signal,
+  });
+}
+
+function formatLocalCommentDate(ts) {
+  const n = Number(ts || 0);
+  if (!(n > 0)) return "";
+
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(n));
+  } catch {
+    return new Date(n).toISOString().slice(0, 16).replace("T", " ");
+  }
+}
+
+function renderLocalCommentsHtml(comments = [], { currentUserId = "", deleteBusyId = "" } = {}) {
+  if (!comments.length) {
+    return `<div style="color:rgba(255,255,255,.72);font-size:13px;line-height:1.6;">${config.languageLabels.localCommentsEmpty || "Henüz yerel yorum yok. İlk yorumu sen yaz."}</div>`;
+  }
+
+  return `
+    <div class="jmsdm-reviews">
+      ${comments.map((comment) => {
+        const commentId = safeText(comment?.Id);
+        const reviewKey = `local:${commentId || Math.random().toString(36).slice(2)}`;
+        const author = escapeHtml(safeText(comment?.OwnerUserName, config.languageLabels.localCommentsUserFallback || "Kullanıcı"));
+        const own = normalizeIdentity(comment?.OwnerUserId) === normalizeIdentity(currentUserId);
+        const createdAt = Number(comment?.CreatedAtUtc || 0);
+        const updatedAt = Number(comment?.UpdatedAtUtc || 0);
+        const isEdited = updatedAt > 0 && createdAt > 0 && updatedAt - createdAt > 1000;
+        const date = escapeHtml(formatLocalCommentDate(updatedAt || createdAt));
+        const fullHtml = escapeHtml(safeText(comment?.Content, "")).replace(/\n/g, "<br>");
+        const plain = safeText(comment?.Content, "");
+        const isLong = plain.length > 220;
+        const deleting = commentId && commentId === deleteBusyId;
+
+        _reviewHtmlStore.set(reviewKey, { fullHtml, shortHtml: fullHtml, plain });
+
+        return `
+          <div class="jmsdm-review${own ? " is-local-own" : ""}" data-reviewid="${escapeHtml(reviewKey)}" data-comment-id="${escapeHtml(commentId)}">
+            <div class="jmsdm-review-head">
+              <div class="jmsdm-review-author">
+                ${author}
+                ${own ? `<span class="jmsdm-local-comment-badge">${config.languageLabels.localCommentsOwnBadge || "Sen"}</span>` : ""}
+              </div>
+              <div class="jmsdm-review-meta-row">
+                ${isEdited ? `<span class="jmsdm-local-comment-edited">${config.languageLabels.localCommentsEdited || "Düzenlendi"}</span>` : ""}
+                <div class="jmsdm-review-date">${date}</div>
+              </div>
+            </div>
+            <div class="jmsdm-review-body is-collapsed" data-expanded="0">${fullHtml}</div>
+            ${(isLong || own) ? `
+              <div class="jmsdm-local-comment-toolbar">
+                ${isLong ? `<button class="jmsdm-review-more">${config.languageLabels.more || "Devamı"}</button>` : `<span></span>`}
+                ${own ? `
+                  <div class="jmsdm-local-comment-actions">
+                    <button class="jmsdm-comment-action jmsdm-local-comment-edit" data-comment-id="${escapeHtml(commentId)}">${config.languageLabels.localCommentsEdit || "Düzenle"}</button>
+                    <button class="jmsdm-comment-action danger jmsdm-local-comment-delete" data-comment-id="${escapeHtml(commentId)}" ${deleting ? "disabled" : ""}>${deleting ? (config.languageLabels.localCommentsDeleting || "Siliniyor...") : (config.languageLabels.localCommentsDelete || "Sil")}</button>
+                  </div>
+                ` : ``}
+              </div>
+            ` : ``}
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+async function loadLocalCommentsInto(root, displayItem, { signal } = {}) {
+  const host = root?.querySelector?.(".jmsdm-local-comments");
+  if (!host) return;
+
+  const itemId = safeText(displayItem?.Id);
+  if (!itemId) {
+    host.innerHTML = `<div style="color:rgba(255,255,255,.72);font-size:13px;line-height:1.6;">${config.languageLabels.localCommentsUnavailable || "Bu içerik için yorum alanı açılamadı."}</div>`;
+    return;
+  }
+
+  const user = getCommentsUserContext();
+  if (!user.userId) {
+    host.innerHTML = `<div style="color:rgba(255,255,255,.72);font-size:13px;line-height:1.6;">${config.languageLabels.localCommentsAuthMissing || "Yorum yazmak için aktif kullanıcı bilgisi bulunamadı."}</div>`;
+    return;
+  }
+
+  const state = {
+    comments: [],
+    currentUserId: user.userId,
+    draft: "",
+    editingCommentId: "",
+    saving: false,
+    deletingCommentId: "",
+  };
+
+  function getEditingComment() {
+    if (!state.editingCommentId) return null;
+    return state.comments.find((comment) => safeText(comment?.Id) === state.editingCommentId) || null;
+  }
+
+  function captureDraft() {
+    const textarea = host.querySelector(".jmsdm-comments-textarea");
+    if (textarea) state.draft = textarea.value;
+  }
+
+  function wireReviewExpand(scopeEl) {
+    scopeEl?.querySelectorAll?.(".jmsdm-review-more")?.forEach((btn) => {
+      if (btn.__wired) return;
+      btn.__wired = true;
+
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+
+        const card = btn.closest(".jmsdm-review");
+        const body = card?.querySelector(".jmsdm-review-body");
+        if (!card || !body) return;
+
+        const id = String(card.getAttribute("data-reviewid") || "");
+        const st = _reviewHtmlStore.get(id);
+        if (!st) return;
+
+        const expanded = body.getAttribute("data-expanded") === "1";
+        if (!expanded) {
+          body.innerHTML = st.fullHtml || "";
+          body.setAttribute("data-expanded", "1");
+          body.classList.remove("is-collapsed");
+          btn.textContent = config.languageLabels.less || "Kısalt";
+        } else {
+          body.innerHTML = st.shortHtml || "";
+          body.setAttribute("data-expanded", "0");
+          body.classList.add("is-collapsed");
+          btn.textContent = config.languageLabels.more || "Devamı";
+        }
+      });
+    });
+  }
+
+  function render() {
+    const editingComment = getEditingComment();
+    const submitLabel = state.saving
+      ? (config.languageLabels.localCommentsSaving || "Kaydediliyor...")
+      : (editingComment
+          ? (config.languageLabels.localCommentsUpdate || "Yorumu Güncelle")
+          : (config.languageLabels.localCommentsSubmit || "Yorum Yap"));
+    const deleteBusyId = state.deletingCommentId;
+    const hint = editingComment
+      ? (config.languageLabels.localCommentsEditHint || "Yorumunu düzenliyorsun. Kaydettiğinde mevcut yorumun güncellenir.")
+      : "";
+    const canSubmit = !!state.draft.trim() && !state.saving && state.draft.length <= LOCAL_COMMENT_MAX_LENGTH;
+
+    host.innerHTML = `
+      <div class="jmsdm-local-comments-head">
+        <div class="jmsdm-section-title">${escapeHtml(`${config.languageLabels.localCommentsTitle || "Topluluk Yorumları"} (${state.comments.length})`)}</div>
+      </div>
+
+      <div class="jmsdm-comments-compose">
+        <textarea
+          class="jmsdm-comments-textarea"
+          rows="4"
+          maxlength="${LOCAL_COMMENT_MAX_LENGTH}"
+          placeholder="${escapeHtml(config.languageLabels.localCommentsPlaceholder || "Bu içerik hakkında ne düşünüyorsun?")}"
+          ${state.saving ? "disabled" : ""}
+        >${escapeHtml(state.draft)}</textarea>
+
+        <div class="jmsdm-comments-compose-meta">
+          ${hint ? `<div class="jmsdm-comments-hint">${escapeHtml(hint)}</div>` : ""}
+          <div class="jmsdm-comments-charcount">${state.draft.length}/${LOCAL_COMMENT_MAX_LENGTH}</div>
+        </div>
+
+        <div class="jmsdm-comments-compose-actions">
+          <button class="jmsdm-btn primary jmsdm-local-comment-submit" ${canSubmit ? "" : "disabled"}>
+            ${escapeHtml(submitLabel)}
+          </button>
+          ${editingComment ? `
+            <button class="jmsdm-btn jmsdm-local-comment-cancel" ${state.saving ? "disabled" : ""}>
+              ${escapeHtml(config.languageLabels.localCommentsCancelEdit || "Vazgeç")}
+            </button>
+          ` : ``}
+        </div>
+      </div>
+
+      <div class="jmsdm-comments-list">
+        ${renderLocalCommentsHtml(state.comments, { currentUserId: state.currentUserId, deleteBusyId })}
+      </div>
+    `;
+
+    const textarea = host.querySelector(".jmsdm-comments-textarea");
+    const submitBtn = host.querySelector(".jmsdm-local-comment-submit");
+    const cancelBtn = host.querySelector(".jmsdm-local-comment-cancel");
+    const countEl = host.querySelector(".jmsdm-comments-charcount");
+
+    if (textarea && submitBtn) {
+      textarea.addEventListener("input", () => {
+        state.draft = textarea.value;
+        submitBtn.disabled = !state.draft.trim() || state.saving;
+        if (countEl) countEl.textContent = `${state.draft.length}/${LOCAL_COMMENT_MAX_LENGTH}`;
+      });
+    }
+
+    if (submitBtn) {
+      submitBtn.addEventListener("click", async (e) => {
+        e.preventDefault();
+        captureDraft();
+        const content = state.draft.trim();
+        if (!content || signal?.aborted) return;
+
+        try {
+          state.saving = true;
+          render();
+          await upsertLocalComment(itemId, content, { signal });
+          if (signal?.aborted || !_open) return;
+
+          const latest = await fetchLocalComments(itemId, { signal });
+          state.comments = Array.isArray(latest?.comments) ? latest.comments : state.comments;
+          state.draft = "";
+          state.editingCommentId = "";
+          state.saving = false;
+          render();
+          window.showMessage?.(config.languageLabels.localCommentsSaved || "Yorum kaydedildi.", "success");
+        } catch (err) {
+          state.saving = false;
+          render();
+          console.warn("local comments save error:", err);
+          window.showMessage?.(err?.message || config.languageLabels.localCommentsSaveFailed || "Yorum kaydedilemedi.", "error");
+        }
+      });
+    }
+
+    if (cancelBtn) {
+      cancelBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        state.editingCommentId = "";
+        state.draft = "";
+        render();
+      });
+    }
+
+    host.querySelectorAll(".jmsdm-local-comment-edit").forEach((btn) => {
+      if (btn.__wired) return;
+      btn.__wired = true;
+
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        captureDraft();
+
+        const commentId = safeText(btn.getAttribute("data-comment-id"));
+        const comment = state.comments.find((entry) => safeText(entry?.Id) === commentId);
+        if (!comment) return;
+
+        state.editingCommentId = commentId;
+        state.draft = safeText(comment?.Content, "");
+        render();
+
+        const nextTextarea = host.querySelector(".jmsdm-comments-textarea");
+        try {
+          nextTextarea?.focus?.({ preventScroll: true });
+          const end = nextTextarea?.value?.length || 0;
+          nextTextarea?.setSelectionRange?.(end, end);
+        } catch {}
+      });
+    });
+
+    host.querySelectorAll(".jmsdm-local-comment-delete").forEach((btn) => {
+      if (btn.__wired) return;
+      btn.__wired = true;
+
+      btn.addEventListener("click", async (e) => {
+        e.preventDefault();
+        if (signal?.aborted) return;
+
+        const commentId = safeText(btn.getAttribute("data-comment-id"));
+        if (!commentId) return;
+
+        const confirmed = window.confirm?.(
+          config.languageLabels.localCommentsDeleteConfirm || "Yorumunu silmek istediğine emin misin?"
+        );
+        if (confirmed === false) return;
+
+        try {
+          state.deletingCommentId = commentId;
+          render();
+          await deleteLocalComment(commentId, { signal });
+          if (signal?.aborted || !_open) return;
+
+          const latest = await fetchLocalComments(itemId, { signal });
+          state.comments = Array.isArray(latest?.comments) ? latest.comments : [];
+          if (state.editingCommentId === commentId) {
+            state.editingCommentId = "";
+            state.draft = "";
+          }
+          state.deletingCommentId = "";
+          render();
+          window.showMessage?.(config.languageLabels.localCommentsDeleted || "Yorum silindi.", "success");
+        } catch (err) {
+          state.deletingCommentId = "";
+          render();
+          console.warn("local comments delete error:", err);
+          window.showMessage?.(err?.message || config.languageLabels.localCommentsDeleteFailed || "Yorum silinemedi.", "error");
+        }
+      });
+    });
+
+    wireReviewExpand(host);
+  }
+
+  host.innerHTML = `<div class="jmsdm-comments-loading">${config.languageLabels.loading || "Yükleniyor..."}</div>`;
+
+  try {
+    const data = await fetchLocalComments(itemId, { signal });
+    if (signal?.aborted || !_open) return;
+    state.comments = Array.isArray(data?.comments) ? data.comments : [];
+    render();
+  } catch (err) {
+    if (signal?.aborted) return;
+    console.warn("local comments load error:", err);
+    host.innerHTML = `<div style="color:rgba(255,255,255,.72);font-size:13px;line-height:1.6;">${escapeHtml(err?.message || config.languageLabels.localCommentsLoadFailed || "Yorumlar yüklenemedi.")}</div>`;
+  }
 }
 
 function wireOverviewToggle(root) {
@@ -2905,6 +3521,7 @@ function startRecoLoad(root, movieItem, { signal } = {}) {
 
 export async function openDetailsModal({ itemId, serverId = "", preferBackdropIndex = "0", perPage = 6, originEl } = {}) {
   if (!itemId) return;
+  const detailsRuntime = getDetailsModalRuntimeConfig();
   const _originResolved = __resolveOriginEl(originEl || document.activeElement);
   const _nextOrigin = { el: _originResolved, rect: __getRectSafe(_originResolved) };
 
@@ -2922,6 +3539,7 @@ export async function openDetailsModal({ itemId, serverId = "", preferBackdropIn
   if (_restore) pausePreviewNow(_restore);
 
   const root = ensureRoot();
+  ensureLocalCommentStyles();
   lockScroll(true);
   renderSkeleton(root);
   wireMiniCardDelegation();
@@ -3018,11 +3636,17 @@ export async function openDetailsModal({ itemId, serverId = "", preferBackdropIn
   const isMusicAlbum = baseItem.Type === "MusicAlbum";
   const isAudio = baseItem.Type === "Audio";
   const isMusicType = isMusicAlbum || isAudio;
+  const supportsLocalComments =
+    detailsRuntime.showLocalComments &&
+    !!safeText(baseItem?.Id || displayItem?.Id, "");
   const supportsTmdbReviews =
-    baseItem.Type === "Movie" ||
-    baseItem.Type === "Series" ||
-    baseItem.Type === "Season" ||
-    baseItem.Type === "Episode";
+    detailsRuntime.showTmdbReviews &&
+    (
+      baseItem.Type === "Movie" ||
+      baseItem.Type === "Series" ||
+      baseItem.Type === "Season" ||
+      baseItem.Type === "Episode"
+    );
   const isFavInitial = !!(baseItem?.UserData?.IsFavorite || displayItem?.UserData?.IsFavorite);
 
   let isFavorite = isFavInitial;
@@ -3406,6 +4030,7 @@ wireMiniCardDelegation();
                 </div>
               </div>
 
+              ${supportsLocalComments ? `<div class="jmsdm-local-comments" style="margin-top:18px;"></div>` : ""}
               ${supportsTmdbReviews ? `<div class="jmsdm-tmdb-reviews" style="margin-top:18px;"></div>` : ""}
             </div>
 
@@ -3433,6 +4058,9 @@ wireMiniCardDelegation();
 
   wireOverviewToggle(root);
   startHeroTrailer(root, displayItem, { signal: _abort.signal }).catch(() => {});
+  if (supportsLocalComments) {
+    loadLocalCommentsInto(root, baseItem, { signal: _abort.signal });
+  }
   if (supportsTmdbReviews) {
     loadTmdbReviewsInto(root, displayItem, { signal: _abort.signal });
   }

@@ -3,10 +3,10 @@ import { getConfig, getDeviceProfileAuto, getHomeSectionsRuntimeConfig } from '.
 import { getLanguageLabels } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";
 import { openDetailsModal } from "./detailsModalLoader.js";
-import { waitForAnyVisible } from "./domVisibility.js";
 import {
   bindManagedSectionsBelowNative,
-  getLastNativeHomeSection
+  getLastNativeHomeSection,
+  waitForVisibleHomeSections
 } from "./homeSectionNative.js";
 import { resolveSliderAssetHref } from "./assetLinks.js";
 import { withServer } from "./jfUrl.js";
@@ -1239,15 +1239,14 @@ export function ensureStudioHubsMounted({ eager=false, force=false } = {}) {
     if (__studioHubsMounting) return;
     __studioHubsMounting = true;
     try {
-      const ok = await waitForAnyVisible(
-        ["#indexPage:not(.hide)", "#homePage:not(.hide)", ".homeSectionsContainer"],
-        { timeout: eager ? 4000 : 12000 }
-      );
-      if (!ok) {
+      const host = await waitForVisibleHomeSections({
+        timeout: eager ? 4000 : 12000
+      });
+      if (!host?.page) {
         scheduleRetry(1200);
         return;
       }
-      const row = ensureContainer(document.querySelector("#indexPage:not(.hide)") || document.querySelector("#homePage:not(.hide)"));
+      const row = ensureContainer(host.page);
       if (!row) { scheduleRetry(800); return; }
       if (!force && __studioHubsMountedOnce && hasMountedStudioHubsSection()) {
         return;
