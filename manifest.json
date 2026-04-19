@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/G-grbz/Jellyfin-MonWUI-Plugin/main/img/icon.png",
     "versions": [
       {
+        "version": "2.6.0.0",
+        "changelog": "v2.6.0\n\nNew Features:\n- Added renewed Cast modal system with GMMP music player integration\n- Added Cast module settings and shared watch activity tab\n- Added local comments field to Details modal\n- Added Settings modal keyboard shortcut support (default F2)\n\nImprovements:\n- Improved Watchlist performance with cache, progressive rendering and event delegation\n- Improved Cast sync, control optimization and lazy-loaded CSS\n- Improved MonWUI card reinitialization after page navigation\n\nFixes:\n- Fixed Watchlist full rerender after remove using incremental DOM updates\n- Fixed MonWUI cards failing to initialize when returning to home view\n\nNotes:\n- Cast module is now configurable from MonWUI Settings\n- Hard refresh (Ctrl + F5) may be required after update",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v2.6.0/JMSFusion-2.6.0.0-server.zip",
+        "checksum": "17639f2c50b8c81497679196b3ceeb53",
+        "timestamp": "2026-04-19T10:28:22.8348167Z"
+      },
+      {
         "version": "2.5.2.0",
         "changelog": "v2.5.2\n\nNew Features:\n- MonWUI settings moved to plugin configuration page\n- Added dedicated \"MonWUI Settings\" tab with embedded full settings UI\n- Introduced modular settings architecture with shared helpers\n- Added WebSettingsJs endpoint for direct settings module import\n\nImprovements:\n- Improved auth and profile change handling (AUTH_PROFILE_CHANGED_EVENT, watchdog, live state resolution)\n- Enhanced trailer automation (ffmpeg detection, Windows auto-download, temp directories, stricter validation)\n- Reworked home and hero rendering (safe text rendering, animations, improved reuse/cleanup)\n\nFixes:\n- Fixed stale cache issues after profile/server changes\n- Fixed incorrect admin detection and PIN policy inconsistencies\n- Reduced flicker and duplicate iframe rendering issues\n\nNotes:\n- Settings are now managed via plugin configuration page\n- Hard refresh (Ctrl + F5) may be required after update",
         "targetAbi": "10.11.0.0",
