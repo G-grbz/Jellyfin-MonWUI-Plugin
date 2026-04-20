@@ -1,4 +1,4 @@
-# Jellyfin MonWUI Plugin
+<h1 align="center">Jellyfin MonWUI Plugin</h1>
 
 <p align="center">
   <img width="180" height="180" alt="Jellyfin MonWUI Plugin" src="https://github.com/user-attachments/assets/29947627-b2ff-4ecd-8a2b-4df932aca657" />
@@ -11,9 +11,26 @@
 </p>
 
 <p align="center">
-  <img alt="Install Name" src="https://img.shields.io/badge/Install%20Name-JMSFusion-0ea5e9?style=for-the-badge" />
-  <img alt="Version" src="https://img.shields.io/github/v/release/G-grbz/Jellyfin-MonWUI-Plugin?style=for-the-badge" />
-  <img alt="License" src="https://img.shields.io/badge/License-MIT-7c3aed?style=for-the-badge" />
+  <a href="https://github.com/G-grbz/Jellyfin-MonWUI-Plugin#notes">
+    <img
+      alt="Install Name"
+      src="https://img.shields.io/badge/Install%20Name-JMSFusion-0ea5e9?style=for-the-badge"
+    />
+  </a>
+
+  <a href="https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/latest">
+    <img
+      alt="Version"
+      src="https://img.shields.io/github/v/release/G-grbz/Jellyfin-MonWUI-Plugin?style=for-the-badge"
+    />
+  </a>
+
+  <a href="https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/blob/main/LICENSE">
+    <img
+      alt="License"
+      src="https://img.shields.io/badge/License-MIT-7c3aed?style=for-the-badge"
+    />
+  </a>
 </p>
 
 
