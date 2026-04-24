@@ -206,21 +206,15 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
                 var cfg = plugin.Configuration;
                 var changed = NormalizeConfig(cfg);
 
-                var ownEntryIds = cfg.WatchlistEntries
-                    .Where(entry => Same(entry.OwnerUserId, user.UserId) && Same(entry.ItemId, cleanItemId))
-                    .Select(entry => Clean(entry.Id))
-                    .Where(id => !string.IsNullOrWhiteSpace(id))
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var hasOwnEntry = cfg.WatchlistEntries.Any(entry =>
+                    Same(entry.OwnerUserId, user.UserId) &&
+                    Same(entry.ItemId, cleanItemId));
 
-                if (ownEntryIds.Count > 0)
+                if (hasOwnEntry)
                 {
                     changed |= cfg.WatchlistEntries.RemoveAll(entry =>
                         Same(entry.OwnerUserId, user.UserId) &&
                         Same(entry.ItemId, cleanItemId)) > 0;
-
-                    changed |= cfg.WatchlistShares.RemoveAll(share =>
-                        Same(share.OwnerUserId, user.UserId) &&
-                        (Same(share.ItemId, cleanItemId) || ownEntryIds.Contains(Clean(share.WatchlistEntryId)))) > 0;
                 }
                 else
                 {
@@ -317,7 +311,6 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
                         };
                         cfg.WatchlistShares.Add(share);
                         changed = true;
-                        continue;
                     }
 
                     if (!Same(share.WatchlistEntryId, entry.Id)) { share.WatchlistEntryId = entry.Id; changed = true; }
@@ -329,6 +322,7 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
                     }
                     if (!Same(share.Note, note)) { share.Note = note; changed = true; }
                     if (share.SharedAtUtc != now) { share.SharedAtUtc = now; changed = true; }
+                    changed |= ApplyShareSnapshot(share, entry);
                 }
 
                 changed |= TrimOwnerShares(cfg, user.UserId);
@@ -408,7 +402,7 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
                 return entry;
             }
 
-            return null;
+            return HasShareSnapshot(share) ? share.EntrySnapshot : null;
         }
 
         private static bool ApplySnapshot(WatchlistEntry entry, AddItemRequest req, UserContext user)
@@ -517,11 +511,7 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
                 Same(entry.OwnerUserId, ownerUserId) &&
                 removeIds.Contains(Clean(entry.Id))) > 0;
 
-            var removedShares = cfg.WatchlistShares.RemoveAll(share =>
-                Same(share.OwnerUserId, ownerUserId) &&
-                removeIds.Contains(Clean(share.WatchlistEntryId))) > 0;
-
-            return removed || removedShares;
+            return removed;
         }
 
         private static bool TrimOwnerShares(JMSFusionConfiguration cfg, string ownerUserId)
@@ -584,6 +574,10 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
                 .Select(entry => Clean(entry.Id))
                 .Where(id => !string.IsNullOrWhiteSpace(id))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var entryById = normalizedEntries
+                .Where(entry => !string.IsNullOrWhiteSpace(entry.Id))
+                .GroupBy(entry => entry.Id!, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 
             var uniqueShares = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var normalizedShares = new List<WatchlistShareEntry>();
@@ -593,12 +587,24 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
                 if (raw is null) { changed = true; continue; }
 
                 var share = NormalizeShare(raw);
+                if (NormalizeShareSnapshot(share)) changed = true;
+
+                var hasValidEntryRef =
+                    !string.IsNullOrWhiteSpace(share.WatchlistEntryId) &&
+                    validEntryIds.Contains(share.WatchlistEntryId);
+
+                if (hasValidEntryRef &&
+                    entryById.TryGetValue(share.WatchlistEntryId!, out var linkedEntry) &&
+                    ApplyShareSnapshot(share, linkedEntry))
+                {
+                    changed = true;
+                }
+
                 if (string.IsNullOrWhiteSpace(share.Id) ||
                     string.IsNullOrWhiteSpace(share.ItemId) ||
                     string.IsNullOrWhiteSpace(share.OwnerUserId) ||
                     string.IsNullOrWhiteSpace(share.TargetUserId) ||
-                    string.IsNullOrWhiteSpace(share.WatchlistEntryId) ||
-                    !validEntryIds.Contains(share.WatchlistEntryId))
+                    (!hasValidEntryRef && !HasShareSnapshot(share)))
                 {
                     changed = true;
                     continue;
@@ -660,6 +666,83 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
             source.Note = NormalizeNote(source.Note);
             if (source.SharedAtUtc <= 0) source.SharedAtUtc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             return source;
+        }
+
+        private static bool ApplyShareSnapshot(WatchlistShareEntry share, WatchlistEntry entry)
+        {
+            var snapshot = CreateShareSnapshot(entry, share);
+            if (EntriesEqual(share.EntrySnapshot, snapshot))
+            {
+                return false;
+            }
+
+            share.EntrySnapshot = snapshot;
+            return true;
+        }
+
+        private static bool NormalizeShareSnapshot(WatchlistShareEntry share)
+        {
+            if (share.EntrySnapshot is null)
+            {
+                return false;
+            }
+
+            var snapshot = CreateShareSnapshot(share.EntrySnapshot, share);
+            if (EntriesEqual(share.EntrySnapshot, snapshot))
+            {
+                return false;
+            }
+
+            share.EntrySnapshot = snapshot;
+            return true;
+        }
+
+        private static bool HasShareSnapshot(WatchlistShareEntry share)
+        {
+            return !string.IsNullOrWhiteSpace(Clean(share.EntrySnapshot?.ItemId));
+        }
+
+        private static WatchlistEntry CreateShareSnapshot(WatchlistEntry source, WatchlistShareEntry share)
+        {
+            var snapshot = CloneEntry(source);
+            var snapshotId = Clean(share.WatchlistEntryId);
+            if (!string.IsNullOrWhiteSpace(snapshotId))
+            {
+                snapshot.Id = snapshotId;
+            }
+
+            snapshot.ItemId = Clean(share.ItemId);
+            snapshot.OwnerUserId = Clean(share.OwnerUserId);
+            if (!string.IsNullOrWhiteSpace(Clean(share.OwnerUserName)))
+            {
+                snapshot.OwnerUserName = Clean(share.OwnerUserName);
+            }
+
+            NormalizeEntry(snapshot);
+            return snapshot;
+        }
+
+        private static WatchlistEntry CloneEntry(WatchlistEntry source)
+        {
+            return new WatchlistEntry
+            {
+                Id = Clean(source.Id),
+                ItemId = Clean(source.ItemId),
+                ItemType = Clean(source.ItemType),
+                Name = Clean(source.Name),
+                Overview = Clean(source.Overview),
+                ProductionYear = source.ProductionYear,
+                RunTimeTicks = source.RunTimeTicks,
+                CommunityRating = source.CommunityRating,
+                OfficialRating = Clean(source.OfficialRating),
+                Genres = NormalizeStringList(source.Genres),
+                AlbumArtist = Clean(source.AlbumArtist),
+                Artists = NormalizeStringList(source.Artists),
+                ParentName = Clean(source.ParentName),
+                AddedAtUtc = source.AddedAtUtc,
+                OwnerUserId = Clean(source.OwnerUserId),
+                OwnerUserName = Clean(source.OwnerUserName)
+            };
         }
 
         private static bool MergeEntry(WatchlistEntry target, WatchlistEntry incoming)
@@ -745,6 +828,32 @@ namespace Jellyfin.Plugin.JMSFusion.Controllers
             }
 
             return changed;
+        }
+
+        private static bool EntriesEqual(WatchlistEntry? left, WatchlistEntry? right)
+        {
+            if (left is null || right is null)
+            {
+                return left is null && right is null;
+            }
+
+            return
+                Same(left.Id, right.Id) &&
+                Same(left.ItemId, right.ItemId) &&
+                Same(left.ItemType, right.ItemType) &&
+                Same(left.Name, right.Name) &&
+                Same(left.Overview, right.Overview) &&
+                left.ProductionYear == right.ProductionYear &&
+                left.RunTimeTicks == right.RunTimeTicks &&
+                left.CommunityRating == right.CommunityRating &&
+                Same(left.OfficialRating, right.OfficialRating) &&
+                ListsEqual(left.Genres, right.Genres) &&
+                Same(left.AlbumArtist, right.AlbumArtist) &&
+                ListsEqual(left.Artists, right.Artists) &&
+                Same(left.ParentName, right.ParentName) &&
+                left.AddedAtUtc == right.AddedAtUtc &&
+                Same(left.OwnerUserId, right.OwnerUserId) &&
+                Same(left.OwnerUserName, right.OwnerUserName);
         }
 
         private static List<string> NormalizeStringList(IEnumerable<string?>? list)

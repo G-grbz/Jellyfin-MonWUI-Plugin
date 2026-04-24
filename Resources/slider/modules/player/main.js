@@ -9,10 +9,32 @@ import { initializeControlStates, toggleMute, updateVolumeIcon } from "./ui/cont
 import { togglePlayPause } from "./player/playback.js";
 import { faIconHtml } from "../faIcons.js";
 import { loadCSS } from "../playerStyles.js";
+import { apiUrl } from "./core/auth.js";
+import { getEmbyHeaders, getSessionInfo } from "/Plugins/JMSFusion/runtime/api.js";
 
 export { isMobileDevice } from "../playerStyles.js";
 
 const config = getConfig();
+const GMMP_REMOTE_STATE_INTERVAL_MS = 4000;
+const GMMP_REMOTE_COMMAND_INTERVAL_MS = 1200;
+
+let gmmpRemoteStateTimer = 0;
+let gmmpRemoteCommandTimer = 0;
+let gmmpRemoteStateBusy = false;
+let gmmpRemoteCommandBusy = false;
+let gmmpRemoteLastCommandSequence = 0;
+let gmmpRemoteLastStateSignature = "";
+let gmmpRemoteLifecycleHooksInstalled = false;
+
+function logGmmpRemote(message, detail = undefined, level = "info") {
+  try {
+    if (detail === undefined) {
+      console[level](`[GMMP remote] ${message}`);
+    } else {
+      console[level](`[GMMP remote] ${message}`, detail);
+    }
+  } catch {}
+}
 
 function clamp(value, min, max) {
   const number = Number(value);
@@ -50,6 +72,334 @@ function getGmmpPlaybackState() {
   };
 }
 
+function getGmmpSyncContext() {
+  const session = (typeof getSessionInfo === "function" ? getSessionInfo() : null) || {};
+  const api = (typeof window !== "undefined" && window.ApiClient) ? window.ApiClient : null;
+
+  return {
+    sessionId: String(session?.sessionId || api?._sessionId || "").trim(),
+    deviceId: String(session?.deviceId || api?._deviceId || "").trim(),
+    userId: String(
+      session?.userId ||
+      (typeof api?.getCurrentUserId === "function" ? api.getCurrentUserId() : api?._currentUserId) ||
+      ""
+    ).trim()
+  };
+}
+
+function buildGmmpSyncHeaders(extra = {}) {
+  const headers = (typeof getEmbyHeaders === "function" ? getEmbyHeaders(extra) : { ...extra }) || { ...extra };
+  const { userId } = getGmmpSyncContext();
+
+  if (userId) {
+    headers["X-Emby-UserId"] = userId;
+    headers["X-MediaBrowser-UserId"] = userId;
+  }
+
+  return headers;
+}
+
+function buildGmmpStatePayload() {
+  const state = getGmmpPlaybackState();
+  const { sessionId, deviceId } = getGmmpSyncContext();
+
+  return {
+    sessionId,
+    deviceId,
+    trackId: String(state?.trackId || "").trim(),
+    itemId: String(state?.trackId || "").trim(),
+    hasCurrentTrack: !!state?.hasCurrentTrack,
+    isPaused: !!state?.isPaused,
+    isMuted: !!state?.isMuted,
+    volumeLevel: clamp(state?.volumeLevel ?? 0, 0, 100),
+    positionTicks: Math.max(0, Number(state?.positionTicks || 0)),
+    runtimeTicks: Math.max(0, Number(state?.runtimeTicks || 0)),
+    isLiveStream: !!state?.isLiveStream
+  };
+}
+
+function getGmmpStateSignature(payload) {
+  if (!payload?.hasCurrentTrack) {
+    return "";
+  }
+
+  const coarsePositionTicks = Math.floor(Number(payload.positionTicks || 0) / 10_000_000) * 10_000_000;
+  return JSON.stringify([
+    payload.sessionId,
+    payload.deviceId,
+    payload.trackId,
+    payload.isPaused,
+    payload.isMuted,
+    payload.volumeLevel,
+    coarsePositionTicks,
+    payload.runtimeTicks,
+    payload.isLiveStream
+  ]);
+}
+
+function buildInactiveGmmpStatePayload() {
+  const { sessionId, deviceId } = getGmmpSyncContext();
+
+  return {
+    sessionId,
+    deviceId,
+    trackId: "",
+    itemId: "",
+    hasCurrentTrack: false,
+    isPaused: true,
+    isMuted: true,
+    volumeLevel: 0,
+    positionTicks: 0,
+    runtimeTicks: 0,
+    isLiveStream: false
+  };
+}
+
+async function postRemoteGmmpState(payload, { keepalive = false } = {}) {
+  try {
+    const response = await fetch(apiUrl("/Plugins/JMSFusion/gmmp/state"), {
+      method: "POST",
+      headers: buildGmmpSyncHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(payload),
+      keepalive
+    });
+
+    if (!response.ok) {
+      logGmmpRemote("state post failed", {
+        status: response.status,
+        hasCurrentTrack: !!payload?.hasCurrentTrack,
+        sessionId: payload?.sessionId || "",
+        deviceId: payload?.deviceId || ""
+      }, "warn");
+      return false;
+    }
+
+    gmmpRemoteLastStateSignature = payload?.hasCurrentTrack ? getGmmpStateSignature(payload) : "";
+    return true;
+  } catch (error) {
+    logGmmpRemote("state post threw", {
+      error: error?.message || String(error || ""),
+      hasCurrentTrack: !!payload?.hasCurrentTrack
+    }, "warn");
+    return false;
+  }
+}
+
+async function syncRemoteGmmpState(force = false) {
+  if (gmmpRemoteStateBusy) return false;
+
+  const payload = buildGmmpStatePayload();
+  if (!payload.sessionId && !payload.deviceId) {
+    return false;
+  }
+
+  const signature = getGmmpStateSignature(payload);
+  if (!force && !payload.hasCurrentTrack && !gmmpRemoteLastStateSignature) {
+    return false;
+  }
+
+  if (!force && payload.hasCurrentTrack && signature && gmmpRemoteLastStateSignature === signature) {
+    return false;
+  }
+
+  gmmpRemoteStateBusy = true;
+  try {
+    return await postRemoteGmmpState(payload);
+  } finally {
+    gmmpRemoteStateBusy = false;
+  }
+}
+
+async function clearRemoteGmmpState({ reason = "manual", keepalive = false } = {}) {
+  const payload = buildInactiveGmmpStatePayload();
+  if (!payload.sessionId && !payload.deviceId) {
+    return false;
+  }
+
+  gmmpRemoteLastStateSignature = "";
+  const ok = await postRemoteGmmpState(payload, { keepalive });
+  if (ok) {
+    logGmmpRemote("state cleared", {
+      reason,
+      sessionId: payload.sessionId,
+      deviceId: payload.deviceId
+    });
+  }
+  return ok;
+}
+
+async function applyRemoteGmmpCommand(command) {
+  const name = String(command?.Name || command?.name || "").trim().toLowerCase();
+  const args = (command?.Arguments || command?.arguments || {});
+  const expectedTrackId = String(
+    args?.TrackId ??
+    args?.trackId ??
+    args?.ItemId ??
+    args?.itemId ??
+    ""
+  ).trim();
+  const currentState = getGmmpPlaybackState();
+
+  if (expectedTrackId) {
+    const currentTrackId = String(currentState?.trackId || "").trim();
+    if (!currentState?.hasCurrentTrack || !currentTrackId) {
+      logGmmpRemote("command ignored without active track", {
+        name,
+        expectedTrackId
+      }, "warn");
+      return false;
+    }
+
+    if (currentTrackId !== expectedTrackId) {
+      logGmmpRemote("command ignored due to track mismatch", {
+        name,
+        expectedTrackId,
+        currentTrackId
+      }, "warn");
+      return false;
+    }
+  }
+
+  switch (name) {
+    case "pause":
+      await setGmmpPaused(true);
+      return true;
+    case "unpause":
+    case "resume":
+      await setGmmpPaused(false);
+      return true;
+    case "mute":
+      await setGmmpMuted(true);
+      return true;
+    case "unmute":
+      await setGmmpMuted(false);
+      return true;
+    case "setvolume": {
+      const volume = clamp(
+        Number(args?.Volume ?? args?.volume ?? 0),
+        0,
+        100
+      );
+      await setGmmpVolume(volume);
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+async function pollRemoteGmmpCommands() {
+  if (gmmpRemoteCommandBusy) return false;
+
+  const { sessionId, deviceId } = getGmmpSyncContext();
+  if (!sessionId && !deviceId) {
+    return false;
+  }
+
+  gmmpRemoteCommandBusy = true;
+  try {
+    const url = new URL(apiUrl("/Plugins/JMSFusion/gmmp/commands"));
+    if (sessionId) {
+      url.searchParams.set("sessionId", sessionId);
+    }
+    if (deviceId) {
+      url.searchParams.set("deviceId", deviceId);
+    }
+    if (gmmpRemoteLastCommandSequence > 0) {
+      url.searchParams.set("afterSequence", String(gmmpRemoteLastCommandSequence));
+    }
+
+    const response = await fetch(url.toString(), {
+      headers: buildGmmpSyncHeaders()
+    });
+    if (!response.ok) {
+      logGmmpRemote("command poll failed", {
+        status: response.status,
+        sessionId,
+        deviceId
+      }, "warn");
+      return false;
+    }
+
+    const data = await response.json().catch(() => ({}));
+    const items = Array.isArray(data?.items) ? data.items : [];
+    if (!items.length) {
+      return true;
+    }
+
+    logGmmpRemote("commands received", items.map((item) => ({
+      sequence: Number(item?.Sequence ?? item?.sequence ?? 0) || 0,
+      name: String(item?.Name || item?.name || "").trim()
+    })), "warn");
+
+    for (const item of items) {
+      const sequence = Number(item?.Sequence ?? item?.sequence ?? 0) || 0;
+      try {
+        await applyRemoteGmmpCommand(item);
+        logGmmpRemote("command applied", {
+          sequence,
+          name: String(item?.Name || item?.name || "").trim()
+        }, "warn");
+      } catch (error) {
+        console.warn("GMMP remote command apply failed:", error);
+        logGmmpRemote("command apply failed", {
+          sequence,
+          name: String(item?.Name || item?.name || "").trim(),
+          error: error?.message || String(error || "")
+        }, "warn");
+      } finally {
+        if (sequence > gmmpRemoteLastCommandSequence) {
+          gmmpRemoteLastCommandSequence = sequence;
+        }
+      }
+    }
+
+    void syncRemoteGmmpState(true);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    gmmpRemoteCommandBusy = false;
+  }
+}
+
+function ensureRemoteGmmpSync() {
+  if (!gmmpRemoteStateTimer) {
+    gmmpRemoteStateTimer = window.setInterval(() => {
+      void syncRemoteGmmpState(false);
+    }, GMMP_REMOTE_STATE_INTERVAL_MS);
+  }
+
+  if (!gmmpRemoteCommandTimer) {
+    gmmpRemoteCommandTimer = window.setInterval(() => {
+      void pollRemoteGmmpCommands();
+    }, GMMP_REMOTE_COMMAND_INTERVAL_MS);
+  }
+}
+
+function installRemoteGmmpLifecycleHooks() {
+  if (gmmpRemoteLifecycleHooksInstalled || typeof window === "undefined") {
+    return;
+  }
+
+  gmmpRemoteLifecycleHooksInstalled = true;
+
+  window.addEventListener("pagehide", () => {
+    void clearRemoteGmmpState({ reason: "pagehide", keepalive: true });
+  }, { passive: true });
+
+  window.addEventListener("beforeunload", () => {
+    void clearRemoteGmmpState({ reason: "beforeunload", keepalive: true });
+  }, { passive: true });
+
+  if (/Android|iPhone|iPad/i.test(typeof navigator !== "undefined" ? navigator.userAgent : "")) {
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) return;
+      void clearRemoteGmmpState({ reason: "hidden", keepalive: true });
+    }, { passive: true });
+  }
+}
+
 async function setGmmpPaused(paused) {
   await ensureGmmpInit({ show: false });
   const audio = musicPlayerState?.audio;
@@ -78,6 +428,7 @@ async function setGmmpPaused(paused) {
     }
   } catch {}
 
+  void syncRemoteGmmpState(true);
   return getGmmpPlaybackState();
 }
 
@@ -122,6 +473,7 @@ async function setGmmpMuted(muted) {
     saveUserSettings?.();
   } catch {}
 
+  void syncRemoteGmmpState(true);
   return getGmmpPlaybackState();
 }
 
@@ -154,6 +506,7 @@ async function setGmmpVolume(volumeLevel) {
     saveUserSettings?.();
   } catch {}
 
+  void syncRemoteGmmpState(true);
   return getGmmpPlaybackState();
 }
 
@@ -238,6 +591,7 @@ export async function destroyGmmp({ reason = "manual" } = {}) {
     try { musicPlayerState.selectedTracks?.clear?.(); } catch {}
     musicPlayerState.selectedTracks = new Set();
 
+    await clearRemoteGmmpState({ reason: `destroy:${reason}` }).catch(() => false);
     return true;
   } catch (err) {
     console.warn("GMMP destroy failed:", { reason, err });
@@ -315,6 +669,9 @@ function createPlayerButton() {
 }
 
 let initInProgress = false;
+
+ensureRemoteGmmpSync();
+installRemoteGmmpLifecycleHooks();
 
 async function onToggleClick() {
   if (initInProgress) return;

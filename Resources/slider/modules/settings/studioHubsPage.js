@@ -1,5 +1,14 @@
-import { getAdminTargetProfile, getDeviceProfileAuto } from "../config.js";
+import {
+  getAdminTargetProfile,
+  getDeviceProfileAuto,
+  isNativeHomeSectionOrderKey,
+  normalizeManagedHomeSectionOrder
+} from "../config.js";
 import { getGlobalTmdbApiKey } from "../jmsPluginConfig.js";
+import {
+  getCurrentNativeHomeSectionOrderItems,
+  getNativeHomeSectionOrderLabel
+} from "../homeSectionNative.js";
 import { createCheckbox, createSection, createNumberInput } from "./shared.js";
 import { applySettings } from "./applySettings.js";
 import { fetchItemDetails, makeApiRequest } from "/Plugins/JMSFusion/runtime/api.js";
@@ -128,6 +137,94 @@ function createHiddenInput(id, value) {
   inp.name = id;
   inp.value = value;
   return inp;
+}
+
+function getDnDItemName(item) {
+  if (item && typeof item === "object") {
+    return String(item.name || item.key || "").trim();
+  }
+  return String(item || "").trim();
+}
+
+function getDnDItemLabel(item) {
+  if (item && typeof item === "object") {
+    return String(item.label || item.name || item.key || "").trim();
+  }
+  return String(item || "").trim();
+}
+
+function dedupeDnDItems(items) {
+  const out = [];
+  const seen = new Set();
+  for (const item of items || []) {
+    const name = getDnDItemName(item);
+    if (!name) continue;
+    const key = nameKey(name);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      name,
+      label: getDnDItemLabel(item) || name
+    });
+  }
+  return out;
+}
+
+function getManagedHomeSectionOrderLabel(name, config, labels) {
+  if (isNativeHomeSectionOrderKey(name)) {
+    return getNativeHomeSectionOrderLabel(name) || name;
+  }
+  if (name === "studioHubs") {
+    return (
+      labels?.studioHubs ||
+      config?.languageLabels?.studioHubs ||
+      "Stüdyo Koleksiyonları"
+    );
+  }
+  if (name === "personalRecommendations") {
+    return (
+      labels?.personalRecommendations ||
+      config?.languageLabels?.personalRecommendations ||
+      "Sana Özel Öneriler"
+    );
+  }
+  if (name === "recentRows") {
+    return labels?.managedRecentRowsLabel || "Son Eklenenler";
+  }
+  if (name === "continueRows") {
+    return labels?.managedContinueRowsLabel || "İzlemeye Devam Et";
+  }
+  if (name === "becauseYouWatched") {
+    return (
+      labels?.becauseYouWatched ||
+      config?.languageLabels?.becauseYouWatched ||
+      "İzlediğin İçin Öneriler"
+    );
+  }
+  if (name === "genreHubs") {
+    return labels?.managedGenreHubsLabel || "Tür Önerileri";
+  }
+  if (name === "directorRows") {
+    return labels?.managedDirectorRowsLabel || "Yönetmen Koleksiyonları";
+  }
+  return name;
+}
+
+function getManagedHomeSectionOrderItems(config, labels, nativeItems = []) {
+  const nativeLabels = new Map(
+    (Array.isArray(nativeItems) ? nativeItems : []).map((item) => [
+      String(item?.name || "").trim(),
+      String(item?.label || "").trim()
+    ])
+  );
+
+  return normalizeManagedHomeSectionOrder(
+    config?.managedHomeSectionOrder,
+    { nativeEntries: nativeItems }
+  ).map((name) => ({
+    name,
+    label: nativeLabels.get(name) || getManagedHomeSectionOrderLabel(name, config, labels)
+  }));
 }
 
 function ensureStudioHubsSpinnerStyles() {
@@ -406,12 +503,13 @@ function createDraggableList(id, items, labels, options = {}) {
   const manualEntries = Array.isArray(options.manualEntries) ? options.manualEntries : [];
   const isAdmin = options.isAdmin === true;
   const visibilityDisabled = options.visibilityDisabled === true;
+  const dndItems = dedupeDnDItems(items);
 
   const wrap = document.createElement("div");
   wrap.className = "setting-input setting-dnd";
 
   const lab = document.createElement("div");
-  lab.textContent = labels?.studioHubsOrderLabel || "Sıralama (sürükle-bırak)";
+  lab.textContent = options.labelText || labels?.studioHubsOrderLabel || "Sıralama (sürükle-bırak)";
   lab.style.display = "block";
   lab.style.marginBottom = "6px";
 
@@ -426,8 +524,9 @@ function createDraggableList(id, items, labels, options = {}) {
   list.style.maxHeight = "320px";
   list.style.overflow = "auto";
 
-  dedupeNames(items).forEach(name => {
-    list.appendChild(createDnDItem(name, labels, {
+  dndItems.forEach((item) => {
+    const name = getDnDItemName(item);
+    list.appendChild(createDnDItem(item, labels, {
       enableStudioControls,
       hidden: hiddenNames.has(nameKey(name)),
       isManual: !!findStudioHubManualEntry(manualEntries, name),
@@ -575,11 +674,13 @@ function createDraggableList(id, items, labels, options = {}) {
 }
 
 function createDnDItem(name, labels, options = {}) {
+  const itemName = getDnDItemName(name);
+  const itemLabel = getDnDItemLabel(name) || itemName;
   if (!options.enableStudioControls) {
     const li = document.createElement("li");
     li.className = "dnd-item";
     li.draggable = true;
-    li.dataset.name = name;
+    li.dataset.name = itemName;
     li.style.display = "flex";
     li.style.alignItems = "center";
     li.style.gap = "8px";
@@ -596,7 +697,7 @@ function createDnDItem(name, labels, options = {}) {
     handle.style.fontWeight = "700";
 
     const txt = document.createElement("span");
-    txt.textContent = name;
+    txt.textContent = itemLabel;
     txt.style.flex = "1";
     txt.style.textDecorationColor = "var(--accent-color, #ff6b6b)";
 
@@ -630,7 +731,7 @@ function createDnDItem(name, labels, options = {}) {
   const li = document.createElement("li");
   li.className = "dnd-item dnd-item-studio";
   li.draggable = true;
-  li.dataset.name = name;
+  li.dataset.name = itemName;
   li.dataset.hidden = options.hidden ? "1" : "0";
   li.dataset.manual = options.isManual ? "1" : "0";
   li.dataset.studioId = String(options.studioId || "").trim();
@@ -664,7 +765,7 @@ function createDnDItem(name, labels, options = {}) {
 
   const txt = document.createElement("span");
   txt.className = "dnd-name";
-  txt.textContent = name;
+  txt.textContent = itemLabel;
   txt.style.flex = "1 1 auto";
   txt.style.fontWeight = "600";
   txt.style.textDecorationColor = "var(--accent-color, #ff6b6b)";
@@ -1541,13 +1642,6 @@ export function createStudioHubsPanel(config, labels) {
   );
   section.appendChild(enableForYouCheckbox);
 
-  const placeRecsUnderStudio = createCheckbox(
-  'placePersonalRecsUnderStudioHubs',
-  (labels?.hubsUnderStudioHubs) || 'Sana özel önerileri #studio-hubs altına yerleştir',
-  !!config.placePersonalRecsUnderStudioHubs
-  );
-  section.appendChild(placeRecsUnderStudio);
-
   const ratingWrap = createNumberInput(
    'studioHubsMinRating',
    labels?.studioHubsMinRating || 'Minimum Derecelendirme',
@@ -2411,10 +2505,71 @@ export function createStudioHubsPanel(config, labels) {
   );
   dirSection.appendChild(directorRowsMinItemsPerDirector);
 
+  const managedOrderSection = createSection(
+    labels?.managedHomeSectionOrderSettings ||
+    config.languageLabels?.managedHomeSectionOrderSettings ||
+    'Ana Sayfa Satır Sıralaması'
+  );
+
+  const managedOrderHint = document.createElement("div");
+  managedOrderHint.className = "description-text2";
+  managedOrderHint.style.margin = "4px 0 10px";
+  managedOrderHint.textContent =
+    labels?.managedHomeSectionOrderHint ||
+    "Bu sıra hem satırların fallback yerleşimini hem de birbirini bekleme zincirini belirler.";
+  managedOrderSection.appendChild(managedOrderHint);
+
+  const currentNativeHomeSectionItems = getCurrentNativeHomeSectionOrderItems();
+
+  const managedHomeSectionOrderHidden = createHiddenInput(
+    'managedHomeSectionOrder',
+    JSON.stringify(
+      normalizeManagedHomeSectionOrder(
+        config.managedHomeSectionOrder,
+        { nativeEntries: currentNativeHomeSectionItems }
+      )
+    )
+  );
+  managedOrderSection.appendChild(managedHomeSectionOrderHidden);
+
+  const { wrap: managedOrderWrap, list: managedOrderList } = createDraggableList(
+    'managedHomeSectionOrderList',
+    getManagedHomeSectionOrderItems(config, labels, currentNativeHomeSectionItems),
+    labels,
+    {
+      labelText:
+        labels?.managedHomeSectionOrderLabel ||
+        'Ana sayfada görünecek satır sırası'
+    }
+  );
+  managedOrderSection.appendChild(managedOrderWrap);
+
+  const refreshManagedHomeSectionOrder = () => {
+    const names = [...managedOrderList.querySelectorAll(".dnd-item")]
+      .map((li) => String(li.dataset.name || "").trim())
+      .filter(Boolean);
+    managedHomeSectionOrderHidden.value = JSON.stringify(
+      normalizeManagedHomeSectionOrder(
+        names,
+        { nativeEntries: currentNativeHomeSectionItems }
+      )
+    );
+  };
+
+  managedOrderList.addEventListener("dragend", refreshManagedHomeSectionOrder);
+  managedOrderList.addEventListener("drop", refreshManagedHomeSectionOrder);
+  managedOrderList.addEventListener("dnd:reorder", refreshManagedHomeSectionOrder);
+  managedOrderList.addEventListener("click", (e) => {
+    if (e.target.closest(".dnd-btn-up") || e.target.closest(".dnd-btn-down")) {
+      refreshManagedHomeSectionOrder();
+    }
+  });
+
   panel.appendChild(section);
   panel.appendChild(becauseYouWatchedSection);
   panel.appendChild(genreSection);
   panel.appendChild(dirSection);
+  panel.appendChild(managedOrderSection);
 
   return panel;
 }

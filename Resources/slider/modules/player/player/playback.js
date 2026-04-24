@@ -882,8 +882,7 @@ export function playTrack(index) {
           NowPlayingText: station.nowPlayingText || track.NowPlayingText,
           TagsText: station.tags || track.TagsText,
           Codec: station.codec || track.Codec,
-          Bitrate: station.bitrate || track.Bitrate,
-          Hls: station.hls || track.Hls
+          Bitrate: station.bitrate || track.Bitrate
         });
         applyRadioNowPlaying(track, station);
         refreshLiveRadioTrackInfo(track);

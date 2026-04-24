@@ -25,11 +25,12 @@ import {
 } from "./prcDb.js";
 import {
   bindManagedSectionsBelowNative,
-  getLastNativeHomeSection,
-  isManagedHomeSection,
   waitForVisibleHomeSections
 } from "./homeSectionNative.js";
-import { waitForManagedSectionGate } from "./homeSectionChain.js";
+import {
+  waitForManagedSectionDependencyCompletion,
+  waitForManagedSectionGate
+} from "./homeSectionChain.js";
 
 const config = getConfig();
 const labels = getLanguageLabels?.() || {};
@@ -531,13 +532,11 @@ function scheduleDeferredBecauseYouWatchedRender({ force = false, seq = __deferr
   const run = (async () => {
     try {
       prcLog("BYW:start", { force, seq });
-      if (!force) {
-        prcLog("BYW:wait:managed-gate", { seq });
-        await waitForManagedSectionGate("becauseYouWatched", { timeoutMs: 25000 });
-        if (seq !== __deferredHomeSectionSeq) return false;
-      } else {
-        prcLog("BYW:skip-gate:force", { seq });
-      }
+      prcLog("BYW:wait:managed-gate", { force, seq });
+      await waitForManagedSectionGate("becauseYouWatched", { timeoutMs: 25000 });
+      if (seq !== __deferredHomeSectionSeq) return false;
+      await waitForManagedSectionDependencyCompletion("becauseYouWatched", { timeoutMs: 25000 });
+      if (seq !== __deferredHomeSectionSeq) return false;
       if (!hasActivePersonalRecsHomeSections()) {
         prcWarn("BYW:abort:no-home-sections", { force, seq });
         return false;
@@ -579,13 +578,11 @@ function scheduleDeferredGenreHubsRender({ force = false, seq = __deferredHomeSe
   const run = (async () => {
     try {
       prcLog("GENRE:start", { force, seq });
-      if (!force) {
-        prcLog("GENRE:wait:managed-gate", { seq });
-        await waitForManagedSectionGate("genreHubs", { timeoutMs: 25000 });
-        if (seq !== __deferredHomeSectionSeq) return false;
-      } else {
-        prcLog("GENRE:skip-gate:force", { seq });
-      }
+      prcLog("GENRE:wait:managed-gate", { force, seq });
+      await waitForManagedSectionGate("genreHubs", { timeoutMs: 25000 });
+      if (seq !== __deferredHomeSectionSeq) return false;
+      await waitForManagedSectionDependencyCompletion("genreHubs", { timeoutMs: 25000 });
+      if (seq !== __deferredHomeSectionSeq) return false;
       if (!hasActivePersonalRecsHomeSections()) {
         prcWarn("GENRE:abort:no-home-sections", { force, seq });
         return false;
@@ -1454,128 +1451,19 @@ function insertAfter(parent, node, ref) {
 }
 
 function enforceOrder(homeSectionsHint) {
-  const cfg = getConfig();
-  const homeRuntimeConfig = getHomeRecommendationRuntimeConfig(cfg);
   const indexPage = homeSectionsHint?.closest?.("#indexPage, #homePage") || currentIndexPage();
   const parent = homeSectionsHint || getHomeSectionsContainer(indexPage);
   if (!parent) return;
   bindManagedSectionsBelowNative(parent);
-  const studio = getParentSection(parent, 'studio-hubs', indexPage);
-  const recs = getParentSection(parent, 'personal-recommendations', indexPage);
-  const recent = getParentSection(parent, 'recent-rows', indexPage);
-  const genre = getParentSection(parent, 'genre-hubs', indexPage);
-  const director = getParentSection(parent, 'director-rows', indexPage);
-
-  if (cfg.placePersonalRecsUnderStudioHubs && studio && recs) {
-    insertAfter(parent, recs, studio);
-  }
-
-  const bywSections = Array.from(parent.querySelectorAll('[id^="because-you-watched--"]'))
-    .filter(el => el && el.parentElement === parent)
-    .sort((a,b) => (Number(a.id.split('--')[1]) || 0) - (Number(b.id.split('--')[1]) || 0));
-
-  if (bywSections.length) {
-    if (genre && genre.parentElement === parent) {
-      let ref = genre;
-      for (let i = bywSections.length - 1; i >= 0; i--) {
-        const sec = bywSections[i];
-        try { insertBefore(parent, sec, ref); } catch {}
-        ref = sec;
-      }
-    } else {
-      const anchor =
-        (homeRuntimeConfig.enablePersonalRecommendations && recs && recs.parentElement === parent) ? recs :
-        (studio && studio.parentElement === parent) ? studio :
-        null;
-      if (anchor) {
-        let ref = anchor;
-        for (const sec of bywSections) {
-          insertAfter(parent, sec, ref);
-          ref = sec;
-        }
-      }
-    }
-  }
-
-  if (recent && recent.parentElement === parent) {
-    if (homeRuntimeConfig.enablePersonalRecommendations && recs && recs.parentElement === parent) {
-      insertAfter(parent, recent, recs);
-    } else if (studio && studio.parentElement === parent) {
-      insertAfter(parent, recent, studio);
-    } else if (recent !== parent.firstElementChild) {
-      try { insertBefore(parent, recent, parent.firstElementChild); } catch {}
-    }
-  }
-
-  if (cfg.placeGenreHubsUnderStudioHubs && studio && genre) {
-    const wantUnderRecent = !!(recent && recent.parentElement === parent);
-    const wantUnderPersonal =
-      !wantUnderRecent &&
-      !!(homeRuntimeConfig.enablePersonalRecommendations && recs && recs.parentElement === parent);
-
-    if (wantUnderRecent)  {
-      insertAfter(parent, genre, recent);
-    } else if (wantUnderPersonal) {
-      insertAfter(parent, genre, recs);
-    } else if (studio && studio.parentElement === parent) {
-      insertAfter(parent, genre, studio);
-    } else if (genre.parentElement !== parent) {
-      appendToParent(parent, genre);
-    }
-  }
-
-  if (genre && genre.parentElement === parent && director && director.parentElement === parent) {
-    insertAfter(parent, director, genre);
-  }
-
   try { parent.__jmsManagedBelowNativeSchedule?.(); } catch {}
 }
 
-function placeSection(sectionEl, homeSections, underStudio) {
+function placeSection(sectionEl, homeSections) {
   if (!sectionEl) return;
-  const indexPage = currentIndexPage();
-  const targetParent = homeSections || getHomeSectionsContainer(indexPage);
-  const studio = getParentSection(targetParent, 'studio-hubs', indexPage);
-  const placeNow = () => {
-    if (underStudio && studio && targetParent) {
-      insertAfter(targetParent, sectionEl, studio);
-    } else {
-      appendToParent(targetParent || document.body, sectionEl);
-    }
-    enforceOrder(targetParent);
-  };
-
-  placeNow();
+  const targetParent = homeSections || getHomeSectionsContainer(currentIndexPage());
+  appendToParent(targetParent || document.body, sectionEl);
+  enforceOrder(targetParent);
   try { ensureIntoHomeSections(sectionEl, currentIndexPage()); } catch {}
-  if (underStudio && !studio) {
-    let mo = null;
-    let tries = 0;
-    const maxTries = 50;
-    const stop = () => { try { mo.disconnect(); } catch {} mo = null; };
-
-    mo = new MutationObserver(() => {
-      tries++;
-      const newParent = homeSections || getHomeSectionsContainer(currentIndexPage());
-      const s = getParentSection(newParent, 'studio-hubs');
-      if (s && newParent) {
-        insertAfter(newParent, sectionEl, s);
-        enforceOrder(newParent);
-        stop();
-      } else if (tries >= maxTries) {
-        stop();
-      }
-    });
-    mo.observe(document.body, { childList: true, subtree: true });
-    setTimeout(() => {
-      const newParent = homeSections || getHomeSectionsContainer(currentIndexPage());
-      const s = getParentSection(newParent, 'studio-hubs');
-      if (s && newParent) {
-        insertAfter(newParent, sectionEl, s);
-        enforceOrder(newParent);
-        stop();
-      }
-    }, 3000);
-  }
 }
 
 function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
@@ -2080,6 +1968,21 @@ export async function renderPersonalRecommendations(options = {}) {
 
         tasks.push((async () => {
           try {
+            prcLog("PERSONAL:wait:managed-gate", {
+              force,
+              seq: deferredSeq,
+            });
+            await waitForManagedSectionGate("personalRecommendations", { timeoutMs: 25000 });
+            if (deferredSeq !== __deferredHomeSectionSeq) return;
+            await waitForManagedSectionDependencyCompletion("personalRecommendations", { timeoutMs: 25000 });
+            if (deferredSeq !== __deferredHomeSectionSeq) return;
+            if (!row.isConnected || !hasActivePersonalRecsHomeSections()) {
+              prcWarn("PERSONAL:abort:gate-invalidated", {
+                force,
+                seq: deferredSeq,
+              });
+              return;
+            }
             const { userId, serverId } = getSessionInfo();
             const recommendations = await fetchPersonalRecommendations(
               userId,
@@ -2163,12 +2066,7 @@ function ensureBecauseContainer(indexPage, key = "0") {
   let existing = getScopedSection(id, indexPage);
   if (existing) {
     const parent = homeSections || getHomeSectionsContainer(indexPage) || getHomeSectionsContainer(currentIndexPage());
-    const genreWrap = getParentSection(parent, 'genre-hubs', indexPage);
-    if (parent && genreWrap && genreWrap.parentElement === parent) {
-      try { insertBefore(parent, existing, genreWrap); } catch {}
-    } else {
-      placeSection(existing, homeSections, false);
-    }
+    placeSection(existing, homeSections, false);
     const heroHost = existing.querySelector('.dir-row-hero-host');
     if (heroHost) {
       const showHero = isPersonalRecsHeroEnabled();
@@ -2206,13 +2104,7 @@ function ensureBecauseContainer(indexPage, key = "0") {
   section.__heroHost = heroHost;
 
   const parent = homeSections || getHomeSectionsContainer(indexPage) || getHomeSectionsContainer(currentIndexPage());
-  const genreWrap = getParentSection(parent, 'genre-hubs', indexPage);
-  if (parent && genreWrap && genreWrap.parentElement === parent) {
-    try { insertBefore(parent, section, genreWrap); }
-    catch { placeSection(section, homeSections, false); }
-  } else {
-    placeSection(section, homeSections, false);
-  }
+  placeSection(section, homeSections, false);
   try { enforceOrder(parent); } catch {}
   return section;
 }
@@ -2548,7 +2440,7 @@ function ensurePersonalRecsContainer(indexPage) {
   const homeSections = getHomeSectionsContainer(indexPage);
   let existing = getScopedSection("personal-recommendations", indexPage);
   if (existing) {
-    placeSection(existing, homeSections, !!getConfig().placePersonalRecsUnderStudioHubs);
+    placeSection(existing, homeSections);
     return existing;
   }
   const section = document.createElement("div");
@@ -2592,7 +2484,7 @@ function ensurePersonalRecsContainer(indexPage) {
       seeAll.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openPersonalExplorer(); }, { passive:false });
     }
 
-      placeSection(section, homeSections, !!getConfig().placePersonalRecsUnderStudioHubs);
+      placeSection(section, homeSections);
       return section;
     }
 
@@ -3514,20 +3406,6 @@ export function setupScroller(row) {
   setTimeout(() => updateButtonsNow(), 400);
 }
 
-function getGenreHubsAnchor(parent) {
-  if (!getConfig().placeGenreHubsUnderStudioHubs) return null;
-  const runtimeConfig = getHomeRecommendationRuntimeConfig();
-  const indexPage = parent?.closest?.("#indexPage, #homePage") || currentIndexPage();
-
-  const recent = getParentSection(parent, "recent-rows", indexPage);
-  if (recent && recent.parentElement === parent) return recent;
-
-  const pr = getParentSection(parent, "personal-recommendations", indexPage);
-  if (runtimeConfig.enablePersonalRecommendations && pr && pr.parentElement === parent) return pr;
-
-  return null;
-}
-
 function normalizeGenreKey(genre) {
   return String(genre || "").trim().toLowerCase();
 }
@@ -3559,13 +3437,7 @@ async function renderGenreHubs(indexPage) {
   }
 
   const parent = homeSections || getHomeSectionsContainer(indexPage) || document.body;
-  const recent = getParentSection(parent, "recent-rows", indexPage);
-  if (recent && recent.isConnected) {
-    const p = recent.parentElement || parent;
-    insertAfter(p, wrap, recent);
-  } else {
-    placeSection(wrap, homeSections, false);
-  }
+  placeSection(wrap, homeSections, false);
 
   try { ensureIntoHomeSections(wrap, indexPage); } catch {}
   enforceOrder(homeSections);

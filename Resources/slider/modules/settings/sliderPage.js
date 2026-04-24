@@ -343,7 +343,7 @@ export function createSliderPanel(config, labels) {
   const trailerThenVideoCheckbox = createCheckbox(
     'enableTrailerThenVideo',
     labels.enableTrailerThenVideo || 'Önce Fragman, Yoksa Video',
-    false
+    config.enableTrailerThenVideo
   );
 
   const disableAllPlaybackCheckbox = createCheckbox(
@@ -388,10 +388,12 @@ export function createSliderPanel(config, labels) {
     const t = trailerPlaybackCheckbox.querySelector('input');
     const v = videoPlaybackCheckbox.querySelector('input');
     const tv = trailerThenVideoCheckbox.querySelector('input');
+    const none = disableAllPlaybackCheckbox.querySelector('input');
 
     if (mode === 'trailer') { t.checked = true; v.checked = false; tv.checked = false; }
     else if (mode === 'video') { t.checked = false; v.checked = true; tv.checked = false; }
     else { t.checked = false; v.checked = false; tv.checked = true; }
+    none.checked = false;
 
     localStorage.setItem('previewPlaybackMode', mode);
     localStorage.setItem('previewTrailerEnabled', String(mode === 'trailer'));
@@ -408,15 +410,27 @@ export function createSliderPanel(config, labels) {
     if (e.target.checked) setPlaybackMode('trailerThenVideo');
   });
 
-  document.addEventListener('DOMContentLoaded', () => {
-    const saved = localStorage.getItem('previewPlaybackMode');
-    if (saved === 'trailer' || saved === 'video' || saved === 'trailerThenVideo') {
-      setPlaybackMode(saved);
-    } else {
-      const legacy = localStorage.getItem('previewTrailerEnabled') === 'true' ? 'trailer' : 'video';
-      setPlaybackMode(legacy);
+  const initialPlaybackMode = (() => {
+    if (config.disableAllPlayback) return 'none';
+    if (
+      config.previewPlaybackMode === 'trailer' ||
+      config.previewPlaybackMode === 'video' ||
+      config.previewPlaybackMode === 'trailerThenVideo'
+    ) {
+      return config.previewPlaybackMode;
     }
-  });
+    if (config.enableTrailerThenVideo) return 'trailerThenVideo';
+    if (config.enableTrailerPlayback) return 'trailer';
+    if (config.enableVideoPlayback) return 'video';
+    return 'video';
+  })();
+
+  if (initialPlaybackMode === 'none') {
+    disableAllPlaybackCheckbox.querySelector('input').checked = true;
+    disableAllPlaybackOptions();
+  } else {
+    setPlaybackMode(initialPlaybackMode);
+  }
 
   trailerPlaybackCheckbox.querySelector('input').addEventListener('change', (e) => {
     if (e.target.checked) {

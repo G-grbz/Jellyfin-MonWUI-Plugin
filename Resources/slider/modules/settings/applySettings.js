@@ -1,4 +1,4 @@
-import { getAdminTargetProfile, getConfig, getDeviceProfileAuto, normalizeSettingsHotkey, publishAdminSnapshotIfForced, SETTINGS_HOTKEY_DEFAULT } from "../config.js";
+import { getAdminTargetProfile, getConfig, getDeviceProfileAuto, normalizeManagedHomeSectionOrder, normalizeSettingsHotkey, publishAdminSnapshotIfForced, SETTINGS_HOTKEY_DEFAULT } from "../config.js";
 import { updateConfig } from "../configPersistence.js";
 import { loadCSS } from "../playerStyles.js";
 import { updateSlidePosition } from '../positionUtils.js';
@@ -190,6 +190,15 @@ const USER_ONLY_KEYS = [
             return [];
           }
         })();
+        const managedHomeSectionOrderValue = (() => {
+          const raw = formData.get('managedHomeSectionOrder');
+          if (!raw) return normalizeManagedHomeSectionOrder(config?.managedHomeSectionOrder);
+          try {
+            return normalizeManagedHomeSectionOrder(JSON.parse(raw));
+          } catch {
+            return normalizeManagedHomeSectionOrder(config?.managedHomeSectionOrder);
+          }
+        })();
         const sapEnabled = formData.get('sapEnabled') === 'on';
         const sapBlurMin = _clamp(
           _floatOr(formData.get('sapBlurMs'), _DEFAULT_UNFOCUS_MS) / 60000,
@@ -293,7 +302,6 @@ const USER_ONLY_KEYS = [
             avatarRefreshTime: parseInt(formData.get('avatarRefreshTime'), 10),
             randomDicebearAvatar: formData.get('randomDicebearAvatar') === 'on',
             dicebearParams: config.dicebearParams || {},
-            enableHls: formData.get('enableHls') === 'on',
             previewModal: formData.get('previewModal') === 'on',
             allPreviewModal: formData.get('allPreviewModal') === 'on',
             preferTrailersInPreviewModal: formData.get('preferTrailersInPreviewModal') === 'on',
@@ -302,6 +310,13 @@ const USER_ONLY_KEYS = [
               const v = formData.get('dotPreviewPlaybackMode');
               if (v === 'trailer' || v === 'video' || v === 'onlyTrailer') return v;
               return null;
+            })(),
+            previewPlaybackMode: (() => {
+              if (formData.get('disableAllPlayback') === 'on') return 'none';
+              if (formData.get('enableTrailerThenVideo') === 'on') return 'trailerThenVideo';
+              if (formData.get('enableTrailerPlayback') === 'on') return 'trailer';
+              if (formData.get('enableVideoPlayback') === 'on') return 'video';
+              return 'video';
             })(),
             globalPreviewMode: formData.get('globalPreviewMode') || 'modal',
             enabledGmmp: formData.get('enabledGmmp') === 'on',
@@ -467,7 +482,6 @@ const USER_ONLY_KEYS = [
             personalRecsCacheTtlMs: parseInt(formData.get('personalRecsCacheTtlMs'), 10) || 360,
             studioHubsAutoAddFromWatchlistCopy: formData.get('studioHubsAutoAddFromWatchlistCopy') === 'on',
             studioHubsHoverVideo: formData.get('studioHubsHoverVideo') === 'on',
-            placePersonalRecsUnderStudioHubs: formData.get('placePersonalRecsUnderStudioHubs') === 'on',
             placeGenreHubsAbovePersonalRecs: formData.get('placeGenreHubsAbovePersonalRecs') === 'on',
             studioMiniTrailerPopover: formData.get('studioMiniTrailerPopover') === 'on',
             studioHubsMinRating: parseFloat(formData.get('studioHubsMinRating')) || 6.5,
@@ -477,6 +491,7 @@ const USER_ONLY_KEYS = [
               ? (studioHubsOrderValue.length ? studioHubsOrderValue : getConfig().studioHubsOrder)
               : undefined,
             studioHubsHidden: useGlobalStudioHubsVisibility ? studioHubsHiddenValue : undefined,
+            managedHomeSectionOrder: managedHomeSectionOrderValue,
 
             enableGenreHubs: formData.get('enableGenreHubs') === 'on',
             studioHubsGenreCardCount: parseInt(formData.get('studioHubsGenreCardCount'), 10) || 10,
@@ -814,6 +829,7 @@ const USER_ONLY_KEYS = [
         try {
           window.__JMS_CUSTOM_SPLASH__?.syncFromConfig?.(updatedConfig.enableCustomSplashScreen);
         } catch {}
+        try { localStorage.removeItem('placePersonalRecsUnderStudioHubs'); } catch {}
         localStorage.removeItem('gradientOverlayImageType');
 
         if (!rawInput) {

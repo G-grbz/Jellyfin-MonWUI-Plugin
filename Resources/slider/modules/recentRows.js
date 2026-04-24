@@ -1,5 +1,5 @@
 import { getSessionInfo, makeApiRequest, playNow, waitForAuthReadyStrict } from "/Plugins/JMSFusion/runtime/api.js";
-import { getConfig, getHomeSectionsRuntimeConfig } from "./config.js";
+import { getConfig, getHomeSectionsRuntimeConfig, getManagedHomeSectionRuntimeOrder } from "./config.js";
 import { getLanguageLabels } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";
 import { REOPEN_COOLDOWN_MS, OPEN_HOVER_DELAY_MS } from "./hoverTrailerModal.js";
@@ -18,9 +18,12 @@ import { faIconHtml } from "./faIcons.js";
 import { resolveSliderAssetHref } from "./assetLinks.js";
 import {
   bindManagedSectionsBelowNative,
-  getLastNativeHomeSection,
   waitForVisibleHomeSections
 } from "./homeSectionNative.js";
+import {
+  waitForManagedSectionDependencyCompletion,
+  waitForManagedSectionGate
+} from "./homeSectionChain.js";
 
 const config = getConfig();
 const labels = getLanguageLabels?.() || {};
@@ -137,6 +140,19 @@ let __wrapInserted = false;
 let __recentMountPromise = null;
 let __recentRowsRetryTo = null;
 
+const RECENT_ROW_SECTION_META = Object.freeze({
+  recentRows: {
+    id: "recent-rows",
+    flag: "__jmsRecentRowsDone",
+    event: "jms:recent-rows-done"
+  },
+  continueRows: {
+    id: "continue-rows",
+    flag: "__jmsContinueRowsDone",
+    event: "jms:continue-rows-done"
+  }
+});
+
 const TTL_RECENT_MS   = Number.isFinite(config.recentRowsCacheTTLms) ? Math.max(5_000, config.recentRowsCacheTTLms|0) : 90_000;
 const TTL_CONTINUE_MS = Number.isFinite(config.continueRowsCacheTTLms) ? Math.max(5_000, config.continueRowsCacheTTLms|0) : 45_000;
 
@@ -149,14 +165,57 @@ function isRecentRowsHomeRoute() {
   return h.startsWith("#/home") || h.startsWith("#/index") || h === "" || h === "#";
 }
 
-function setRecentRowsDone(done) {
+function getRecentRowSectionMeta(sectionKey = "recentRows") {
+  return RECENT_ROW_SECTION_META[sectionKey] || RECENT_ROW_SECTION_META.recentRows;
+}
+
+function setManagedRecentRowsDone(sectionKey, done) {
+  const meta = getRecentRowSectionMeta(sectionKey);
   const next = !!done;
   let prev = false;
-  try { prev = window.__jmsRecentRowsDone === true; } catch {}
-  try { window.__jmsRecentRowsDone = next; } catch {}
+  try { prev = window[meta.flag] === true; } catch {}
+  try { window[meta.flag] = next; } catch {}
   if (next && !prev) {
-    try { document.dispatchEvent(new Event("jms:recent-rows-done")); } catch {}
+    try { document.dispatchEvent(new Event(meta.event)); } catch {}
   }
+}
+
+function setRecentRowsDone(done) {
+  setManagedRecentRowsDone("recentRows", done);
+}
+
+function setContinueRowsDone(done) {
+  setManagedRecentRowsDone("continueRows", done);
+}
+
+function hasRecentRowsSectionEnabled(runtimeCfg) {
+  return !!(
+    runtimeCfg.enableRecentMovies ||
+    runtimeCfg.enableRecentSeries ||
+    runtimeCfg.enableRecentEpisodes ||
+    runtimeCfg.enableRecentMusic ||
+    runtimeCfg.enableOtherLibRows
+  );
+}
+
+function hasContinueRowsSectionEnabled(runtimeCfg) {
+  return !!(
+    runtimeCfg.enableRecentTracks ||
+    runtimeCfg.enableContinueMovies ||
+    runtimeCfg.enableContinueSeries ||
+    runtimeCfg.enableOtherLibRows
+  );
+}
+
+function getOrderedRecentRowSectionKeys(cfg, runtimeCfg) {
+  const enabled = new Set();
+  if (hasRecentRowsSectionEnabled(runtimeCfg)) enabled.add("recentRows");
+  if (hasContinueRowsSectionEnabled(runtimeCfg)) enabled.add("continueRows");
+  if (!enabled.size) return [];
+
+  const ordered = getManagedHomeSectionRuntimeOrder(cfg, { enabledOnly: true })
+    .filter((key) => enabled.has(key));
+  return ordered.length ? ordered : Array.from(enabled);
 }
 
 async function ensureRecentDb() {
@@ -2562,22 +2621,7 @@ function findRealHomeSectionsContainer() {
 function pickRecentRowsParentAndAnchor() {
   const hsc = findRealHomeSectionsContainer();
   if (hsc) {
-    const nativeAnchor = getLastNativeHomeSection(hsc);
-    if (nativeAnchor && nativeAnchor.parentElement === hsc) {
-      return { parent: hsc, anchor: nativeAnchor, prepend: false };
-    }
-
-    const pr = hsc.querySelector("#personal-recommendations");
-    if (pr && pr.parentElement === hsc) {
-      return { parent: hsc, anchor: pr, prepend: false };
-    }
-
-    const studio = hsc.querySelector("#studio-hubs");
-    if (studio && studio.parentElement === hsc) {
-      return { parent: hsc, anchor: studio, prepend: false };
-    }
-
-    return { parent: hsc, anchor: studio || pr || null, prepend: false };
+    return { parent: hsc, anchor: null, prepend: false };
   }
 
   const homeSectionsConfig = getHomeSectionsRuntimeConfig(getLiveConfig());
@@ -2635,6 +2679,40 @@ function ensureRecentRowsPlacement(wrap) {
   return false;
 }
 
+function cleanupRecentRowsWrap(wrap) {
+  if (!wrap) return;
+  try {
+    wrap.querySelectorAll(".personal-recs-card, .dir-row-hero").forEach((el) => {
+      try { el.dispatchEvent(new CustomEvent("jms:cleanup")); } catch {}
+    });
+    wrap.querySelectorAll(".personal-recs-row").forEach((row) => {
+      try { row.dispatchEvent(new CustomEvent("jms:cleanup")); } catch {}
+    });
+  } catch {}
+  try {
+    if (wrap.isConnected) {
+      wrap.parentElement?.removeChild(wrap);
+    }
+  } catch {}
+}
+
+function ensureManagedRecentRowsWrap(sectionKey) {
+  const meta = getRecentRowSectionMeta(sectionKey);
+  let wrap = document.getElementById(meta.id);
+  if (!wrap) {
+    wrap = document.createElement("div");
+    wrap.id = meta.id;
+    wrap.className = "homeSection director-rows-wrapper";
+  }
+  return wrap;
+}
+
+function removeManagedRecentRowsWrap(sectionKey) {
+  const meta = getRecentRowSectionMeta(sectionKey);
+  const wrap = document.getElementById(meta.id);
+  cleanupRecentRowsWrap(wrap);
+}
+
 function hasRenderableRecentRowsContent(wrap) {
   if (!wrap) return false;
   return !!wrap.querySelector(
@@ -2662,6 +2740,88 @@ function scheduleRecentRowsRetry(ms = 1000, options = {}, reason = "retry") {
   }, Math.max(120, ms | 0));
 }
 
+async function mountRecentRowsSection(sectionKey, { force = false, options = {}, homeParent = null } = {}) {
+  const meta = getRecentRowSectionMeta(sectionKey);
+  const wrap = ensureManagedRecentRowsWrap(sectionKey);
+
+  try {
+    ensureRecentRowsPlacement(wrap);
+    __wrapInserted = wrap.isConnected;
+  } catch {
+    __wrapInserted = false;
+  }
+
+  if (!wrap.isConnected) {
+    recentRowsWarn("mount:retry:wrap-not-connected", {
+      force,
+      sectionKey,
+      wrapChildren: wrap.childElementCount,
+    });
+    scheduleRecentRowsRetry(700, options, `wrap-not-connected:${sectionKey}`);
+    return false;
+  }
+
+  if (!force && hasRenderableRecentRowsContent(wrap)) {
+    recentRowsLog("mount:skip:already-rendered", {
+      force,
+      sectionKey,
+      wrapChildren: wrap.childElementCount,
+    });
+    clearRecentRowsRetry();
+    setManagedRecentRowsDone(sectionKey, true);
+    try { homeParent?.__jmsManagedBelowNativeSchedule?.(); } catch {}
+    return true;
+  }
+
+  try {
+    recentRowsLog("mount:wait:managed-gate", { force, sectionKey });
+    await waitForManagedSectionGate(sectionKey, { timeoutMs: 25000 });
+    await waitForManagedSectionDependencyCompletion(sectionKey, { timeoutMs: 25000 });
+    if (!wrap.isConnected || !getActiveHomePage()) {
+      recentRowsWarn("mount:retry:gate-invalidated", {
+        force,
+        sectionKey,
+        wrapConnected: !!wrap?.isConnected
+      });
+      scheduleRecentRowsRetry(800, options, `gate-invalidated:${sectionKey}`);
+      return false;
+    }
+    recentRowsLog("render:start", {
+      force,
+      sectionKey,
+      wrapChildren: wrap.childElementCount,
+    });
+    try { wrap.innerHTML = ""; } catch {}
+    await initAndRender(wrap, sectionKey);
+    if (!hasRenderableRecentRowsContent(wrap)) {
+      recentRowsWarn("render:done-but-empty", {
+        force,
+        sectionKey,
+        wrapChildren: wrap.childElementCount,
+      });
+      scheduleRecentRowsRetry(1400, options, `render-done-but-empty:${sectionKey}`);
+      return false;
+    }
+    recentRowsLog("render:success", {
+      force,
+      sectionKey,
+      wrapChildren: wrap.childElementCount,
+    });
+    clearRecentRowsRetry();
+    try { homeParent?.__jmsManagedBelowNativeSchedule?.(); } catch {}
+    return true;
+  } catch (e) {
+    console.error(e);
+    recentRowsWarn("render:error", {
+      force,
+      sectionKey,
+      error: e?.message || String(e),
+    });
+    scheduleRecentRowsRetry(1400, options, `render-error:${sectionKey}`);
+    return false;
+  }
+}
+
 export async function mountRecentRowsLazy(options = {}) {
   const force = options?.force === true;
   if (__recentMountPromise) {
@@ -2678,18 +2838,8 @@ export async function mountRecentRowsLazy(options = {}) {
   }
   const cfg = getConfig();
   const runtimeCfg = getRecentRowsRuntimeConfig(cfg);
-  const anyRecent =
-    runtimeCfg.enableRecentMovies ||
-    runtimeCfg.enableRecentSeries ||
-    runtimeCfg.enableRecentEpisodes ||
-    runtimeCfg.enableRecentMusic ||
-    runtimeCfg.enableRecentTracks;
-
-  const anyEnabled =
-    anyRecent ||
-    runtimeCfg.enableContinueMovies ||
-    runtimeCfg.enableContinueSeries ||
-    runtimeCfg.enableOtherLibRows;
+  const sectionKeys = getOrderedRecentRowSectionKeys(cfg, runtimeCfg);
+  const anyEnabled = sectionKeys.length > 0;
 
   if (!anyEnabled) {
     recentRowsLog("mount:skip:disabled", { force });
@@ -2699,7 +2849,7 @@ export async function mountRecentRowsLazy(options = {}) {
   }
   recentRowsLog("mount:start", {
     force,
-    anyRecent,
+    sectionKeys,
     anyEnabled,
   });
 
@@ -2731,68 +2881,18 @@ export async function mountRecentRowsLazy(options = {}) {
       return false;
     }
     bindManagedSectionsBelowNative(homeParent);
-
-    let wrap = document.getElementById("recent-rows");
-    if (!wrap) {
-      wrap = document.createElement("div");
-      wrap.id = "recent-rows";
-      wrap.className = "homeSection director-rows-wrapper";
+    for (const key of Object.keys(RECENT_ROW_SECTION_META)) {
+      if (sectionKeys.includes(key)) continue;
+      removeManagedRecentRowsWrap(key);
+      setManagedRecentRowsDone(key, false);
     }
 
-    try {
-      ensureRecentRowsPlacement(wrap);
-      __wrapInserted = wrap.isConnected;
-    } catch {
-      __wrapInserted = false;
+    let allOk = true;
+    for (const sectionKey of sectionKeys) {
+      const ok = await mountRecentRowsSection(sectionKey, { force, options, homeParent });
+      if (!ok) allOk = false;
     }
-
-    if (!wrap.isConnected) {
-      recentRowsWarn("mount:retry:wrap-not-connected", {
-        force,
-        wrapChildren: wrap.childElementCount,
-      });
-      scheduleRecentRowsRetry(700, options, "wrap-not-connected");
-      return false;
-    }
-    if (!force && hasRenderableRecentRowsContent(wrap)) {
-      recentRowsLog("mount:skip:already-rendered", {
-        force,
-        wrapChildren: wrap.childElementCount,
-      });
-      clearRecentRowsRetry();
-      setRecentRowsDone(true);
-      return true;
-    }
-
-    try {
-      recentRowsLog("render:start", {
-        force,
-        wrapChildren: wrap.childElementCount,
-      });
-      await initAndRender(wrap);
-      if (!hasRenderableRecentRowsContent(wrap)) {
-        recentRowsWarn("render:done-but-empty", {
-          force,
-          wrapChildren: wrap.childElementCount,
-        });
-        scheduleRecentRowsRetry(1400, options, "render-done-but-empty");
-        return false;
-      }
-      recentRowsLog("render:success", {
-        force,
-        wrapChildren: wrap.childElementCount,
-      });
-      clearRecentRowsRetry();
-      return true;
-    } catch (e) {
-      console.error(e);
-      recentRowsWarn("render:error", {
-        force,
-        error: e?.message || String(e),
-      });
-      scheduleRecentRowsRetry(1400, options, "render-error");
-      return false;
-    }
+    return allOk;
   })();
 
   __recentMountPromise = run;
@@ -2819,7 +2919,7 @@ function getPinnedHomeContainer() {
   return null;
 }
 
-async function initAndRender(wrap) {
+async function initAndRender(wrap, sectionKey = "recentRows") {
   if (!getActiveHomePage()) return;
   if (!wrap || !wrap.isConnected) return;
   if (STATE.started) {
@@ -2851,7 +2951,7 @@ async function initAndRender(wrap) {
   STATE.wrapEl = wrap;
   STATE.userId = userId;
   STATE.serverId = serverId;
-  setRecentRowsDone(false);
+  setManagedRecentRowsDone(sectionKey, false);
 
   try {
     await ensureRecentDb();
@@ -3045,30 +3145,6 @@ async function initAndRender(wrap) {
     }));
   }
 
-  if (runtimeCfg.enableRecentTracks) {
-  pushPlan(continuePlans, () => fillSectionWithItems({
-    wrap,
-    titleText: (config.languageLabels.recentlyPlayedTracks || config.languageLabels.recRecentTracks) || "Son dinlenen parçalar",
-    badgeType: "continue",
-    heroLabel: (config.languageLabels.recentlyPlayedTracksHero || config.languageLabels.recentTracksHero) || "Son dinlenen parça",
-    cardCount: runtimeCfg.effectiveRecentTracksCount,
-    showProgress: false,
-    fetcher: Object.assign(
-      () => fetchRecentlyPlayedTracks(userId, runtimeCfg.effectiveRecentTracksCount + 1).then(async (items) => {
-        await writeCachedList("played", "Audio", items.map(x=>x?.Id).filter(Boolean));
-        return items;
-      }),
-      {
-        cachedItems: () => loadCachedRowItems("played", "Audio", TTL_CONTINUE_MS, {
-          limit: runtimeCfg.effectiveRecentTracksCount + 1
-        })
-      }
-    ),
-    onSeeAll: () => openLatestPage("Audio"),
-    randomHero: false
-  }));
-}
-
   if (runtimeCfg.enableContinueMovies) {
     pushPlan(continuePlans, () => fillSectionWithItems({
       wrap,
@@ -3230,7 +3306,33 @@ async function initAndRender(wrap) {
     }
   }
 
-    const runners = [...recentPlans, ...episodePlans, ...continuePlans];
+  if (runtimeCfg.enableRecentTracks) {
+    pushPlan(continuePlans, () => fillSectionWithItems({
+      wrap,
+      titleText: (config.languageLabels.recentlyPlayedTracks || config.languageLabels.recRecentTracks) || "Son dinlenen parçalar",
+      badgeType: "continue",
+      heroLabel: (config.languageLabels.recentlyPlayedTracksHero || config.languageLabels.recentTracksHero) || "Son dinlenen parça",
+      cardCount: runtimeCfg.effectiveRecentTracksCount,
+      showProgress: false,
+      fetcher: Object.assign(
+        () => fetchRecentlyPlayedTracks(userId, runtimeCfg.effectiveRecentTracksCount + 1).then(async (items) => {
+          await writeCachedList("played", "Audio", items.map(x=>x?.Id).filter(Boolean));
+          return items;
+        }),
+        {
+          cachedItems: () => loadCachedRowItems("played", "Audio", TTL_CONTINUE_MS, {
+            limit: runtimeCfg.effectiveRecentTracksCount + 1
+          })
+        }
+      ),
+      onSeeAll: () => openLatestPage("Audio"),
+      randomHero: false
+    }));
+  }
+
+    const runners = (sectionKey === "continueRows")
+      ? [...continuePlans]
+      : [...recentPlans, ...episodePlans];
 
     async function runWithLimit(fns, limit) {
       const pool = new Set();
@@ -3262,7 +3364,7 @@ async function initAndRender(wrap) {
       try { wrap.parentElement?.removeChild(wrap); } catch {}
     }
   } finally {
-    setRecentRowsDone(true);
+    setManagedRecentRowsDone(sectionKey, true);
   }
 }
 
@@ -3275,20 +3377,10 @@ export function cleanupRecentRows() {
     clearRecentRowsRetry();
     __recentMountPromise = null;
     setRecentRowsDone(false);
-    if (STATE.wrapEl) {
-      STATE.wrapEl.querySelectorAll(".personal-recs-card, .dir-row-hero").forEach(el => {
-        try { el.dispatchEvent(new CustomEvent("jms:cleanup")); } catch {}
-      });
-      STATE.wrapEl.querySelectorAll(".personal-recs-row").forEach(row => {
-        try { row.dispatchEvent(new CustomEvent("jms:cleanup")); } catch {}
-      });
-    }
-
-    try {
-      if (STATE.wrapEl && STATE.wrapEl.isConnected) {
-        STATE.wrapEl.parentElement?.removeChild(STATE.wrapEl);
-      }
-    } catch {}
+    setContinueRowsDone(false);
+    Object.values(RECENT_ROW_SECTION_META).forEach((meta) => {
+      cleanupRecentRowsWrap(document.getElementById(meta.id));
+    });
 
     STATE.started = false;
     STATE.wrapEl = null;

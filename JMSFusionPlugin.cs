@@ -20,6 +20,7 @@ namespace Jellyfin.Plugin.JMSFusion
 
         private readonly ILogger<JMSFusionPlugin> _logger;
         private readonly IApplicationPaths _paths;
+        private bool _lastPhysicalPatchFallbackEnabled;
         public static JMSFusionPlugin Instance { get; private set; } = null!;
 
         public JMSFusionPlugin(IApplicationPaths paths, IXmlSerializer xmlSerializer, ILoggerFactory loggerFactory)
@@ -28,23 +29,43 @@ namespace Jellyfin.Plugin.JMSFusion
             _logger = loggerFactory.CreateLogger<JMSFusionPlugin>();
             _paths = paths;
             Instance = this;
+            _lastPhysicalPatchFallbackEnabled = Configuration.EnablePhysicalIndexHtmlPatchFallback;
 
             ConfigurationChanged += (_, __) =>
             {
                 _logger.LogInformation("[JMSFusion] Configuration changed.");
-                TryPatchIndexHtml();
-            };
+                var fallbackEnabled = Configuration.EnablePhysicalIndexHtmlPatchFallback;
 
-            TryPatchIndexHtml();
-
-            _ = Task.Run(async () =>
-            {
-                for (var i = 0; i < 3; i++)
+                if (fallbackEnabled)
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(3 * (i + 1)));
                     TryPatchIndexHtml();
                 }
-            });
+                else if (_lastPhysicalPatchFallbackEnabled)
+                {
+                    TryUnpatchIndexHtml();
+                }
+
+                _lastPhysicalPatchFallbackEnabled = fallbackEnabled;
+            };
+
+            if (_lastPhysicalPatchFallbackEnabled)
+            {
+                TryPatchIndexHtml();
+
+                _ = Task.Run(async () =>
+                {
+                    for (var i = 0; i < 3; i++)
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(3 * (i + 1)));
+                        if (!Configuration.EnablePhysicalIndexHtmlPatchFallback)
+                        {
+                            break;
+                        }
+
+                        TryPatchIndexHtml();
+                    }
+                });
+            }
 
             try
             {
@@ -84,6 +105,13 @@ namespace Jellyfin.Plugin.JMSFusion
             {
                 _logger.LogWarning(ex, "[JMSFusion] Failed to register in-memory transformation; middleware/patch fallback will be used.");
             }
+        }
+
+        public override void OnUninstalling()
+        {
+            _logger.LogInformation("[JMSFusion] Plugin uninstall detected. Cleaning physical index.html patch if present.");
+            TryUnpatchIndexHtml();
+            base.OnUninstalling();
         }
 
         private string? DetectWebRoot()
@@ -156,6 +184,26 @@ namespace Jellyfin.Plugin.JMSFusion
             }
         }
 
+        public void TryUnpatchIndexHtml()
+        {
+            try
+            {
+                var root = DetectWebRoot();
+                if (string.IsNullOrWhiteSpace(root))
+                {
+                    _logger.LogWarning("[JMSFusion] Web root not found; skipping unpatch.");
+                    return;
+                }
+
+                var ok = IndexPatcher.EnsureUnpatched(_logger, root);
+                _logger.LogInformation("[JMSFusion] Unpatch result: {ok}", ok);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[JMSFusion] TryUnpatchIndexHtml failed");
+            }
+        }
+
         public string BuildScriptsHtml(string? pathBase = null)
         {
             var sb = new StringBuilder();
@@ -177,9 +225,7 @@ namespace Jellyfin.Plugin.JMSFusion
                 {
                     Name = "JMSFusionConfigPage",
                     EmbeddedResourcePath = $"{ns}.Web.configuration.html",
-                    EnableInMainMenu = true,
-                    MenuSection = "server",
-                    MenuIcon = "developer_mode"
+                    EnableInMainMenu = false
                 }
             };
         }

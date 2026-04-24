@@ -66,6 +66,8 @@
         patchDone: "Patch completed.",
         unpatchDone: "Patch removed.",
         publishDone: "Global settings published successfully.",
+        physicalPatchFallbackEnabled: "Physical index.html patch fallback enabled.",
+        physicalPatchFallbackDisabled: "Physical index.html patch fallback disabled.",
         statusPending: "Status has not been loaded yet.",
         snippetPending: "Snippet has not been loaded yet.",
         monwuiSettingsLoading: "MonWUI settings are loading...",
@@ -87,7 +89,9 @@
         activeTitle: "In-memory injection is active.",
         activeHint: "Physical patching is not required while runtime injection is working.",
         inactiveTitle: "In-memory injection was not detected.",
-        inactiveHint: "Use Patch if you want to persist the snippet into index.html."
+        inactiveHint: "Use Patch if you want to persist the snippet into index.html.",
+        fallbackToggleLabel: "Enable physical index.html patch fallback",
+        fallbackToggleHint: "Disabled by default. Enable this only if runtime injection does not work or if you explicitly need disk patching. When enabled, JMSFusion will try to patch index.html during startup and configuration changes."
       },
       env: {
         runningUser: "Running user",
@@ -395,11 +399,22 @@
     const r = await fetch(api("Configuration"));
     if (!r.ok) throw new Error("Failed to load config: " + r.status);
     const cfg = await r.json();
+    view.__physicalPatchFallbackEnabled = !!cfg.enablePhysicalIndexHtmlPatchFallback;
     view.querySelector("#scriptDir").value = cfg.scriptDirectory || "";
     view.querySelector("#playerSub").value = cfg.playerSubdir || "modules/player";
     const fg = view.querySelector("#forceGlobal");
     if (fg) fg.checked = !!cfg.forceGlobalUserSettings;
     return cfg;
+  }
+
+  async function postConfiguration(body) {
+    const r = await fetch(api("Configuration"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body)
+    });
+
+    if (!r.ok) throw new Error("Save failed: " + r.status + " - " + await r.text());
   }
 
   async function saveConfig(view) {
@@ -409,13 +424,7 @@
       forceGlobalUserSettings: !!view.querySelector("#forceGlobal")?.checked
     };
 
-    const r = await fetch(api("Configuration"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(body)
-    });
-
-    if (!r.ok) throw new Error("Save failed: " + r.status + " - " + await r.text());
+    await postConfiguration(body);
   }
 
   async function getStatus() {
@@ -543,8 +552,83 @@
     showMessage(view, t("webConfig.messages.webPathUpdated", "Web path and permissions updated."), "ok");
   }
 
+  function syncEnvCardVisibility(view) {
+    if (!view) return;
+
+    const shouldHideEnvCard = view.__inmemOk === true;
+    const envCard = view.querySelector("#envCard");
+    const snippetGrid = view.querySelector("#snippetGrid");
+
+    if (envCard) {
+      envCard.hidden = shouldHideEnvCard;
+    }
+
+    if (snippetGrid) {
+      snippetGrid.classList.toggle("jms-grid--single", shouldHideEnvCard);
+    }
+  }
+
+  function renderPhysicalPatchFallbackToggle(view) {
+    const shouldShow = !view?.__inmemOk || !!view?.__physicalPatchFallbackEnabled;
+    if (!shouldShow) return "";
+
+    const checked = !!view?.__physicalPatchFallbackEnabled;
+    const disabled = !!view?.__physicalPatchFallbackBusy;
+
+    return `
+      <div class="jms-inline-toggle">
+        <label class="inputLabel inputLabel--checkbox" for="physicalPatchFallbackToggle">
+          <input id="physicalPatchFallbackToggle" type="checkbox" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""}>
+          <span>${esc(t("webConfig.inMemory.fallbackToggleLabel", "Enable physical index.html patch fallback"))}</span>
+        </label>
+        <div class="fieldDescription">${esc(t("webConfig.inMemory.fallbackToggleHint", "Disabled by default. Enable this only if runtime injection does not work or if you explicitly need disk patching. When enabled, JMSFusion will try to patch index.html during startup and configuration changes."))}</div>
+      </div>
+    `;
+  }
+
+  async function updatePhysicalPatchFallback(view, enabled) {
+    if (!view || view.__physicalPatchFallbackBusy) return;
+
+    const previous = !!view.__physicalPatchFallbackEnabled;
+    view.__physicalPatchFallbackBusy = true;
+
+    const currentToggle = view.querySelector("#physicalPatchFallbackToggle");
+    if (currentToggle) currentToggle.disabled = true;
+
+    try {
+      await postConfiguration({
+        enablePhysicalIndexHtmlPatchFallback: !!enabled
+      });
+
+      view.__physicalPatchFallbackEnabled = !!enabled;
+      renderEnv(view, await getEnv());
+      await showStatus(view);
+      await checkInMemory(view);
+
+      showMessage(
+        view,
+        enabled
+          ? t("webConfig.messages.physicalPatchFallbackEnabled", "Physical index.html patch fallback enabled.")
+          : t("webConfig.messages.physicalPatchFallbackDisabled", "Physical index.html patch fallback disabled."),
+        "ok"
+      );
+    } catch (error) {
+      view.__physicalPatchFallbackEnabled = previous;
+      showMessage(view, error?.message || String(error), "err");
+    } finally {
+      view.__physicalPatchFallbackBusy = false;
+      if (view.__inmemOk !== true) {
+        renderInMem(view, false);
+      } else if (view.__physicalPatchFallbackEnabled) {
+        renderInMem(view, true);
+      }
+    }
+  }
+
   function renderInMem(view, ok) {
     view.__inmemOk = !!ok;
+    syncEnvCardVisibility(view);
+
     const el = view.querySelector("#inmem");
     if (!el) return;
 
@@ -553,15 +637,26 @@
       el.innerHTML = `
         <strong>${esc(t("webConfig.inMemory.activeTitle", "In-memory injection is active."))}</strong><br>
         <span>${esc(t("webConfig.inMemory.activeHint", "Physical patching is not required while runtime injection is working."))}</span>
+        ${renderPhysicalPatchFallbackToggle(view)}
       `;
-      return;
+    } else {
+      el.className = "jms-inline-state warn";
+      el.innerHTML = `
+        <strong>${esc(t("webConfig.inMemory.inactiveTitle", "In-memory injection was not detected."))}</strong><br>
+        <span>${esc(t("webConfig.inMemory.inactiveHint", "Use Patch if you want to persist the snippet into index.html."))}</span>
+        ${renderPhysicalPatchFallbackToggle(view)}
+      `;
     }
 
-    el.className = "jms-inline-state warn";
-    el.innerHTML = `
-      <strong>${esc(t("webConfig.inMemory.inactiveTitle", "In-memory injection was not detected."))}</strong><br>
-      <span>${esc(t("webConfig.inMemory.inactiveHint", "Use Patch if you want to persist the snippet into index.html."))}</span>
-    `;
+    const toggle = el.querySelector("#physicalPatchFallbackToggle");
+    if (toggle) {
+      toggle.addEventListener("change", (event) => {
+        const nextValue = !!event?.currentTarget?.checked;
+        updatePhysicalPatchFallback(view, nextValue).catch((error) => {
+          showMessage(view, error?.message || String(error), "err");
+        });
+      });
+    }
   }
 
   async function checkInMemory(view) {

@@ -10,6 +10,8 @@ namespace Jellyfin.Plugin.JMSFusion
     {
         private const string BeginMark = "<!-- SL-INJECT BEGIN -->";
         private const string EndMark   = "<!-- SL-INJECT END -->";
+        private static string GetBackupPath(string path) => path + ".jmsfusion.bak";
+
         private static string BuildBlock(string? pathBase = null)
         {
             var sb = new StringBuilder();
@@ -30,6 +32,12 @@ namespace Jellyfin.Plugin.JMSFusion
             if (end < 0) return (-1, -1);
             end += EndMark.Length;
             return (begin, end);
+        }
+
+        private static bool HasInjectBlock(string html)
+        {
+            var (start, end) = FindInjectRange(html);
+            return start >= 0 && end >= 0;
         }
 
         private static bool IsWritable(string path, ILogger logger)
@@ -55,7 +63,7 @@ namespace Jellyfin.Plugin.JMSFusion
         {
             try
             {
-                var backupPath = path + ".jmsfusion.bak";
+                var backupPath = GetBackupPath(path);
                 if (!File.Exists(backupPath))
                 {
                     File.Copy(path, backupPath);
@@ -66,6 +74,32 @@ namespace Jellyfin.Plugin.JMSFusion
             {
                 logger.LogWarning(ex, "[JMSFusion] Backup creation failed for: {Path}", path);
             }
+        }
+
+        private static void DeleteBackupIfPresent(string path, ILogger logger)
+        {
+            try
+            {
+                var backupPath = GetBackupPath(path);
+                if (!File.Exists(backupPath))
+                {
+                    return;
+                }
+
+                File.Delete(backupPath);
+                logger.LogInformation("[JMSFusion] Removed backup: {BackupPath}", backupPath);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "[JMSFusion] Failed removing backup for: {Path}", path);
+            }
+        }
+
+        private static void DeleteBackupsIfPresent(ILogger logger, string webRootPath)
+        {
+            DeleteBackupIfPresent(Path.Combine(webRootPath, "index.html"), logger);
+            DeleteBackupIfPresent(Path.Combine(webRootPath, "index.html.gz"), logger);
+            DeleteBackupIfPresent(Path.Combine(webRootPath, "index.html.br"), logger);
         }
 
         private static void WriteCompressedCopiesIfPresent(ILogger logger, string webRootPath, string html)
@@ -207,11 +241,29 @@ namespace Jellyfin.Plugin.JMSFusion
                     return false;
                 }
 
+                var html = File.ReadAllText(indexPath, Encoding.UTF8);
+                var hasInjectBlock = HasInjectBlock(html);
+                var backupPath = GetBackupPath(indexPath);
+                var hasBackup = File.Exists(backupPath);
+
+                if (!hasInjectBlock)
+                {
+                    logger.LogInformation("[JMSFusion] Unpatch: inject block not found (already clean)");
+                    if (hasBackup)
+                    {
+                        if (IsWritable(indexPath, logger))
+                        {
+                            WriteCompressedCopiesIfPresent(logger, webRootPath, html);
+                            DeleteBackupsIfPresent(logger, webRootPath);
+                        }
+                    }
+                    return true;
+                }
+
                 if (!IsWritable(indexPath, logger))
                     return false;
 
-                var backupPath = indexPath + ".jmsfusion.bak";
-                if (File.Exists(backupPath))
+                if (hasBackup)
                 {
                     try
                     {
@@ -219,6 +271,7 @@ namespace Jellyfin.Plugin.JMSFusion
                         logger.LogInformation("[JMSFusion] Unpatch: restored from backup: {BackupPath}", backupPath);
                         var restored = File.ReadAllText(indexPath, Encoding.UTF8);
                         WriteCompressedCopiesIfPresent(logger, webRootPath, restored);
+                        DeleteBackupsIfPresent(logger, webRootPath);
                         return true;
                     }
                     catch (Exception ex)
@@ -227,20 +280,19 @@ namespace Jellyfin.Plugin.JMSFusion
                     }
                 }
 
-                var html = File.ReadAllText(indexPath, Encoding.UTF8);
                 var (s, e) = FindInjectRange(html);
                 if (s < 0 || e < 0)
                 {
                     logger.LogInformation("[JMSFusion] Unpatch: inject block not found (already clean)");
-                    WriteCompressedCopiesIfPresent(logger, webRootPath, html);
+                    DeleteBackupsIfPresent(logger, webRootPath);
                     return true;
                 }
 
                 html = html.Remove(s, e - s);
-                EnsureBackup(indexPath, logger);
                 File.WriteAllText(indexPath, html, Encoding.UTF8);
                 logger.LogInformation("[JMSFusion] Unpatch: inject block removed");
                 WriteCompressedCopiesIfPresent(logger, webRootPath, html);
+                DeleteBackupsIfPresent(logger, webRootPath);
                 return true;
             }
             catch (Exception ex)

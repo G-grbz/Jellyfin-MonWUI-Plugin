@@ -15,7 +15,6 @@ const RADIO_STATIONS_KEYS = [
   "sharedRadioStations"
 ];
 
-const RADIO_SOURCE_PATH = "./slider/modules/hlsjs/hls.min.js";
 const STATIC_SHARED_RADIO_PATH = "./slider/radio-stations.json";
 const LOCAL_SHARED_RADIO_KEY = "gmmp:radioStations:v1";
 const BACKEND_MODE_KEY = "gmmp:radioBackendMode";
@@ -23,7 +22,6 @@ const RADIO_ART_PROBE_CACHE_MAX = 600;
 const RADIO_ART_RESOLVE_CACHE_MAX = 400;
 const RADIO_BROWSER_SEARCH_PAGE_LIMIT = 100;
 
-let hlsReadyPromise = null;
 let sharedBackendMode = (() => {
   try {
     return sessionStorage.getItem(BACKEND_MODE_KEY) || "unknown";
@@ -969,28 +967,6 @@ function parseId3Metadata(data) {
   return parsed.displayText ? parsed : null;
 }
 
-function parseHlsMetadataSample(sample) {
-  const parsed = parseId3Metadata(
-    sample?.data
-    || sample?.payload
-    || sample?.unit
-    || sample
-  );
-  if (parsed?.displayText) return parsed;
-
-  const frames = Array.isArray(sample?.frames) ? sample.frames : [];
-  for (const frame of frames) {
-    const nextParsed = parseRadioNowPlaying({
-      currentArtist: frame?.info || frame?.artist,
-      currentTitle: frame?.value || frame?.title,
-      nowPlayingText: frame?.text || frame?.data || frame?.value
-    });
-    if (nextParsed.displayText) return nextParsed;
-  }
-
-  return null;
-}
-
 function parseIcyMetadata(metadataText) {
   const parsed = parseRadioNowPlaying({
     nowPlayingText: extractNowPlayingTextCandidate(metadataText)
@@ -1247,7 +1223,6 @@ export function normalizeRadioStation(rawStation, { source = "radio-browser" } =
     bitrate: toNumber(rawStation.bitrate || rawStation.Bitrate, 0),
     votes: toNumber(rawStation.votes || rawStation.Votes, 0),
     clickcount: toNumber(rawStation.clickcount || rawStation.ClickCount, 0),
-    hls: toNumber(rawStation.hls || rawStation.Hls, 0) === 1,
     source: text(rawStation.source || rawStation.Source, source),
     createdAt: text(rawStation.createdAt || rawStation.CreatedAt, new Date().toISOString()),
     addedBy: text(rawStation.addedBy || rawStation.AddedBy),
@@ -1339,7 +1314,6 @@ export function toRadioTrack(station) {
     Bitrate: normalized.bitrate,
     ClickCount: normalized.clickcount,
     Votes: normalized.votes,
-    Hls: normalized.hls,
     Source: normalized.source,
     IsFavoriteCapable: false,
     createdAt: normalized.createdAt,
@@ -1564,7 +1538,6 @@ function toSharedRecord(station) {
     Bitrate: station.bitrate,
     ClickCount: station.clickcount,
     Votes: station.votes,
-    Hls: station.hls,
     Source: "shared",
     CreatedAt: station.createdAt,
     AddedBy: station.addedBy,
@@ -1791,42 +1764,9 @@ export function activateRadioPlaylist(stations, startIndex = 0) {
   return nextIndex;
 }
 
-function shouldUseHls(url) {
-  const value = text(url).toLowerCase();
-  return value.includes(".m3u8");
-}
-
-async function ensureHlsLibrary() {
-  if (window.Hls) return window.Hls;
-  if (hlsReadyPromise) return hlsReadyPromise;
-
-  hlsReadyPromise = new Promise((resolve, reject) => {
-    const existing = document.querySelector('script[data-hls-library="1"]');
-    if (existing) {
-      existing.addEventListener("load", () => resolve(window.Hls || null), { once: true });
-      existing.addEventListener("error", () => reject(new Error("hls.js yuklenemedi")), { once: true });
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = RADIO_SOURCE_PATH;
-    script.async = true;
-    script.defer = true;
-    script.dataset.hlsLibrary = "1";
-    script.onload = () => resolve(window.Hls || null);
-    script.onerror = () => reject(new Error("hls.js yuklenemedi"));
-    document.head.appendChild(script);
-  });
-
-  return hlsReadyPromise;
-}
-
 export function cleanupAttachedRadioStream(audio) {
   if (!audio) return;
   stopRadioMetadataReader(audio);
-  if (!audio._radioHls) return;
-  try { audio._radioHls.destroy(); } catch {}
-  delete audio._radioHls;
 }
 
 export async function attachRadioStream(audio, url, options = {}) {
@@ -1844,75 +1784,10 @@ export async function attachRadioStream(audio, url, options = {}) {
 
   cleanupAttachedRadioStream(audio);
 
-  if (shouldUseHls(streamUrl)) {
-    const HlsRef = await ensureHlsLibrary().catch(() => null);
-    if (HlsRef?.isSupported?.()) {
-      return new Promise((resolve, reject) => {
-        let settled = false;
-        const hls = new HlsRef({
-          enableWorker: true,
-          lowLatencyMode: true,
-          maxBufferLength: 30,
-          maxMaxBufferLength: 60,
-          maxBufferSize: 60 * 1000 * 1000
-        });
-
-        const fail = (error) => {
-          if (settled) return;
-          settled = true;
-          cleanupAttachedRadioStream(audio);
-          reject(error);
-        };
-
-        hls.on(HlsRef.Events.MANIFEST_PARSED, () => {
-          if (settled) return;
-          settled = true;
-          resolve({ url: streamUrl, hls: true });
-        });
-
-        if (onMetadata && HlsRef.Events?.FRAG_PARSING_METADATA) {
-          hls.on(HlsRef.Events.FRAG_PARSING_METADATA, (_event, data) => {
-            const samples = Array.isArray(data?.samples) ? data.samples : [];
-            for (const sample of samples) {
-              const parsed = parseHlsMetadataSample(sample);
-              if (parsed?.displayText) {
-                onMetadata(parsed);
-              }
-            }
-          });
-        }
-
-        hls.on(HlsRef.Events.ERROR, (event, data) => {
-          if (!data?.fatal) return;
-
-          switch (data.type) {
-            case HlsRef.ErrorTypes.NETWORK_ERROR:
-              try { hls.startLoad(); } catch {}
-              break;
-            case HlsRef.ErrorTypes.MEDIA_ERROR:
-              try { hls.recoverMediaError(); } catch {}
-              break;
-            default:
-              fail(new Error(data?.details || "HLS oynatma hatasi"));
-              break;
-          }
-        });
-
-        audio._radioHls = hls;
-        try {
-          hls.loadSource(streamUrl);
-          hls.attachMedia(audio);
-        } catch (error) {
-          fail(error);
-        }
-      });
-    }
-  }
-
   audio.src = streamUrl;
   audio.load();
   if (onMetadata && !disableMetadataReader && !isRadioPlaylistUrl(streamUrl)) {
     startIcyMetadataReader(audio, streamUrl, onMetadata).catch(() => {});
   }
-  return { url: streamUrl, hls: false };
+  return { url: streamUrl };
 }

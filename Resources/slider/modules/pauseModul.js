@@ -164,7 +164,7 @@ const SESSION_FETCH_TTL_MS = 500;
 const SESSION_FETCH_EMPTY_TTL_MS = 150;
 let _sessSnapshotCache = {
   at: 0,
-  value: { itemId: null, isPaused: null },
+  value: { itemId: null, isPaused: null, sessionId: null, deviceId: null },
   promise: null,
 };
 
@@ -172,6 +172,131 @@ function _cacheSessionSnapshot(value) {
   _sessSnapshotCache.at = Date.now();
   _sessSnapshotCache.value = value;
   return value;
+}
+
+function normalizeSessionIdentity(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function addSessionIdentity(set, value) {
+  const normalized = normalizeSessionIdentity(value);
+  if (!normalized) return;
+  set.add(normalized);
+}
+
+function buildPauseOverlaySessionIdentity() {
+  const info = getSessionInfo?.() || {};
+  const userIds = new Set();
+  const sessionIds = new Set();
+  const deviceIds = new Set();
+  const deviceNames = new Set();
+  const itemIds = new Set();
+  const clientHints = [];
+
+  addSessionIdentity(userIds, info?.userId);
+  addSessionIdentity(userIds, getUserIdSafe?.());
+
+  addSessionIdentity(sessionIds, info?.sessionId);
+  try { addSessionIdentity(sessionIds, window.ApiClient?._sessionId); } catch {}
+
+  addSessionIdentity(deviceIds, info?.deviceId);
+  try {
+    const api = window.ApiClient || null;
+    const apiDeviceId =
+      typeof api?.deviceId === "function"
+        ? api.deviceId()
+        : (api?.getDeviceId?.() || api?.deviceId || api?._deviceId || null);
+    addSessionIdentity(deviceIds, apiDeviceId);
+  } catch {}
+
+  addSessionIdentity(deviceNames, info?.deviceName);
+  try { addSessionIdentity(deviceNames, window.ApiClient?._deviceName); } catch {}
+
+  addSessionIdentity(itemIds, activeVideo ? parsePlayableIdFromVideo(activeVideo) : null);
+  addSessionIdentity(itemIds, getItemIdFromDom());
+  addSessionIdentity(itemIds, getRecentPlayNowTargetId());
+
+  [
+    info?.clientName,
+    "Jellyfin Web Client",
+  ]
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean)
+    .forEach((value) => clientHints.push(value));
+
+  return {
+    userIds,
+    sessionIds,
+    deviceIds,
+    deviceNames,
+    itemIds,
+    clientHints,
+  };
+}
+
+function scorePauseOverlaySessionCandidate(session, identity) {
+  let score = 0;
+  const sessionId = normalizeSessionIdentity(session?.Id);
+  const deviceId = normalizeSessionIdentity(session?.DeviceId);
+  const deviceName = normalizeSessionIdentity(session?.DeviceName);
+  const userId = normalizeSessionIdentity(session?.UserId);
+  const itemId = normalizeSessionIdentity(session?.NowPlayingItem?.Id);
+  const clientName = String(session?.Client || "").trim().toLowerCase();
+
+  if (sessionId && identity.sessionIds.has(sessionId)) score += 1200;
+  if (deviceId && identity.deviceIds.has(deviceId)) score += 1000;
+  if (deviceName && identity.deviceNames.has(deviceName)) score += 600;
+  if (userId && identity.userIds.has(userId)) score += 220;
+  if (itemId && identity.itemIds.has(itemId)) score += 180;
+  if (clientName && identity.clientHints.some((hint) => clientName.includes(hint))) score += 20;
+  if (session?.NowPlayingItem?.Id) score += 8;
+
+  const last = session?.LastActivityDate ? new Date(session.LastActivityDate).getTime() : 0;
+  if (last && Date.now() - last < 2 * 60 * 1000) score += 10;
+
+  return score;
+}
+
+function selectPauseOverlaySession(sessions) {
+  const identity = buildPauseOverlaySessionIdentity();
+  const all = Array.isArray(sessions) ? sessions : [];
+  const mine = all.filter((session) => {
+    const userId = normalizeSessionIdentity(session?.UserId);
+    return !!userId && identity.userIds.has(userId);
+  });
+
+  if (!mine.length) return null;
+
+  const ranked = mine
+    .map((session) => ({
+      session,
+      score: scorePauseOverlaySessionCandidate(session, identity),
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  const hardMatch = ranked.find(({ session }) => {
+    const sessionId = normalizeSessionIdentity(session?.Id);
+    const deviceId = normalizeSessionIdentity(session?.DeviceId);
+    const deviceName = normalizeSessionIdentity(session?.DeviceName);
+    return (
+      (sessionId && identity.sessionIds.has(sessionId)) ||
+      (deviceId && identity.deviceIds.has(deviceId)) ||
+      (deviceName && identity.deviceNames.has(deviceName))
+    );
+  });
+  if (hardMatch) return hardMatch.session;
+
+  const hintedItemMatch = ranked.find(({ session }) => {
+    const itemId = normalizeSessionIdentity(session?.NowPlayingItem?.Id);
+    return !!itemId && identity.itemIds.has(itemId);
+  });
+  if (hintedItemMatch) return hintedItemMatch.session;
+
+  const nowPlayingMine = mine.filter((session) => session?.NowPlayingItem?.Id);
+  if (nowPlayingMine.length === 1) return nowPlayingMine[0];
+  if (mine.length === 1) return mine[0];
+
+  return null;
 }
 
 async function fetchNowPlayingFromSessions({ force = false } = {}){
@@ -188,23 +313,23 @@ async function fetchNowPlayingFromSessions({ force = false } = {}){
   const request = (async () => {
     try {
       const uid = getUserIdSafe();
-      if (!uid) return _cacheSessionSnapshot({ itemId:null,isPaused:null });
+      if (!uid) return _cacheSessionSnapshot({ itemId:null,isPaused:null, sessionId:null, deviceId:null });
 
       const sessions = await makeApiRequest(withServer(`/Sessions?ActiveWithinSeconds=30`));
       const list = Array.isArray(sessions)?sessions:[];
-
-      const mine = list.filter(s=>s?.UserId===uid);
-      const active = mine.find(s=>s?.NowPlayingItem?.Id) || mine[0];
-      if (!active) return _cacheSessionSnapshot({ itemId:null,isPaused:null });
+      const active = selectPauseOverlaySession(list);
+      if (!active) return _cacheSessionSnapshot({ itemId:null,isPaused:null, sessionId:null, deviceId:null });
 
       const r = {
         itemId: active.NowPlayingItem?.Id || null,
-        isPaused: active.PlayState?.IsPaused ?? null
+        isPaused: active.PlayState?.IsPaused ?? null,
+        sessionId: active.Id || null,
+        deviceId: active.DeviceId || null,
       };
 
       return _cacheSessionSnapshot(r);
     } catch {
-      return _cacheSessionSnapshot({ itemId:null,isPaused:null });
+      return _cacheSessionSnapshot({ itemId:null,isPaused:null, sessionId:null, deviceId:null });
     } finally {
       _sessSnapshotCache.promise = null;
     }

@@ -163,7 +163,6 @@ function hardWipeModalDom(modal = modalState.videoModal) {
   const v = modalState.modalVideo;
   if (v) {
     try {
-      if (v._hls) { v._hls.destroy(); delete v._hls; }
       v.pause(); v.removeAttribute('src'); v.load(); v.style.opacity = '0'; v.style.display = 'none';
     } catch {}
   }
@@ -188,10 +187,6 @@ export async function updateModalContent(item, videoUrl) {
   const cfg = getConfig();
 
   clearTransientOverlays(modal);
-  if (modalState.modalVideo && modalState.modalVideo._hls) {
-    modalState.modalVideo._hls.destroy();
-    delete modalState.modalVideo._hls;
-  }
 
   const contextIsDot = modalState._modalContext === 'monwui-dot';
   const dotMode = cfg.dotPreviewPlaybackMode || null;
@@ -245,7 +240,7 @@ export async function updateModalContent(item, videoUrl) {
         modalState.modalVideo.style.display = 'block';
         modalState.modalVideo.style.opacity = '1';
       }
-      if (await gatePlaybackStart(item?.Id)) modal.initHlsPlayer(trailerUrl);
+      if (await gatePlaybackStart(item?.Id)) modal.initVideoPlayer(trailerUrl);
       addTrailerTip(modal, cfg.languageLabels?.yerelFragman || 'Yerel fragman');
     } else if (isYTValid) {
       hideTrailerIframe(modal);
@@ -272,7 +267,7 @@ export async function updateModalContent(item, videoUrl) {
         modalState.modalVideo.style.display = 'block';
         modalState.modalVideo.style.opacity = '1';
       }
-      if (await gatePlaybackStart(item?.Id)) modal.initHlsPlayer(trailerUrl);
+      if (await gatePlaybackStart(item?.Id)) modal.initVideoPlayer(trailerUrl);
       addTrailerTip(modal, cfg.languageLabels?.yerelFragman || 'Yerel fragman');
     } else if (isYTValid) {
       if (modalState.modalVideo) {
@@ -285,7 +280,7 @@ export async function updateModalContent(item, videoUrl) {
         ? (cfg.languageLabels?.diziFragmani || 'Dizi fragmanı')
         : (cfg.languageLabels?.fragman || 'Fragman'));
     } else if (videoUrl) {
-      if (await gatePlaybackStart(item?.Id)) modal.initHlsPlayer(videoUrl);
+      if (await gatePlaybackStart(item?.Id)) modal.initVideoPlayer(videoUrl);
     } else {
       hideTrailerIframe(modal);
       if (modalState.modalVideo) {
@@ -297,14 +292,14 @@ export async function updateModalContent(item, videoUrl) {
   }
   else {
     if (videoUrl) {
-      if (await gatePlaybackStart(item?.Id)) modal.initHlsPlayer(videoUrl);
+      if (await gatePlaybackStart(item?.Id)) modal.initVideoPlayer(videoUrl);
     } else if (isLocal) {
       hideTrailerIframe(modal);
       if (modalState.modalVideo) {
         modalState.modalVideo.style.display = 'block';
         modalState.modalVideo.style.opacity = '1';
       }
-      if (await gatePlaybackStart(item?.Id)) modal.initHlsPlayer(trailerUrl);
+      if (await gatePlaybackStart(item?.Id)) modal.initVideoPlayer(trailerUrl);
       addTrailerTip(modal, cfg.languageLabels?.yerelFragman || 'Yerel fragman');
     } else if (isYTValid) {
       if (await gatePlaybackStart(item?.Id)) {
@@ -730,9 +725,8 @@ export function createVideoModal({ showButtons = true, context = 'monwui-dot' } 
 
   if (showButtons) modal.appendChild(buttonsContainer);
   modal.appendChild(infoContainer);
-  modal.initHlsPlayer = async function(url) {
+  modal.initVideoPlayer = async function(url) {
     url = absServerUrl(url);
-    if (video._hls) { video._hls.destroy(); delete video._hls; }
     video.pause();
     video.src = '';
     video.load();
@@ -743,47 +737,11 @@ export function createVideoModal({ showButtons = true, context = 'monwui-dot' } 
     if (showButtons) modal.appendChild(buttonsContainer);
     await sleep(150);
 
-    if (window.Hls && Hls.isSupported && Hls.isSupported() && url.includes('.m3u8')) {
-      const hls = new Hls({
-        enableWorker: true, lowLatencyMode: true,
-        maxBufferLength: 30, maxMaxBufferLength: 60, maxBufferSize: 60 * 1000 * 1000,
-        maxBufferHole: 0.5, startLevel: -1, abrEwmaDefaultEstimate: 500000,
-        abrBandWidthFactor: 0.95, abrBandWidthUpFactor: 0.7, abrEwmaSlowVoD: 5000
-      });
-      hls.loadSource(url);
-      hls.attachMedia(video);
-      const startAt = 10 * 60;
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        hls.startLoad(startAt);
-        Promise.resolve(video.play()).catch(e => { if (e.name !== 'AbortError') console.warn('Video oynatma hatası:', e); });
-      });
-      hls.on(Hls.Events.ERROR, (event, data) => {
-        if (data.fatal) {
-          switch (data.type) {
-            case Hls.ErrorTypes.NETWORK_ERROR: hls.startLoad(); break;
-            case Hls.ErrorTypes.MEDIA_ERROR: hls.recoverMediaError(); break;
-            default:
-              hls.destroy();
-              setTimeout(() => startVideoPlayback(url), 150);
-              break;
-          }
-        } else if (data.details === Hls.ErrorDetails.BUFFER_APPEND_ERROR) {
-          hls.recoverMediaError();
-        }
-      });
-      video._hls = hls;
-    } else {
-      video.src = url;
-      video.addEventListener('loadedmetadata', () => {
-        video.currentTime = 10 * 60;
-        Promise.resolve(video.play()).catch(e => { if (e.name !== 'AbortError') console.warn('Video oynatma hatası:', e); });
-      }, { once: true });
-    }
-  };
-
-  modal.cleanupHls = function() {
-    if (video && video._hls) { video._hls.destroy(); delete video._hls; }
-    hideTrailerIframe(modal);
+    video.src = url;
+    video.addEventListener('loadedmetadata', () => {
+      video.currentTime = 10 * 60;
+      Promise.resolve(video.play()).catch(e => { if (e.name !== 'AbortError') console.warn('Video oynatma hatası:', e); });
+    }, { once: true });
   };
 
   document.body.appendChild(modal);
@@ -1442,10 +1400,6 @@ export function hardStopPlayback() {
     hideTrailerIframe();
 
     if (modalState.modalVideo) {
-      if (modalState.modalVideo._hls) {
-        modalState.modalVideo._hls.destroy();
-        delete modalState.modalVideo._hls;
-      }
       modalState.modalVideo.pause();
       modalState.modalVideo.removeAttribute('src');
       modalState.modalVideo.load();
@@ -1688,10 +1642,6 @@ export function destroyVideoModal() {
     if (modalState.modalVideo) {
       modalState.modalVideo.pause();
       modalState.modalVideo.src = '';
-      if (modalState.modalVideo._hls) {
-        modalState.modalVideo._hls.destroy();
-        delete modalState.modalVideo._hls;
-      }
     }
     try { hardWipeModalDom(modalState.videoModal); } catch {}
     try { modalState.videoModal.remove(); } catch {}
@@ -2925,7 +2875,6 @@ function startVideoPlayback(url) {
     const v = modalState.modalVideo;
     if (!v) return;
     url = absServerUrl(url);
-    if (v._hls) { v._hls.destroy(); delete v._hls; }
     v.pause();
     v.src = url;
     v.load();

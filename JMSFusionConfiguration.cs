@@ -104,6 +104,9 @@ namespace Jellyfin.Plugin.JMSFusion
         [JsonPropertyName("watchlistRevision")]
         public long WatchlistRevision { get; set; } = 0;
 
+        [JsonPropertyName("enablePhysicalIndexHtmlPatchFallback")]
+        public bool EnablePhysicalIndexHtmlPatchFallback { get; set; } = false;
+
         [JsonPropertyName("itemComments")]
         public List<ItemCommentEntry> ItemComments { get; set; } = new();
 
@@ -168,7 +171,6 @@ namespace Jellyfin.Plugin.JMSFusion
         public int Bitrate { get; set; }
         public int ClickCount { get; set; }
         public int Votes { get; set; }
-        public bool Hls { get; set; }
         public string? Source { get; set; }
         public string? CreatedAt { get; set; }
         public string? AddedBy { get; set; }
@@ -206,6 +208,7 @@ namespace Jellyfin.Plugin.JMSFusion
         public string? TargetUserName { get; set; }
         public string? Note { get; set; }
         public long SharedAtUtc { get; set; }
+        public WatchlistEntry? EntrySnapshot { get; set; }
     }
 
     public class ItemCommentEntry

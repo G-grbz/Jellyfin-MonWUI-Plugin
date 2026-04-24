@@ -2984,16 +2984,15 @@ function uniqById(items = [], seen = new Set()) {
 }
 
 async function getBoxSetForMovieCached(movieId, { signal } = {}) {
+  const cacheKey = String(movieId || "");
+  if (cacheKey && _boxSetCache.has(cacheKey)) return _boxSetCache.get(cacheKey);
+
   const cached = await CollectionCacheDB.getMovieBoxset(movieId).catch(() => null);
 
   if (cached && !isStale(cached.updatedAt, TTL_MOVIE_BOXSET)) {
-    CollectionCacheDB.idle(async () => {
-      try {
-        const live = await getBoxSetForMovie(movieId, { signal: _bgAbort?.signal || null });
-        await CollectionCacheDB.setMovieBoxset(movieId, live?.id || "", live?.name || "");
-      } catch {}
-    });
-    return cached.boxsetId ? { id: cached.boxsetId, name: cached.boxsetName } : null;
+    const hit = cached.boxsetId ? { id: cached.boxsetId, name: cached.boxsetName } : null;
+    if (cacheKey) _boxSetCache.set(cacheKey, hit);
+    return hit;
   }
 
   const live = await getBoxSetForMovie(movieId, { signal });
@@ -3038,18 +3037,21 @@ async function getBoxSetForMovie(movieId, { signal } = {}) {
     qp.set("Fields", "ChildCount");
     if (movieName) qp.set("SearchTerm", movieName);
 
-    let res = await ApiClient.getJSON(`/Items?${qp.toString()}`);
+    let res = await makeApiRequest(`/Items?${qp.toString()}`, { signal });
     let candidates = res?.Items || [];
 
     if (!candidates.length) {
       qp.delete("SearchTerm");
       qp.set("Limit", "1000");
-      res = await ApiClient.getJSON(`/Items?${qp.toString()}`);
+      res = await makeApiRequest(`/Items?${qp.toString()}`, { signal });
       candidates = res?.Items || [];
     }
 
     for (const s of (candidates || []).filter(x => (x?.ChildCount ?? 1) > 0)) {
-      const children = await ApiClient.getJSON(`/Items?UserId=${userId}&ParentId=${s.Id}`);
+      const childQp = new URLSearchParams();
+      childQp.set("UserId", userId);
+      childQp.set("ParentId", String(s.Id));
+      const children = await makeApiRequest(`/Items?${childQp.toString()}`, { signal });
       if ((children?.Items || []).some(x => String(x.Id) === String(movieId))) {
         const hit = { id: s.Id, name: s.Name };
         if (cacheKey) _boxSetCache.set(cacheKey, hit);

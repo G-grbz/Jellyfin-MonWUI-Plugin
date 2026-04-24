@@ -165,7 +165,7 @@
              role="tabpanel"
              aria-labelledby="tabSnippet"
              hidden>
-      <div class="jms-grid jms-grid--split">
+      <div id="snippetGrid" class="jms-grid jms-grid--split">
         <div class="jms-card">
           <div class="jms-card-head">
             <h3 id="snippetCardTitle">HTML Snippet</h3>
@@ -176,7 +176,7 @@
           </div>
         </div>
 
-        <div class="jms-card">
+        <div id="envCard" class="jms-card">
           <div class="jms-card-head">
             <h3 id="envCardTitle">Web Path &amp; Permissions</h3>
             <p id="envCardBody">Detected web root, file write permissions, and suggested ACL commands for patching.</p>
@@ -393,6 +393,10 @@
   grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
 }
 
+#JMSFusionConfigPage .jms-grid--single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 #JMSFusionConfigPage .jms-card {
   padding: 22px;
 }
@@ -576,6 +580,24 @@
   border-style: solid;
   color: var(--jms-gold);
   background: var(--jms-gold-soft);
+}
+
+#JMSFusionConfigPage .jms-inline-toggle {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--jms-border);
+}
+
+#JMSFusionConfigPage .jms-inline-toggle .inputLabel--checkbox,
+#JMSFusionConfigPage .jms-inline-toggle .fieldDescription {
+  color: inherit;
+}
+
+#JMSFusionConfigPage .jms-inline-toggle .fieldDescription {
+  margin-top: 0;
+  opacity: 0.92;
 }
 
 #JMSFusionConfigPage .jms-empty--error {

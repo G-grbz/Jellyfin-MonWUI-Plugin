@@ -1000,8 +1000,6 @@ function mutateCacheAfterRemove(itemId) {
   if (!dashboardCache) return;
   const id = text(itemId);
   dashboardCache.myItems = (dashboardCache.myItems || []).filter((item) => text(item?.ItemId || item?.itemId) !== id);
-  dashboardCache.sharedWithMe = (dashboardCache.sharedWithMe || []).filter((item) => text(item?.ItemId || item?.itemId || item?.Entry?.ItemId) !== id);
-  dashboardCache.outgoingShares = (dashboardCache.outgoingShares || []).filter((share) => text(share?.ItemId || share?.itemId) !== id);
   refreshMembership(dashboardCache);
 }
 
@@ -4753,18 +4751,6 @@ function applyWatchlistChangeToModel(model, detail = {}) {
         nextOwn.push(view);
       }
       bucket.own = nextOwn;
-
-      const nextShared = [];
-      for (const view of bucket.shared || []) {
-        if (text(view?.itemId) === itemId) {
-          removedItemIds.add(itemId);
-          removedViewKeysBySection.shared.add(text(view?.key, `shared:${text(view?.shareId) || itemId}`));
-          affectedTabs.add(tab.key);
-          continue;
-        }
-        nextShared.push(view);
-      }
-      bucket.shared = nextShared;
       continue;
     }
 
@@ -4916,13 +4902,13 @@ async function applyWatchlistChangeToOpenModal(root, detail = {}) {
     );
 
     const ownHandled = updateWatchlistSectionAfterRemoval(root, "own", ownTitle, ownItems, {
-      removedItemId: change.removedItemId,
+      removedItemId: change.removedViewKeysBySection?.own?.size ? change.removedItemId : "",
       removedShareId: change.removedShareId,
       removedViewKeys: change.removedViewKeysBySection?.own,
       updatedViewKeys: ownUpdated
     });
     const sharedHandled = updateWatchlistSectionAfterRemoval(root, "shared", sharedTitle, sharedItems, {
-      removedItemId: change.removedItemId,
+      removedItemId: change.removedViewKeysBySection?.shared?.size ? change.removedItemId : "",
       removedShareId: change.removedShareId,
       removedViewKeys: change.removedViewKeysBySection?.shared,
       updatedViewKeys: sharedUpdated

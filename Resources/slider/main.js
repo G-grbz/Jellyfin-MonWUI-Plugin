@@ -732,12 +732,78 @@ function hasCustomSplashVisibleNonHomePage() {
   return !!(pageId || routeHint);
 }
 
+function getCustomSplashCandidateSlide(targetSlide = null) {
+  if (targetSlide?.isConnected) {
+    return targetSlide;
+  }
+
+  return document.querySelector(
+    "#indexPage:not(.hide) #monwui-slides-container .monwui-slide.active, " +
+    "#homePage:not(.hide) #monwui-slides-container .monwui-slide.active, " +
+    "#monwui-slides-container .monwui-slide.active, " +
+    "#indexPage:not(.hide) #monwui-slides-container .monwui-slide, " +
+    "#homePage:not(.hide) #monwui-slides-container .monwui-slide, " +
+    "#monwui-slides-container .monwui-slide"
+  );
+}
+
+function isCustomSplashSlideVisuallyReady(targetSlide = null) {
+  const slide = getCustomSplashCandidateSlide(targetSlide);
+  if (!slide?.isConnected) return false;
+
+  const container = slide.closest?.("#monwui-slides-container");
+  if (!container || !isVisible(container)) return false;
+  if (!isVisible(slide)) return false;
+  if (!slide.classList.contains("active")) return false;
+  if (slide.classList.contains("is-hidden") || slide.classList.contains("peak-batch-pending")) {
+    return false;
+  }
+
+  try {
+    const slideStyle = getComputedStyle(slide);
+    if (slideStyle.display === "none" || slideStyle.visibility === "hidden") {
+      return false;
+    }
+    if (Number.parseFloat(slideStyle.opacity || "1") < 0.04) {
+      return false;
+    }
+  } catch {}
+
+  const backdrop = slide.__backdropImg || slide.querySelector?.(".monwui-backdrop");
+  if (!backdrop?.isConnected) return false;
+
+  const backdropReady =
+    slide.classList.contains("backdrop-ready") ||
+    !!String(slide.dataset?.backdropReady || "").trim() ||
+    (!!backdrop.complete && Number(backdrop.naturalWidth || 0) > 0);
+  if (!backdropReady) return false;
+
+  try {
+    const backdropStyle = getComputedStyle(backdrop);
+    if (backdropStyle.display === "none" || backdropStyle.visibility === "hidden") {
+      return false;
+    }
+    if (Number.parseFloat(backdropStyle.opacity || "1") < 0.04 && !slide.classList.contains("backdrop-ready")) {
+      return false;
+    }
+  } catch {}
+
+  if (container.classList.contains("peak-mode")) {
+    if (!container.classList.contains("peak-ready")) return false;
+    if (
+      container.classList.contains("peak-first-reveal") &&
+      !container.classList.contains("peak-first-reveal-active")
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function hasCustomSplashFirstSlideReady() {
   try {
-    if (!window.__jmsFirstSlideReady) return false;
-    return !!document.querySelector(
-      "#indexPage .monwui-slide, #homePage .monwui-slide, #monwui-slides-container .monwui-slide"
-    );
+    return isCustomSplashSlideVisuallyReady();
   } catch {
     return false;
   }
@@ -1106,7 +1172,7 @@ function hasRenderablePersonalRecommendationUi(cfg = getMainConfig()) {
 function hasRenderableRecentRowsUi(cfg = getMainConfig()) {
   if (!shouldRenderRecentRowsUi(cfg)) return true;
   return hasRenderableDom(
-    "#recent-rows .recent-row-section .personal-recs-card:not(.skeleton), #recent-rows .recent-row-section .no-recommendations, #recent-rows .recent-row-section .dir-row-hero"
+    "#recent-rows .recent-row-section .personal-recs-card:not(.skeleton), #recent-rows .recent-row-section .no-recommendations, #recent-rows .recent-row-section .dir-row-hero, #continue-rows .recent-row-section .personal-recs-card:not(.skeleton), #continue-rows .recent-row-section .no-recommendations, #continue-rows .recent-row-section .dir-row-hero"
   );
 }
 
@@ -1490,6 +1556,93 @@ function scheduleSliderIdleTask(cb) {
   return handle;
 }
 
+function waitForFirstSlideVisualReady(
+  slideEl,
+  bootToken = Number(window.__jmsSliderBootToken) || 0,
+  { timeoutMs = 3200 } = {}
+) {
+  if (!isSliderBootTokenCurrent(bootToken, { requireHomeVisible: false })) {
+    return Promise.resolve(false);
+  }
+
+  if (isCustomSplashSlideVisuallyReady(slideEl)) {
+    return Promise.resolve(true);
+  }
+
+  return new Promise((resolve) => {
+    let done = false;
+    let rafA = 0;
+    let rafB = 0;
+    let timer = 0;
+    let observer = null;
+
+    const cleanup = () => {
+      if (rafA) cancelAnimationFrame(rafA);
+      if (rafB) cancelAnimationFrame(rafB);
+      if (timer) clearTimeout(timer);
+      try { observer?.disconnect?.(); } catch {}
+      try { document.removeEventListener("jms:slide-enter", scheduleCheck, true); } catch {}
+      try { window.removeEventListener("pageshow", scheduleCheck); } catch {}
+      try { document.removeEventListener("visibilitychange", scheduleCheck); } catch {}
+      rafA = 0;
+      rafB = 0;
+      timer = 0;
+      observer = null;
+    };
+
+    const finish = (ready = false) => {
+      if (done) return;
+      done = true;
+      cleanup();
+      resolve(ready);
+    };
+
+    const check = () => {
+      if (!isSliderBootTokenCurrent(bootToken, { requireHomeVisible: false })) {
+        finish(false);
+        return;
+      }
+      if (isCustomSplashSlideVisuallyReady(slideEl)) {
+        finish(true);
+      }
+    };
+
+    function scheduleCheck() {
+      if (done || rafA || rafB) return;
+      rafA = requestAnimationFrame(() => {
+        rafA = 0;
+        rafB = requestAnimationFrame(() => {
+          rafB = 0;
+          check();
+        });
+      });
+    }
+
+    observer = new MutationObserver(() => {
+      scheduleCheck();
+    });
+
+    try {
+      observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["class", "style", "hidden", "aria-hidden"]
+      });
+    } catch {}
+
+    document.addEventListener("jms:slide-enter", scheduleCheck, true);
+    window.addEventListener("pageshow", scheduleCheck);
+    document.addEventListener("visibilitychange", scheduleCheck);
+
+    timer = window.setTimeout(() => {
+      finish(isCustomSplashSlideVisuallyReady(slideEl));
+    }, Math.max(800, Number(timeoutMs) || 0));
+
+    scheduleCheck();
+  });
+}
+
 function markFirstSlideReady(bootToken = Number(window.__jmsSliderBootToken) || 0) {
   if (!isSliderBootTokenCurrent(bootToken, { requireHomeVisible: false })) return;
   if (window.__jmsFirstSlideReady) return;
@@ -1668,6 +1821,7 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
       '#genre-hubs',
       '#director-rows',
       '#recent-rows',
+      '#continue-rows',
       '#because-you-watched',
       '[id^="because-you-watched--"]'
     ]);
@@ -1773,6 +1927,7 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
     '#genre-hubs',
     '#director-rows',
     '#recent-rows',
+    '#continue-rows',
     '#because-you-watched',
     '[id^="because-you-watched--"]',
     '#studio-hubs',
@@ -2509,9 +2664,6 @@ function setupGlobalModalInit() {
   whenFirstSlideReadyOrTimeout(() => {
     queueHoverModuleBoot();
   }, 2500);
-  idle(() => {
-    if (!window.hls) loadHls().catch(() => {});
-  });
   const observer = observeDOMChanges();
   return () => observer.disconnect();
 }
@@ -2675,17 +2827,6 @@ function filterByStrictImageTypes(items, query) {
   return items.filter((it) =>
     requested.every((t) => itemHasImageType(it, t))
   );
-}
-
-export async function loadHls() {
-  if (window.hls) return;
-  return new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = resolveSliderAssetHref("/slider/modules/hlsjs/hls.min.js");
-    script.onload = resolve;
-    script.onerror = () => reject(new Error("hls yüklenemedi"));
-    document.head.appendChild(script);
-  });
 }
 
 function observeDOMChanges() {
@@ -3685,15 +3826,23 @@ export async function slidesInit() {
     const peakBatches = config.peakSlider ? buildPeakCreationBatches(items.length, getPeakDisplayOptions()) : [];
     const markSlideReadyWhenVisualSyncOpens = (slideEl) => {
       if (!isBootActive({ requireHomeVisible: false })) return;
+      const finalizeWhenVisible = () => {
+        waitForFirstSlideVisualReady(slideEl, bootToken, {
+          timeoutMs: config.peakSlider ? 4600 : 3200
+        }).then((ready) => {
+          if (!ready) return;
+          markFirstSlideReady(bootToken);
+        }).catch(() => {});
+      };
       if (typeof slideEl?.__waitForBackdropReady === "function") {
         slideEl.__waitForBackdropReady({
           timeoutMs: config.peakSlider ? 2200 : 1400
         }).finally(() => {
-          markFirstSlideReady(bootToken);
+          finalizeWhenVisible();
         });
         return;
       }
-      markFirstSlideReady(bootToken);
+      finalizeWhenVisible();
     };
     const createItemAt = async (itemIndex, options = {}) => {
       if (!isBootActive()) return null;

@@ -20,7 +20,10 @@ import {
   bindManagedSectionsBelowNative,
   waitForVisibleHomeSections
 } from "./homeSectionNative.js";
-import { waitForManagedSectionGate } from "./homeSectionChain.js";
+import {
+  waitForManagedSectionDependencyCompletion,
+  waitForManagedSectionGate
+} from "./homeSectionChain.js";
 import {
   openDirRowsDB,
   makeScope,
@@ -2452,32 +2455,6 @@ function startDirectorBackfillLoop() {
   __dirBackfillInterval = setInterval(schedule, intervalMs);
 }
 
-function waitForGenreHubsDone(timeoutMs = 0) {
-  try {
-    const cfg = getConfig?.() || config || {};
-    const homeSectionsConfig = getHomeSectionsRuntimeConfig(cfg);
-    if (!homeSectionsConfig.enableGenreHubs) return Promise.resolve();
-  } catch {}
-
-  if (window.__jmsGenreHubsDone) return Promise.resolve();
-
-  return new Promise((resolve) => {
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      try { document.removeEventListener("jms:genre-hubs-done", onReady); } catch {}
-      try { if (t) clearTimeout(t); } catch {}
-      resolve();
-    };
-    const onReady = () => finish();
-    document.addEventListener("jms:genre-hubs-done", onReady, { once: true });
-    const t = (timeoutMs && timeoutMs > 0)
-      ? setTimeout(finish, Math.max(0, timeoutMs | 0))
-      : null;
-  });
-}
-
 function appendToParent(parent, node) {
   if (!parent || !node) return;
   if (node.parentElement === parent && node === parent.lastElementChild) return;
@@ -2554,16 +2531,11 @@ function scheduleDirectorInitWhenReady(wrap, { force = false } = {}) {
         seq,
         wrapConnected: !!wrap?.isConnected,
       });
-      if (!force) {
-        dirRowsLog("deferred:wait:managed-gate", { seq });
-        await waitForManagedSectionGate("directorRows", { timeoutMs: 25000 });
-        if (seq !== __directorDeferredSeq) return false;
-        dirRowsLog("deferred:wait:genre-hubs-done", { seq });
-        await waitForGenreHubsDone(25000);
-        if (seq !== __directorDeferredSeq) return false;
-      } else {
-        dirRowsLog("deferred:skip-gates:force", { seq });
-      }
+      dirRowsLog("deferred:wait:managed-gate", { seq, force });
+      await waitForManagedSectionGate("directorRows", { timeoutMs: 25000 });
+      if (seq !== __directorDeferredSeq) return false;
+      await waitForManagedSectionDependencyCompletion("directorRows", { timeoutMs: 25000 });
+      if (seq !== __directorDeferredSeq) return false;
       if (!wrap?.isConnected || !isHomeRoute()) {
         dirRowsWarn("deferred:abort:wrap-or-route-invalid", {
           force,
@@ -2741,12 +2713,8 @@ function ensureIntoHomeSections(el, indexPage, { placeAfterId } = {}) {
       document.querySelector(".homeSectionsContainer");
     if (!container) return false;
 
-    const ref = placeAfterId ? document.getElementById(placeAfterId) : null;
-    if (ref && ref.parentElement === container) {
-      insertAfter(container, el, ref);
-    } else {
-      appendToParent(container, el);
-    }
+    appendToParent(container, el);
+    try { container.__jmsManagedBelowNativeSchedule?.(); } catch {}
     return true;
   };
 

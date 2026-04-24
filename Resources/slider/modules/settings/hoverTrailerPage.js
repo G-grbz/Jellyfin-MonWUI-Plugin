@@ -74,18 +74,6 @@ export function createHoverTrailerPanel(config, labels) {
   );
   section.appendChild(onlyTrailerCheckbox);
 
-  const enableHls = createCheckbox(
-    'enableHls',
-    labels.enableHls || 'HLS Desteğini etkinleştir',
-    config.enableHls
-  );
-  section.appendChild(enableHls);
-
-  const enableHlsDesc = document.createElement('div');
-  enableHlsDesc.className = 'field-description';
-  enableHlsDesc.textContent = labels.enableHlsDescription || 'HLS aktifleştirildiğinde kod dönüştürme yapılmaktadır. Ffmpeg kullanımı yüksek cpu kullanımına sebep olabilir. Aktifleştirilmezse sadece tarayıcının desteklediği video ve ses kodecleri oynatılır.';
-  section.appendChild(enableHlsDesc);
-
   panel.appendChild(section);
 
   setTimeout(() => {

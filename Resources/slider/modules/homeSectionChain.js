@@ -1,11 +1,8 @@
-import { getConfig, getHomeSectionsRuntimeConfig } from "./config.js";
-
-const SECTION_DEPENDENCIES = {
-  personalRecommendations: ["studioHubs"],
-  becauseYouWatched: ["recentRows", "personalRecommendations", "studioHubs"],
-  genreHubs: ["becauseYouWatched", "recentRows", "personalRecommendations", "studioHubs"],
-  directorRows: ["genreHubs", "becauseYouWatched", "recentRows", "personalRecommendations", "studioHubs"],
-};
+import {
+  getConfig,
+  getHomeSectionsRuntimeConfig,
+  getManagedHomeSectionRuntimeOrder
+} from "./config.js";
 const HOME_SCROLL_INTENT_EVENT = "jms:home-scroll-intent";
 const HOME_SCROLL_INTENT_TTL_MS = 30_000;
 const HOME_SCROLL_INTENT_MIN_MARGIN_PX = 140;
@@ -289,13 +286,8 @@ function getSectionState(source = null) {
   return {
     cfg,
     runtime,
-    recentRows:
-      !!(
-        runtime.enableRecentRows ||
-        runtime.enableContinueMovies ||
-        runtime.enableContinueSeries ||
-        runtime.enableOtherLibRows
-      ),
+    recentRows: runtime.enableRecentRowsSection === true,
+    continueRows: runtime.enableContinueRowsSection === true,
     personalRecommendations: runtime.enablePersonalRecommendations !== false,
     becauseYouWatched: runtime.enableBecauseYouWatched !== false,
     genreHubs: runtime.enableGenreHubs !== false,
@@ -304,35 +296,60 @@ function getSectionState(source = null) {
   };
 }
 
+function normalizeExcludedSectionKeys(excludeKeys = []) {
+  return new Set(
+    (Array.isArray(excludeKeys) ? excludeKeys : [])
+      .map((key) => String(key || "").trim())
+      .filter(Boolean)
+  );
+}
+
 function isSectionEnabled(key, state) {
   return !!state?.[key];
 }
 
-export function getManagedSectionDependencyKeys(targetKey, source = null) {
+export function getManagedSectionDependencyKeys(targetKey, source = null, { excludeKeys = [] } = {}) {
   const state = getSectionState(source);
-  const deps = Array.isArray(SECTION_DEPENDENCIES[targetKey])
-    ? SECTION_DEPENDENCIES[targetKey]
-    : [];
-  return deps.filter((key) => isSectionEnabled(key, state));
+  if (!isSectionEnabled(targetKey, state)) {
+    return [];
+  }
+
+  const ordered = getManagedHomeSectionRuntimeOrder(source, { enabledOnly: true });
+  const targetIndex = ordered.indexOf(targetKey);
+  if (targetIndex <= 0) {
+    return [];
+  }
+
+  const excluded = normalizeExcludedSectionKeys(excludeKeys);
+  return ordered
+    .slice(0, targetIndex)
+    .filter((key) => !excluded.has(key))
+    .reverse();
 }
 
 function hasSectionReady(key) {
   try {
+    if (key === "studioHubs") return window.__jmsStudioHubsReady === true;
     if (key === "recentRows") return window.__jmsRecentRowsDone === true;
+    if (key === "continueRows") return window.__jmsContinueRowsDone === true;
     if (key === "personalRecommendations") return window.__jmsPersonalRecsDone === true;
     if (key === "becauseYouWatched") return window.__jmsBywDone === true;
     if (key === "genreHubs") {
       return window.__jmsGenreFirstReady === true || window.__jmsGenreHubsDone === true;
     }
+    if (key === "directorRows") return window.__directorFirstRowReady === true;
   } catch {}
-  return key === "studioHubs";
+  return false;
 }
 
 function getSectionReadyEvents(key) {
+  if (key === "studioHubs") return ["jms:studio-hubs-ready"];
   if (key === "recentRows") return ["jms:recent-rows-done"];
+  if (key === "continueRows") return ["jms:continue-rows-done"];
   if (key === "personalRecommendations") return ["jms:personal-recommendations-done"];
   if (key === "becauseYouWatched") return ["jms:because-you-watched-done"];
   if (key === "genreHubs") return ["jms:genre-first-ready", "jms:genre-hubs-done"];
+  if (key === "directorRows") return ["jms:director-first-ready"];
   return [];
 }
 
@@ -346,9 +363,23 @@ function hasRenderableCards(root, selector) {
 }
 
 function hasSectionRenderableContent(key) {
+  if (key === "studioHubs") {
+    return hasRenderableCards(
+      document.getElementById("studio-hubs"),
+      ".studio-hub-card, .studio-card, .hub-card:not(.skeleton), .no-recommendations"
+    );
+  }
+
   if (key === "recentRows") {
     return hasRenderableCards(
       document.getElementById("recent-rows"),
+      ".recent-row-section .personal-recs-card:not(.skeleton), .recent-row-section .no-recommendations, .recent-row-section .dir-row-hero"
+    );
+  }
+
+  if (key === "continueRows") {
+    return hasRenderableCards(
+      document.getElementById("continue-rows"),
       ".recent-row-section .personal-recs-card:not(.skeleton), .recent-row-section .no-recommendations, .recent-row-section .dir-row-hero"
     );
   }
@@ -386,6 +417,30 @@ function hasSectionRenderableContent(key) {
 
 function isSectionReadyForGate(key) {
   return hasSectionReady(key) || hasSectionRenderableContent(key);
+}
+
+function hasSectionCompleted(key) {
+  try {
+    if (key === "studioHubs") return window.__jmsStudioHubsReady === true;
+    if (key === "recentRows") return window.__jmsRecentRowsDone === true;
+    if (key === "continueRows") return window.__jmsContinueRowsDone === true;
+    if (key === "personalRecommendations") return window.__jmsPersonalRecsDone === true;
+    if (key === "becauseYouWatched") return window.__jmsBywDone === true;
+    if (key === "genreHubs") return window.__jmsGenreHubsDone === true;
+    if (key === "directorRows") return window.__directorFirstRowReady === true;
+  } catch {}
+  return false;
+}
+
+function getSectionCompletionEvents(key) {
+  if (key === "studioHubs") return ["jms:studio-hubs-ready"];
+  if (key === "recentRows") return ["jms:recent-rows-done"];
+  if (key === "continueRows") return ["jms:continue-rows-done"];
+  if (key === "personalRecommendations") return ["jms:personal-recommendations-done"];
+  if (key === "becauseYouWatched") return ["jms:because-you-watched-done"];
+  if (key === "genreHubs") return ["jms:genre-hubs-done"];
+  if (key === "directorRows") return ["jms:director-first-ready"];
+  return [];
 }
 
 export function waitForManagedSectionReady(key, { timeoutMs = 20000 } = {}) {
@@ -449,6 +504,67 @@ export function waitForManagedSectionReady(key, { timeoutMs = 20000 } = {}) {
   });
 }
 
+export function waitForManagedSectionCompletion(key, { timeoutMs = 20000 } = {}) {
+  if (!key || hasSectionCompleted(key) || hasSectionRenderableContent(key)) {
+    return Promise.resolve();
+  }
+
+  const events = getSectionCompletionEvents(key);
+  if (!events.length && typeof MutationObserver !== "function") {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    let done = false;
+    let timeoutId = null;
+    let observer = null;
+
+    const finish = () => {
+      if (done) return;
+      done = true;
+      for (const eventName of events) {
+        try { document.removeEventListener(eventName, onReady); } catch {}
+      }
+      if (observer) {
+        try { observer.disconnect(); } catch {}
+      }
+      if (timeoutId) {
+        try { clearTimeout(timeoutId); } catch {}
+      }
+      resolve();
+    };
+
+    const onReady = () => {
+      if (hasSectionCompleted(key) || hasSectionRenderableContent(key)) {
+        finish();
+      }
+    };
+
+    for (const eventName of events) {
+      document.addEventListener(eventName, onReady);
+    }
+
+    const observerTarget = document.body || document.documentElement || null;
+    if (observerTarget && typeof MutationObserver === "function") {
+      observer = new MutationObserver(() => {
+        onReady();
+      });
+
+      try {
+        observer.observe(observerTarget, {
+          childList: true,
+          subtree: true,
+        });
+      } catch {
+        observer = null;
+      }
+    }
+
+    timeoutId = setTimeout(finish, Math.max(0, timeoutMs | 0));
+    onReady();
+  });
+}
+
 function getBecauseYouWatchedSections() {
   return Array.from(
     document.querySelectorAll('[id^="because-you-watched--"], #because-you-watched')
@@ -464,6 +580,9 @@ function getBecauseYouWatchedSections() {
 function resolveAnchorElementByKey(key) {
   if (key === "recentRows") {
     return document.getElementById("recent-rows");
+  }
+  if (key === "continueRows") {
+    return document.getElementById("continue-rows");
   }
   if (key === "personalRecommendations") {
     return document.getElementById("personal-recommendations");
@@ -651,7 +770,9 @@ export function waitForSectionTailReveal(anchor, {
 
 export async function waitForManagedSectionGate(targetKey, options = {}) {
   ensureHomeScrollIntentTracking();
-  const dependencyKeys = getManagedSectionDependencyKeys(targetKey, options.source);
+  const dependencyKeys = getManagedSectionDependencyKeys(targetKey, options.source, {
+    excludeKeys: options.excludeKeys
+  });
   const dependencyKey = dependencyKeys[0] || null;
 
   if (dependencyKey) {
@@ -664,4 +785,15 @@ export async function waitForManagedSectionGate(targetKey, options = {}) {
   }
 
   return { dependencyKey, anchorEl };
+}
+
+export async function waitForManagedSectionDependencyCompletion(targetKey, options = {}) {
+  const dependencyKeys = getManagedSectionDependencyKeys(targetKey, options.source, {
+    excludeKeys: options.excludeKeys
+  });
+  const dependencyKey = dependencyKeys[0] || null;
+  if (dependencyKey) {
+    await waitForManagedSectionCompletion(dependencyKey, options);
+  }
+  return dependencyKey;
 }

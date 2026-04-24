@@ -2245,7 +2245,6 @@ export async function getVideoStreamUrl(
   preferredAudioCodecs = ["eac3", "ac3", "opus", "aac"],
   enableHdr = true,
   forceDirectPlay = false,
-  enableHls = config.enableHls,
   { signal } = {}
 ) {
   if (!isAuthReadyStrict()) {
@@ -2258,20 +2257,6 @@ export async function getVideoStreamUrl(
       .filter(([, value]) => value !== undefined && value !== null)
       .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
       .join("&");
-
-  const selectPreferredCodec = (streams, type, preferred, allowCopy) => {
-    if (enableHls && allowCopy) return "copy";
-    const available = streams
-      .filter((s) => s.Type === type && s.Codec)
-      .map((s) => s.Codec.toLowerCase());
-
-    for (const codec of preferred) {
-      if (available.includes(codec.toLowerCase())) {
-        return codec;
-      }
-    }
-    return type === "Video" ? "h264" : "aac";
-  };
 
   try {
     let item = await fetchItemDetails(itemId);
@@ -2334,19 +2319,7 @@ export async function getVideoStreamUrl(
         if (audioStream) audioStreamIndex = audioStream.Index;
       }
 
-      let container = source.Container || "mp3";
-      if (enableHls && source.SupportsDirectStream && (source.Container === "ts" || source.SupportsHls)) {
-        const hlsParams = {
-          MediaSourceId: source.Id,
-          DeviceId: deviceId,
-          api_key: accessToken,
-          AudioCodec: audioCodec,
-          AudioStreamIndex: audioStreamIndex,
-          StartTimeTicks: startTimeTicks
-        };
-        return withServer(`/Videos/${itemId}/master.m3u8?${buildQueryParams(hlsParams)}`);
-      }
-
+      const container = source.Container || "mp3";
       const streamParams = {
         Static: true,
         MediaSourceId: source.Id,
@@ -2407,18 +2380,9 @@ export async function getVideoStreamUrl(
     }
 
     const streams = videoSource.MediaStreams || [];
-    const allowCopy = videoSource.SupportsDirectStream;
-
-    let videoCodec, audioCodec, container;
-    if (enableHls) {
-      videoCodec = selectPreferredCodec(streams, "Video", preferredVideoCodecs, allowCopy);
-      audioCodec = selectPreferredCodec(streams, "Audio", preferredAudioCodecs, allowCopy);
-      container = videoSource.Container || "mp4";
-    } else {
-      videoCodec = "h264";
-      audioCodec = "aac";
-      container = "mp4";
-    }
+    const videoCodec = "h264";
+    const audioCodec = "aac";
+    const container = "mp4";
 
     let audioStreamIndex = 1;
     if (audioLanguage) {
@@ -2432,31 +2396,6 @@ export async function getVideoStreamUrl(
 
     const hasHdr = streams.some((s) => s.Type === "Video" && s.VideoRangeType === "HDR");
     const hasDovi = streams.some((s) => s.Type === "Video" && s.VideoRangeType === "DOVI");
-
-    if (enableHls) {
-      const wantCopy = allowCopy === true;
-      const hlsParams = {
-      MediaSourceId: videoSource.Id,
-      DeviceId: deviceId,
-      api_key: accessToken,
-      VideoCodec: wantCopy ? "copy" : "h264",
-      AudioCodec: wantCopy ? "copy" : "aac",
-        VideoBitrate: 1000000,
-        AudioBitrate: 128000,
-        MaxHeight: maxHeight,
-        StartTimeTicks: startTimeTicks
-      };
-
-      if (audioLanguage) {
-        const langStream = streams.find(
-          (s) => s.Type === "Audio" && s.Language === audioLanguage
-        );
-        if (langStream) {
-          hlsParams.AudioStreamIndex = langStream.Index;
-        }
-      }
-      return withServer(`/Videos/${itemId}/master.m3u8?${buildQueryParams(hlsParams)}`);
-    }
 
     const streamParams = {
       Static: true,

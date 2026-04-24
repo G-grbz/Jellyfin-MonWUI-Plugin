@@ -55,9 +55,13 @@ namespace Jellyfin.Plugin.JMSFusion
   var PROGRESS_STAGE_ID = "jms-boot-splash-progress-stage";
   var PROGRESS_DETAIL_ID = "jms-boot-splash-progress-detail";
   var ACTIVE_ATTR = "data-jms-custom-splash";
+  var HIDDEN_ATTR = "data-jms-custom-splash-hidden";
   var TITLE_ATTR = "data-jms-custom-splash-title";
   var CAPTION_ATTR = "data-jms-custom-splash-caption";
+  var REASON_ATTR = "data-jms-custom-splash-reason";
   var PROGRESS_API_KEY = "__JMS_CUSTOM_SPLASH_PROGRESS__";
+  var FALLBACK_TIMEOUT_MS = 16000;
+  var FALLBACK_CLEANUP_MS = 460;
 
   function toCssContent(value) {
     return '"' + String(value || "")
@@ -155,6 +159,8 @@ namespace Jellyfin.Plugin.JMSFusion
       detailTakeover: "{title} motoru kontrolü alıyor",
       stageFlow: "AKIŞ",
       detailFlow: "Gerçek zamanlı yükleme metrikleri eşleniyor",
+      stageFallback: "GEÇİŞ",
+      detailFallback: "Varsayılan Jellyfin arayüzü açılıyor",
       stageReady: "HAZIR",
       detailReady: "{title} çevrimiçi"
     },
@@ -167,6 +173,8 @@ namespace Jellyfin.Plugin.JMSFusion
       detailTakeover: "{title} engine is taking control",
       stageFlow: "FLOW",
       detailFlow: "Real-time loading metrics are syncing",
+      stageFallback: "FALLBACK",
+      detailFallback: "Falling back to the Jellyfin interface",
       stageReady: "READY",
       detailReady: "{title} online"
     },
@@ -179,6 +187,8 @@ namespace Jellyfin.Plugin.JMSFusion
       detailTakeover: "{title} uebernimmt die Kontrolle",
       stageFlow: "FLUSS",
       detailFlow: "Echtzeit-Lademetriken werden abgeglichen",
+      stageFallback: "RUECKFALL",
+      detailFallback: "Wechsel zur Jellyfin-Oberflaeche",
       stageReady: "BEREIT",
       detailReady: "{title} ist online"
     },
@@ -191,6 +201,8 @@ namespace Jellyfin.Plugin.JMSFusion
       detailTakeover: "Le moteur {title} prend le controle",
       stageFlow: "FLUX",
       detailFlow: "Les metriques de chargement en temps reel se synchronisent",
+      stageFallback: "REPLI",
+      detailFallback: "Retour a l'interface Jellyfin",
       stageReady: "PRET",
       detailReady: "{title} est en ligne"
     },
@@ -203,6 +215,8 @@ namespace Jellyfin.Plugin.JMSFusion
       detailTakeover: "El motor de {title} toma el control",
       stageFlow: "FLUJO",
       detailFlow: "Las metricas de carga en tiempo real se estan sincronizando",
+      stageFallback: "RESPALDO",
+      detailFallback: "Volviendo a la interfaz de Jellyfin",
       stageReady: "LISTO",
       detailReady: "{title} en linea"
     },
@@ -215,6 +229,8 @@ namespace Jellyfin.Plugin.JMSFusion
       detailTakeover: "Движок {title} берёт управление",
       stageFlow: "ПОТОК",
       detailFlow: "Метрики загрузки в реальном времени синхронизируются",
+      stageFallback: "РЕЗЕРВ",
+      detailFallback: "Переход к интерфейсу Jellyfin",
       stageReady: "ГОТОВО",
       detailReady: "{title} в сети"
     }
@@ -562,11 +578,45 @@ namespace Jellyfin.Plugin.JMSFusion
     detail: formatLocaleTemplate(localeCopy.detailLock, { title: customTitle }),
     raf: 0
   };
+  var fallbackTimeoutId = 0;
+  var fallbackCleanupId = 0;
 
   function cancelProgressRaf() {
     if (!progressState.raf) return;
     try { cancelAnimationFrame(progressState.raf); } catch {}
     progressState.raf = 0;
+  }
+
+  function clearFallbackTimeout() {
+    if (!fallbackTimeoutId) return;
+    try { clearTimeout(fallbackTimeoutId); } catch {}
+    fallbackTimeoutId = 0;
+  }
+
+  function clearFallbackCleanup() {
+    if (!fallbackCleanupId) return;
+    try { clearTimeout(fallbackCleanupId); } catch {}
+    fallbackCleanupId = 0;
+  }
+
+  function cleanupSplashFallback() {
+    clearFallbackCleanup();
+    if (!root) return false;
+
+    try { root.removeAttribute(REASON_ATTR); } catch {}
+    root.removeAttribute(ACTIVE_ATTR);
+    root.removeAttribute(HIDDEN_ATTR);
+    root.removeAttribute(TITLE_ATTR);
+    root.removeAttribute(CAPTION_ATTR);
+    root.style.removeProperty("--jms-custom-splash-title");
+    root.style.removeProperty("--jms-custom-splash-caption");
+
+    var activeLayer = document.getElementById(LAYER_ID);
+    if (activeLayer && activeLayer.parentNode) {
+      activeLayer.parentNode.removeChild(activeLayer);
+    }
+
+    return true;
   }
 
   function renderProgress() {
@@ -640,6 +690,44 @@ namespace Jellyfin.Plugin.JMSFusion
     return progressState.target;
   }
 
+  function dismissSplashFallback(reason, options) {
+    options = options || {};
+    if (!root || !root.hasAttribute(ACTIVE_ATTR)) return false;
+    if (root.getAttribute(HIDDEN_ATTR) === "1") return true;
+
+    clearFallbackTimeout();
+    clearFallbackCleanup();
+
+    if (options.updateProgress !== false) {
+      setProgress(1, {
+        stage: options.stage || localeCopy.stageFallback || localeCopy.stageReady,
+        detail: options.detail || formatLocaleTemplate(localeCopy.detailFallback || localeCopy.detailReady, { title: customTitle }),
+        forceValue: true,
+        instant: !!options.instant
+      });
+    }
+
+    try {
+      root.setAttribute(REASON_ATTR, text(reason, "bootstrap-timeout"));
+    } catch {}
+    root.setAttribute(HIDDEN_ATTR, "1");
+
+    fallbackCleanupId = window.setTimeout(function () {
+      fallbackCleanupId = 0;
+      cleanupSplashFallback();
+    }, Math.max(0, Number(options.cleanupDelayMs) || FALLBACK_CLEANUP_MS));
+
+    return true;
+  }
+
+  function armSplashFallbackTimeout() {
+    clearFallbackTimeout();
+    fallbackTimeoutId = window.setTimeout(function () {
+      fallbackTimeoutId = 0;
+      dismissSplashFallback("bootstrap-timeout");
+    }, FALLBACK_TIMEOUT_MS);
+  }
+
   window[PROGRESS_API_KEY] = {
     set: setProgress,
     complete: function (options) {
@@ -673,7 +761,8 @@ namespace Jellyfin.Plugin.JMSFusion
         stage: progressState.stage,
         detail: progressState.detail
       };
-    }
+    },
+    dismiss: dismissSplashFallback
   };
 
   renderProgress();
@@ -709,6 +798,7 @@ namespace Jellyfin.Plugin.JMSFusion
     });
   }, { once: true });
   syncBootstrapReadyState();
+  armSplashFallbackTimeout();
   scheduleSplashUserTitleRefresh();
   window.addEventListener("load", resolveCurrentUserTitleAsync, { once: true });
 
@@ -845,17 +935,26 @@ html[data-jms-custom-splash="1"] .jms-boot-splash-copy {
   justify-items: center;
 }
 html[data-jms-custom-splash="1"] #${TITLE_ID} {
-  color: rgba(177, 202, 236, 0.72);
-  text-align: center;
-  font: 600 11px/1.2 "Trebuchet MS", "Segoe UI", sans-serif;
-  letter-spacing: 0.28em;
+  font-family: 'Space Grotesk', 'Inter', system-ui, -apple-system, sans-serif;
+  font-weight: 500;
+  font-size: 13px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  background: linear-gradient(135deg, rgba(160, 180, 220, 0.9), rgba(120, 140, 200, 0.7));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 html[data-jms-custom-splash="1"] #${CAPTION_ID} {
-  color: rgba(233, 241, 255, 0.86);
-  text-align: center;
-  font: 600 13px/1.45 "Trebuchet MS", "Segoe UI", sans-serif;
-  letter-spacing: 0.14em;
-  max-width: min(100%, 380px);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-weight: 500;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  color: rgba(220, 235, 255, 0.95);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  max-width: min(100%, 400px);
+  line-height: 1.4;
 }
 html[data-jms-custom-splash="1"] #${PROGRESS_PANEL_ID} {
   box-sizing: border-box;
@@ -874,8 +973,8 @@ html[data-jms-custom-splash="1"] .jms-boot-splash-progress-head {
 }
 html[data-jms-custom-splash="1"] #${PROGRESS_STAGE_ID} {
   color: rgba(176, 214, 255, 0.86);
-  font: 700 11px/1.2 "Trebuchet MS", "Segoe UI", sans-serif;
-  letter-spacing: 0.24em;
+  font: 700 11px/1.2 Inter, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, system-ui, sans-serif;
+  letter-spacing: 0.16em;
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -891,8 +990,8 @@ html[data-jms-custom-splash="1"] #${PROGRESS_VALUE_ID} {
     inset 0 1px 0 rgba(255, 255, 255, 0.08),
     0 12px 28px rgba(5, 14, 25, 0.36);
   color: rgba(239, 247, 255, 0.94);
-  font: 700 11px/1 "Trebuchet MS", "Segoe UI", sans-serif;
-  letter-spacing: 0.2em;
+  font: 700 11px/1 Inter, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, system-ui, sans-serif;
+  letter-spacing: 0.14em;
   text-align: center;
 }
 html[data-jms-custom-splash="1"] .jms-boot-splash-track {
@@ -970,9 +1069,9 @@ html[data-jms-custom-splash="1"] #${PROGRESS_ORB_ID} {
 }
 html[data-jms-custom-splash="1"] #${PROGRESS_DETAIL_ID} {
   color: rgba(201, 218, 243, 0.72);
-  font: 500 11px/1.35 "Trebuchet MS", "Segoe UI", sans-serif;
-  letter-spacing: 0.08em;
-  text-align: right;
+  font: 500 11px/1.45 Inter, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, system-ui, sans-serif;
+  letter-spacing: 0.04em;
+  text-align: center;
   max-width: 100%;
   overflow-wrap: anywhere;
 }

@@ -6,6 +6,18 @@ let __globalOverride =
     : null;
 let __globalApplied = false;
 export const SETTINGS_HOTKEY_DEFAULT = "F2";
+export const DEFAULT_MANAGED_HOME_SECTION_ORDER = Object.freeze([
+  "studioHubs",
+  "personalRecommendations",
+  "recentRows",
+  "continueRows",
+  "becauseYouWatched",
+  "genreHubs",
+  "directorRows"
+]);
+export const NATIVE_HOME_SECTION_ORDER_PREFIX = "native:";
+
+const MANAGED_HOME_SECTION_ORDER_SET = new Set(DEFAULT_MANAGED_HOME_SECTION_ORDER);
 
 const SETTINGS_HOTKEY_ALIASES = new Map([
   [" ", "Space"],
@@ -50,6 +62,140 @@ const SETTINGS_HOTKEY_MODIFIER_KEYS = new Set([
   "Super",
   "Symbol"
 ]);
+
+export function isNativeHomeSectionOrderKey(value) {
+  return String(value || "").trim().startsWith(NATIVE_HOME_SECTION_ORDER_PREFIX);
+}
+
+function isRecognizedManagedHomeSectionOrderKey(value) {
+  const key = String(value || "").trim();
+  return !!key && (
+    MANAGED_HOME_SECTION_ORDER_SET.has(key) ||
+    isNativeHomeSectionOrderKey(key)
+  );
+}
+
+export function normalizeManagedHomeSectionOrder(value = null, { nativeEntries } = {}) {
+  const hasNativeEntries = Array.isArray(nativeEntries);
+  const nativeEntryKeys = hasNativeEntries
+    ? new Set(
+        nativeEntries
+          .map((entry) => (
+            typeof entry === "string"
+              ? entry
+              : (entry && typeof entry === "object" ? entry.name : "")
+          ))
+          .map((entry) => String(entry || "").trim())
+          .filter((entry) => isNativeHomeSectionOrderKey(entry))
+      )
+    : null;
+  const out = [];
+  const seen = new Set();
+  const explicit = new Set();
+
+  const push = (entry, fromExplicit = false) => {
+    const key = String(entry || "").trim();
+    if (
+      !key ||
+      seen.has(key) ||
+      !isRecognizedManagedHomeSectionOrderKey(key) ||
+      (hasNativeEntries && isNativeHomeSectionOrderKey(key) && !nativeEntryKeys.has(key))
+    ) {
+      return;
+    }
+    seen.add(key);
+    if (fromExplicit) explicit.add(key);
+    out.push(key);
+  };
+
+  if (Array.isArray(value)) {
+    value.forEach((entry) => push(entry, true));
+  } else if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((entry) => push(entry, true));
+      } else {
+        value.split(",").forEach((entry) => push(entry, true));
+      }
+    } catch {
+      value.split(",").forEach((entry) => push(entry, true));
+    }
+  }
+
+  if (hasNativeEntries) {
+    nativeEntries.forEach((entry) => {
+      const key = (typeof entry === "string")
+        ? entry
+        : (entry && typeof entry === "object" ? entry.name : "");
+      push(key, false);
+    });
+  }
+
+  DEFAULT_MANAGED_HOME_SECTION_ORDER.forEach(push);
+
+  if (!explicit.has("continueRows") && explicit.has("recentRows")) {
+    const continueIndex = out.indexOf("continueRows");
+    const recentIndex = out.indexOf("recentRows");
+    if (continueIndex >= 0 && recentIndex >= 0 && continueIndex !== (recentIndex + 1)) {
+      out.splice(continueIndex, 1);
+      out.splice(recentIndex + 1, 0, "continueRows");
+    }
+  }
+
+  return out;
+}
+
+function isRecentRowsSectionEnabled(cfg = {}, masterEnabled = cfg?.enableHomeSectionsMaster !== false) {
+  const recentMasterEnabled = masterEnabled && cfg?.enableRecentRows !== false;
+  const hasRecentContent =
+    recentMasterEnabled &&
+    (
+      cfg?.enableRecentMoviesRow !== false ||
+      cfg?.enableRecentSeriesRow !== false ||
+      cfg?.enableRecentEpisodesRow !== false ||
+      cfg?.enableRecentMusicRow !== false
+    );
+
+  return hasRecentContent || (masterEnabled && cfg?.enableOtherLibRows === true);
+}
+
+function isContinueRowsSectionEnabled(cfg = {}, masterEnabled = cfg?.enableHomeSectionsMaster !== false) {
+  const recentMasterEnabled = masterEnabled && cfg?.enableRecentRows !== false;
+  const hasRecentTracks = recentMasterEnabled && cfg?.enableRecentMusicTracksRow !== false;
+  const hasContinueContent =
+    masterEnabled &&
+    (
+      cfg?.enableContinueMovies !== false ||
+      cfg?.enableContinueSeries !== false
+    );
+
+  return hasRecentTracks || hasContinueContent || (masterEnabled && cfg?.enableOtherLibRows === true);
+}
+
+function buildManagedHomeSectionEnabledMap(cfg = {}) {
+  const masterEnabled = cfg?.enableHomeSectionsMaster !== false;
+  return {
+    studioHubs: masterEnabled && cfg?.enableStudioHubs !== false,
+    personalRecommendations: masterEnabled && cfg?.enablePersonalRecommendations !== false,
+    recentRows: isRecentRowsSectionEnabled(cfg, masterEnabled),
+    continueRows: isContinueRowsSectionEnabled(cfg, masterEnabled),
+    becauseYouWatched: masterEnabled && cfg?.enableBecauseYouWatched !== false,
+    genreHubs: masterEnabled && cfg?.enableGenreHubs !== false,
+    directorRows: masterEnabled && cfg?.enableDirectorRows !== false,
+  };
+}
+
+export function getManagedHomeSectionRuntimeOrder(source = null, { enabledOnly = false } = {}) {
+  const cfg = source || getConfig() || {};
+  const order = normalizeManagedHomeSectionOrder(cfg?.managedHomeSectionOrder);
+  if (!enabledOnly) {
+    return order;
+  }
+
+  const enabledMap = buildManagedHomeSectionEnabledMap(cfg);
+  return order.filter((key) => enabledMap[key] === true);
+}
 
 function getManagedStorageBridge() {
   try {
@@ -251,6 +397,48 @@ export function getConfig() {
       return null;
     }
   }
+  function normalizePreviewPlaybackMode(value) {
+    if (
+      value === 'trailer' ||
+      value === 'video' ||
+      value === 'trailerThenVideo' ||
+      value === 'none'
+    ) {
+      return value;
+    }
+    return null;
+  }
+  function readPreviewPlaybackMode() {
+    try {
+      const stored = localStorage.getItem('previewPlaybackMode');
+      const normalizedStored = normalizePreviewPlaybackMode(stored);
+      if (normalizedStored) return normalizedStored;
+      if (stored && stored !== '[object Object]') {
+        localStorage.removeItem('previewPlaybackMode');
+      }
+
+      let fallback = null;
+      if (localStorage.getItem('disableAllPlayback') === 'true') {
+        fallback = 'none';
+      } else if (localStorage.getItem('enableTrailerThenVideo') === 'true') {
+        fallback = 'trailerThenVideo';
+      } else if (localStorage.getItem('enableTrailerPlayback') === 'true') {
+        fallback = 'trailer';
+      } else if (localStorage.getItem('enableVideoPlayback') === 'true') {
+        fallback = 'video';
+      } else {
+        const legacy = localStorage.getItem('previewTrailerEnabled');
+        if (legacy === 'true') fallback = 'trailer';
+        else if (legacy === 'false') fallback = 'video';
+      }
+
+      const resolved = fallback || 'video';
+      localStorage.setItem('previewPlaybackMode', resolved);
+      return resolved;
+    } catch {
+      return 'video';
+    }
+  }
   function readPauseOverlay() {
   const fallbackShowOsdHeaderRatings = localStorage.getItem('showRatingInfo') !== 'false';
   const fallbackShowOsdHeaderCommunityRating = localStorage.getItem('showCommunityRating') !== 'false';
@@ -342,6 +530,12 @@ export function getConfig() {
 }
 
   const defaultLanguage = getDefaultLanguage();
+  const previewPlaybackMode = readPreviewPlaybackMode();
+  const disableAllPlayback = previewPlaybackMode === 'none';
+  const enableTrailerPlayback = previewPlaybackMode === 'trailer';
+  const enableVideoPlayback = previewPlaybackMode === 'video';
+  const enableTrailerThenVideo = previewPlaybackMode === 'trailerThenVideo';
+  try { localStorage.removeItem('enableHls'); } catch {}
   const resolvedConfig = {
     customQueryString: localStorage.getItem('customQueryString') || 'IncludeItemTypes=Movie,Series&Recursive=true&hasOverview=true&imageTypes=Logo,Backdrop&sortBy=DateCreated&sortOrder=Descending',
     sortingKeywords: (() => {
@@ -409,8 +603,9 @@ export function getConfig() {
     detailUrl: localStorage.getItem('detailUrl') !== 'false',
     hideOriginalTitleIfSame: localStorage.getItem('hideOriginalTitleIfSame') === 'true',
     backdropImageType: localStorage.getItem('backdropImageType') || 'backdropUrl',
-    enableTrailerPlayback: localStorage.getItem('enableTrailerPlayback') === 'true',
-    enableVideoPlayback: localStorage.getItem('enableVideoPlayback') === 'true',
+    previewPlaybackMode,
+    enableTrailerPlayback,
+    enableVideoPlayback,
     dotBackgroundImageType: localStorage.getItem('dotBackgroundImageType') || 'none',
     dotVisibleCount: (() => {
       const v = localStorage.getItem('dotVisibleCount');
@@ -427,7 +622,7 @@ export function getConfig() {
     useRandomContent: localStorage.getItem('useRandomContent') !== 'false',
     fullscreenMode: localStorage.getItem('fullscreenMode') === 'true' ? true : false,
     listLimit: 20,
-    version: "v2.6.0",
+    version: "v2.6.1",
     historySize: 20,
     updateInterval: 300000,
     nextTracksSource: localStorage.getItem('nextTracksSource') || 'playlist',
@@ -478,7 +673,6 @@ export function getConfig() {
     autoRefreshAvatar: localStorage.getItem('autoRefreshAvatar') !== 'false',
     avatarRefreshTime: parseInt(localStorage.getItem('avatarRefreshTime'), 10) || 10,
     randomDicebearAvatar: localStorage.getItem('randomDicebearAvatar') !== 'false',
-    enableHls: localStorage.getItem('enableHls') === 'true' ? true : false,
     previewModal: localStorage.getItem('previewModal') !== 'false',
     allPreviewModal: localStorage.getItem('allPreviewModal') !== 'false',
     globalPreviewMode: localStorage.getItem('globalPreviewMode') || 'modal',
@@ -487,8 +681,8 @@ export function getConfig() {
     onlyTrailerInPreviewModal: localStorage.getItem('onlyTrailerInPreviewModal') === 'true' ? true : false,
     enabledGmmp: localStorage.getItem('enabledGmmp') !== 'false',
     enableQualityBadges: localStorage.getItem('enableQualityBadges') !== 'false',
-    enableTrailerThenVideo: localStorage.getItem('enableTrailerThenVideo') !== 'false',
-    disableAllPlayback: localStorage.getItem('disableAllPlayback') === 'true' ? true : false,
+    enableTrailerThenVideo,
+    disableAllPlayback,
     dicebearParams: (() => {
   try {
     const raw = localStorage.getItem('dicebearParams');
@@ -622,7 +816,6 @@ export function getConfig() {
     personalRecsCacheTtlMs: parseInt(localStorage.getItem('personalRecsCacheTtlMs'), 10) || 3600000,
     enableStudioHubs: localStorage.getItem('enableStudioHubs') !== 'false',
     studioHubsAutoAddFromWatchlistCopy: localStorage.getItem('studioHubsAutoAddFromWatchlistCopy') === 'true',
-    placePersonalRecsUnderStudioHubs: localStorage.getItem('placePersonalRecsUnderStudioHubs') !== 'false',
     placeGenreHubsAbovePersonalRecs: localStorage.getItem('placeGenreHubsAbovePersonalRecs') === 'true' ? true : false,
     studioHubsHoverVideo: localStorage.getItem('studioHubsHoverVideo') !== 'false',
     studioMiniTrailerPopover: (localStorage.getItem("studioMiniTrailerPopover") || "false") === "true",
@@ -653,6 +846,15 @@ export function getConfig() {
       } catch {
         return [];
       }
+    })(),
+    managedHomeSectionOrder: (() => {
+      try {
+        const raw = localStorage.getItem('managedHomeSectionOrder');
+        if (raw && raw !== '[object Object]') {
+          return normalizeManagedHomeSectionOrder(raw);
+        }
+      } catch {}
+      return normalizeManagedHomeSectionOrder();
     })(),
 
     slideTop: parseInt(localStorage.getItem('slideTop'), 10) || 0,
@@ -955,18 +1157,23 @@ export function isHomeSectionsMasterEnabled(source = null) {
 export function getHomeSectionsRuntimeConfig(source = null) {
   const cfg = source || getConfig() || {};
   const masterEnabled = isHomeSectionsMasterEnabled(cfg);
+  const enabledMap = buildManagedHomeSectionEnabledMap(cfg);
 
   return {
     masterEnabled,
-    enableStudioHubs: masterEnabled && cfg.enableStudioHubs !== false,
-    enablePersonalRecommendations: masterEnabled && cfg.enablePersonalRecommendations !== false,
-    enableBecauseYouWatched: masterEnabled && cfg.enableBecauseYouWatched !== false,
-    enableGenreHubs: masterEnabled && cfg.enableGenreHubs !== false,
-    enableDirectorRows: masterEnabled && cfg.enableDirectorRows !== false,
+    enableStudioHubs: enabledMap.studioHubs,
+    enablePersonalRecommendations: enabledMap.personalRecommendations,
+    enableBecauseYouWatched: enabledMap.becauseYouWatched,
+    enableGenreHubs: enabledMap.genreHubs,
+    enableDirectorRows: enabledMap.directorRows,
     enableRecentRows: masterEnabled && cfg.enableRecentRows !== false,
+    enableRecentRowsSection: enabledMap.recentRows,
+    enableContinueRowsSection: enabledMap.continueRows,
     enableContinueMovies: masterEnabled && cfg.enableContinueMovies !== false,
     enableContinueSeries: masterEnabled && cfg.enableContinueSeries !== false,
-    enableOtherLibRows: masterEnabled && !!cfg.enableOtherLibRows
+    enableOtherLibRows: masterEnabled && !!cfg.enableOtherLibRows,
+    managedSectionOrder: normalizeManagedHomeSectionOrder(cfg?.managedHomeSectionOrder)
+      .filter((key) => enabledMap[key]),
   };
 }
 
