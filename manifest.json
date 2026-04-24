@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/G-grbz/Jellyfin-MonWUI-Plugin/main/img/icon.png",
     "versions": [
       {
+        "version": "2.6.1.0",
+        "changelog": "v2.6.1\n\nNew Features:\n- Added GMMP and Cast remote control infrastructure\n- Added GmmpSyncController with state and command endpoints\n- Added periodic GMMP state sync, remote command polling and unload cleanup flow\n- Added physical index.html patch fallback system with configuration support\n\nImprovements:\n- Improved splash screen with timeout, fallback and cleanup handling\n- Improved asset versioning reliability during initial load\n- Improved index patch/unpatch lifecycle and backup management\n- Improved Watchlist data model with EntrySnapshot for share persistence\n- Improved own/shared Watchlist flows and data consistency\n- Improved home sections, Studio Hubs and render recovery logic\n- Improved initial render validation before splash closes\n- Improved rendering and ordering for recommendations, recent and studio rows\n- Improved playback flow with simplified HLS stream selection and stable URL generation\n\nFixes:\n- Fixed potential data loss in shared Watchlist entries when source item is removed\n- Fixed inconsistent render states during splash-to-home transition\n\nNotes:\n- Physical index.html fallback can be configured from MonWUI Settings\n- Hard refresh (Ctrl + F5) may be required after update",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v2.6.1/JMSFusion-2.6.1.0-server.zip",
+        "checksum": "a9026e2a812eb3b3d8b70c7e3c6802b4",
+        "timestamp": "2026-04-24T09:12:58.2456931Z"
+      },
+      {
         "version": "2.6.0.0",
         "changelog": "v2.6.0\n\nNew Features:\n- Added renewed Cast modal system with GMMP music player integration\n- Added Cast module settings and shared watch activity tab\n- Added local comments field to Details modal\n- Added Settings modal keyboard shortcut support (default F2)\n\nImprovements:\n- Improved Watchlist performance with cache, progressive rendering and event delegation\n- Improved Cast sync, control optimization and lazy-loaded CSS\n- Improved MonWUI card reinitialization after page navigation\n\nFixes:\n- Fixed Watchlist full rerender after remove using incremental DOM updates\n- Fixed MonWUI cards failing to initialize when returning to home view\n\nNotes:\n- Cast module is now configurable from MonWUI Settings\n- Hard refresh (Ctrl + F5) may be required after update",
         "targetAbi": "10.11.0.0",
