@@ -13,8 +13,8 @@
         "changelog": "v2.6.2\n\nNew Features:\n- Added Top 10 Movies and TV Shows cards to Monwui UI\n- Added TMDB Best-rated content cards\n- Added setting to show/hide hero cards in Monwui UI\n\nImprovements:\n- Improved Monwui UI card visuals with minor design tweaks\n- Improved Studio collections handling by hiding empty collections\n- Applied general performance optimizations across the plugin\n\nFixes:\n- Minor stability fixes and UI consistency improvements\n\nNotes:\n- Hard refresh (Ctrl + F5) may be required after update",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v2.6.2/JMSFusion-2.6.2.0-server.zip",
-        "checksum": "58589fe0c5a5cf5a9b8690f9224f18b6",
-        "timestamp": "2026-04-26T08:32:43.6638312Z"
+        "checksum": "2d66e13d299525ffc7d33bec2d9f25bc",
+        "timestamp": "2026-04-26T11:15:51.7940599Z"
       },
       {
         "version": "2.6.1.0",
