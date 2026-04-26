@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/G-grbz/Jellyfin-MonWUI-Plugin/main/img/icon.png",
     "versions": [
       {
+        "version": "2.6.3.0",
+        "changelog": "v2.6.3\n\nFixes:\n- Fixed #44 (\"Just doesn’t work\") issue causing MonWUI to fail due to authorization errors\n- Fixed 401 Unauthorized errors in MonWUI runtime modules\n- Fixed incorrect authorization header handling for Jellyfin API requests\n- Fixed credential/session handling edge cases that could break runtime requests\n\nImprovements:\n- Improved Docker deployment compatibility for mapped external ports\n- Improved runtime authorization and session resolution logic\n\nNotes:\n- Restart Jellyfin after update\n- Hard refresh (Ctrl + F5) may be required after update",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/G-grbz/Jellyfin-MonWUI-Plugin/releases/download/v2.6.3/JMSFusion-2.6.3.0-server.zip",
+        "checksum": "d20d6887b4093883137a984c9956de1b",
+        "timestamp": "2026-04-26T12:42:57.5897451Z"
+      },
+      {
         "version": "2.6.2.0",
         "changelog": "v2.6.2\n\nNew Features:\n- Added Top 10 Movies and TV Shows cards to Monwui UI\n- Added TMDB Best-rated content cards\n- Added setting to show/hide hero cards in Monwui UI\n\nImprovements:\n- Improved Monwui UI card visuals with minor design tweaks\n- Improved Studio collections handling by hiding empty collections\n- Applied general performance optimizations across the plugin\n\nFixes:\n- Minor stability fixes and UI consistency improvements\n\nNotes:\n- Hard refresh (Ctrl + F5) may be required after update",
         "targetAbi": "10.11.0.0",
