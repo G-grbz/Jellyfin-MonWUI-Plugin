@@ -1,4 +1,5 @@
 const JSON_PREFIX = "Stored JSON credentials:";
+const WS_PREFIX = "opening web socket with url:";
 
 export function getStoredServerBase() {
   try {
@@ -139,13 +140,32 @@ function findActiveServerEntry(credentials, chosenServerId) {
 export function saveCredentials(credentials) {
   try {
     credentials = credentials ? JSON.parse(JSON.stringify(credentials)) : {};
+    const accessToken = String(credentials?.AccessToken || credentials?.accessToken || "").trim();
+    const topLevelUserId = String(
+      credentials?.User?.Id ||
+      credentials?.userId ||
+      credentials?.UserId ||
+      ""
+    ).trim();
+
+    if (!accessToken && !topLevelUserId && !Array.isArray(credentials?.Servers)) {
+      return false;
+    }
+
     const raw = JSON.stringify(credentials);
     sessionStorage.setItem("json-credentials", raw);
     localStorage.setItem("json-credentials", raw);
 
-    if (credentials?.AccessToken) {
-      sessionStorage.setItem("accessToken", credentials.AccessToken);
-      localStorage.setItem("accessToken", credentials.AccessToken);
+    if (accessToken) {
+      sessionStorage.setItem("accessToken", accessToken);
+      localStorage.setItem("accessToken", accessToken);
+      sessionStorage.setItem("api-key", accessToken);
+      localStorage.setItem("api-key", accessToken);
+    }
+
+    if (topLevelUserId) {
+      sessionStorage.setItem("userId", topLevelUserId);
+      localStorage.setItem("userId", topLevelUserId);
     }
 
     const chosen = pickBestServerId(credentials);
@@ -180,8 +200,10 @@ export function saveCredentials(credentials) {
       console.warn("⚠️ serverId seçilemedi:", chosen.why, credentials);
     }
     console.log("Kimlik bilgileri kaydedildi.");
+    return true;
   } catch (err) {
     console.error("Kimlik bilgileri kaydedilirken hata:", err);
+    return false;
   }
 }
 
@@ -238,6 +260,7 @@ export function getWebClientHints() {
 
 export function saveApiKey(apiKey) {
   try {
+    if (!apiKey) return false;
     sessionStorage.setItem("api-key", apiKey);
     localStorage.setItem("api-key", apiKey);
     sessionStorage.setItem("accessToken", apiKey);
@@ -265,8 +288,10 @@ export function saveApiKey(apiKey) {
       console.warn("⚠️ saveApiKey serverId set edilemedi:", e);
     }
     console.log("API anahtarı kaydedildi.");
+    return true;
   } catch (err) {
     console.error("API anahtarı kaydedilirken hata:", err);
+    return false;
   }
 }
 
@@ -296,6 +321,8 @@ function clearCredentials() {
 
 export function getAuthToken() {
   return (
+    (window.ApiClient && typeof window.ApiClient.accessToken === "function" && window.ApiClient.accessToken()) ||
+    (window.ApiClient && window.ApiClient._accessToken) ||
     sessionStorage.getItem("api-key") ||
     localStorage.getItem("api-key") ||
     sessionStorage.getItem("accessToken") ||
@@ -319,13 +346,35 @@ export function getAuthToken() {
         if (typeof arg === "string" && arg.startsWith(JSON_PREFIX)) {
           try {
             const cred = JSON.parse(arg.slice(JSON_PREFIX.length).trim());
-            clearCredentials();
-            saveCredentials(cred);
+            const token =
+              cred?.AccessToken ||
+              cred?.accessToken ||
+              cred?.Servers?.find?.(s => s?.AccessToken)?.AccessToken ||
+              "";
+            const userId =
+              cred?.User?.Id ||
+              cred?.userId ||
+              cred?.UserId ||
+              cred?.Servers?.find?.(s => s?.UserId)?.UserId ||
+              "";
+            if (token || userId || Array.isArray(cred?.Servers)) {
+              saveCredentials(cred);
+              if (token) saveApiKey(String(token));
+            }
+          } catch {}
+        }
+        else if (typeof arg === "string" && arg.startsWith(WS_PREFIX)) {
+          try {
+            const urlPart = arg.split("url:")[1]?.trim();
+            if (!urlPart) return;
+            const u = new URL(urlPart);
+            const apiKey = u.searchParams.get("api_key");
+            if (apiKey) saveApiKey(apiKey);
           } catch {}
         }
         else if (arg && typeof arg === "object" && arg.AccessToken && arg.SessionId && arg.User) {
-          clearCredentials();
           saveCredentials(arg);
+          saveApiKey(String(arg.AccessToken || ""));
         }
       });
     }

@@ -3114,9 +3114,87 @@ function normalizeWithServer(u) {
   return s;
 }
 
-function safeFetch(url, opts) {
-  const finalUrl = normalizeWithServer(url);
-  return fetch(finalUrl, opts);
+function requiresAuthRequest(url = "") {
+  try {
+    const input = String(url || "");
+    const path = /^https?:\/\//i.test(input) ? new URL(input).pathname : input;
+    return /\/Users\/|\/Sessions\b|\/Items\/[^/]+\/PlaybackInfo\b|\/Videos\//i.test(path);
+  } catch {
+    return true;
+  }
+}
+
+function withApiKeyIfNeeded(url, token) {
+  const raw = String(url || "").trim();
+  const apiKey = String(token || "").trim();
+  if (!raw || !apiKey || !requiresAuthRequest(raw)) return raw;
+
+  try {
+    const u = /^https?:\/\//i.test(raw)
+      ? new URL(raw)
+      : new URL(raw, window.location.origin);
+    if (!u.searchParams.get("api_key")) {
+      u.searchParams.set("api_key", apiKey);
+    }
+    return /^https?:\/\//i.test(raw)
+      ? u.toString()
+      : `${u.pathname}${u.search}${u.hash}`;
+  } catch {
+    const sep = raw.includes("?") ? "&" : "?";
+    return raw.includes("api_key=") ? raw : `${raw}${sep}api_key=${encodeURIComponent(apiKey)}`;
+  }
+}
+
+function buildSafeFetchHeaders(url, incomingHeaders) {
+  const headers = new Headers(incomingHeaders || {});
+  if (!requiresAuthRequest(url)) return headers;
+
+  const session = (typeof getSessionInfo === "function" ? getSessionInfo() : null) || {};
+  const token = String(session.accessToken || getAuthToken() || "").trim();
+  const userId = String(session.userId || "").trim();
+  const authHeader = String((typeof getAuthHeader === "function" ? getAuthHeader() : "") || "").trim();
+
+  if (!String(headers.get("Authorization") || "").trim() && authHeader) {
+    headers.set("Authorization", authHeader);
+  }
+
+  if (!String(headers.get("X-Emby-Token") || "").trim() && token) {
+    headers.set("X-Emby-Token", token);
+  }
+  if (!String(headers.get("X-Emby-UserId") || "").trim() && userId) {
+    headers.set("X-Emby-UserId", userId);
+  }
+
+  return headers;
+}
+
+async function safeFetch(url, opts = {}) {
+  const normalizedUrl = normalizeWithServer(url);
+  if (requiresAuthRequest(normalizedUrl)) {
+    if (typeof isAuthReadyStrict === "function" && !isAuthReadyStrict()) {
+      try { await waitForAuthReadyStrict(5000); } catch {}
+    }
+
+    const session = (typeof getSessionInfo === "function" ? getSessionInfo() : null) || {};
+    const token = String(session.accessToken || getAuthToken() || "").trim();
+    if (!token) {
+      const err = new Error(`Auth not ready for ${url}`);
+      err.status = 0;
+      throw err;
+    }
+    const finalUrl = withApiKeyIfNeeded(normalizedUrl, token);
+    return fetch(finalUrl, {
+      ...opts,
+      credentials: opts?.credentials || "same-origin",
+      headers: buildSafeFetchHeaders(finalUrl, opts?.headers)
+    });
+  }
+
+  return fetch(normalizedUrl, {
+    ...opts,
+    credentials: opts?.credentials || "same-origin",
+    headers: buildSafeFetchHeaders(normalizedUrl, opts?.headers)
+  });
 }
 
 async function fetchJsonViaSafeFetch(url, opts){
@@ -3586,7 +3664,7 @@ export async function slidesInit() {
         try { tok = getSessionInfo?.()?.accessToken || tok; } catch {}
 
         const headers = {
-          "X-Emby-Authorization": getAuthHeader(),
+          "Authorization": getAuthHeader(),
           "X-Emby-Token": tok,
         };
 
@@ -3644,7 +3722,7 @@ export async function slidesInit() {
           let tok = accessToken;
           try { tok = getSessionInfo?.()?.accessToken || tok; } catch {}
           return {
-            "X-Emby-Authorization": getAuthHeader(),
+            "Authorization": getAuthHeader(),
             "X-Emby-Token": tok,
           };
         },
@@ -3702,7 +3780,7 @@ export async function slidesInit() {
         let playingItems = [];
         const playingLimit = (onlyUnwatched ? 0 : parseInt(config.playingLimit || 0, 10));
         const authHeaders = {
-        "X-Emby-Authorization": getAuthHeader(),
+        "Authorization": getAuthHeader(),
         "X-Emby-Token": accessToken
       };
 

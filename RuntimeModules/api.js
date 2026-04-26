@@ -555,10 +555,17 @@ function buildEmbyHeaders(extra = {}) {
     const api = (typeof window !== "undefined" && window.ApiClient) ? window.ApiClient : null;
     const { accessToken } = getSessionInfo();
     const headers = { ...extra };
-    if (api?.getAuthorizationHeader) {
-      headers['X-Emby-Authorization'] = api.getAuthorizationHeader();
-    } else {
-      headers['X-Emby-Authorization'] = getAuthHeader();
+    if (!headers.Authorization && headers['X-Emby-Authorization']) {
+      headers.Authorization = headers['X-Emby-Authorization'];
+    }
+    delete headers['X-Emby-Authorization'];
+
+    if (!headers.Authorization) {
+      if (api?.getAuthorizationHeader) {
+        headers.Authorization = api.getAuthorizationHeader();
+      } else {
+        headers.Authorization = getAuthHeader();
+      }
     }
     if (accessToken) headers['X-Emby-Token'] = accessToken;
     return headers;
@@ -682,6 +689,27 @@ function safeSet(k, v) {
   try { if (v) { localStorage.setItem(k, v); sessionStorage.setItem(k, v); } } catch {}
 }
 
+function withApiKeyIfNeeded(url, token) {
+  const raw = String(url || "").trim();
+  const apiKey = String(token || "").trim();
+  if (!raw || !apiKey || !requiresAuth(raw)) return raw;
+
+  try {
+    const u = /^https?:\/\//i.test(raw)
+      ? new URL(raw)
+      : new URL(raw, (typeof window !== "undefined" && window.location?.origin) || "http://localhost");
+    if (!u.searchParams.get("api_key")) {
+      u.searchParams.set("api_key", apiKey);
+    }
+    return /^https?:\/\//i.test(raw)
+      ? u.toString()
+      : `${u.pathname}${u.search}${u.hash}`;
+  } catch {
+    const sep = raw.includes("?") ? "&" : "?";
+    return raw.includes("api_key=") ? raw : `${raw}${sep}api_key=${encodeURIComponent(apiKey)}`;
+  }
+}
+
 function readApiClientDeviceId() {
   const api = (typeof window !== "undefined" && window.ApiClient) ? window.ApiClient : null;
   if (!api) return null;
@@ -750,9 +778,9 @@ export async function fetchLocalTrailers(itemId, { signal } = {}) {
   if (token) {
     headers['X-Emby-Token'] = token;
   } else if (api && typeof api.getAuthorizationHeader === 'function') {
-    headers['X-Emby-Authorization'] = api.getAuthorizationHeader();
+    headers.Authorization = api.getAuthorizationHeader();
   } else if (typeof getConfig === 'function' && getConfig()?.authHeader) {
-    headers['X-Emby-Authorization'] = getConfig().authHeader;
+    headers.Authorization = getConfig().authHeader;
   }
 
   try {
@@ -845,7 +873,7 @@ async function safeFetch(url, opts = {}) {
 
   let res;
   try {
-    const fullUrl = withServer(url);
+    const fullUrl = withApiKeyIfNeeded(withServer(url), token);
     res = await fetch(fullUrl, { ...opts, headers });
   } catch (err) {
     if (isAbortError(err, opts?.signal)) {
@@ -960,22 +988,88 @@ function readFromApiClient() {
   }
 }
 
-function pickActiveServerEntry(creds) {
+function readApiClientServerAddress() {
+  try {
+    const api = (typeof window !== "undefined" && window.ApiClient) ? window.ApiClient : null;
+    if (!api) return "";
+    return pickFirstString(
+      typeof api.serverAddress === "function" ? api.serverAddress() : api.serverAddress,
+      api._serverAddress
+    );
+  } catch {
+    return "";
+  }
+}
+
+function normalizeServerAddressMatch(value, ignorePort = false) {
+  try {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    const base = /^https?:\/\//i.test(raw)
+      ? new URL(raw)
+      : new URL(raw, (typeof window !== "undefined" && window.location?.origin) || "http://localhost");
+    const pathname = String(base.pathname || "").replace(/\/+$/, "");
+    const port = ignorePort ? "" : (base.port ? `:${base.port}` : "");
+    return `${base.protocol}//${base.hostname}${port}${pathname}`.toLowerCase();
+  } catch {
+    return String(value || "").trim().replace(/\/+$/, "").toLowerCase();
+  }
+}
+
+function pickActiveServerEntry(creds, hints = {}) {
   try {
     const list = Array.isArray(creds?.Servers) ? creds.Servers : [];
     if (!list.length) return null;
 
-    const sid = creds?.ServerId || null;
+    const sid = pickFirstString(
+      hints?.serverId,
+      creds?.ServerId,
+      safeGet("serverId"),
+      safeGet("persist_server_id")
+    );
     if (sid) {
-      const hit = list.find(s => String(s?.Id || "") === String(sid));
+      const hit = list.find(s =>
+        String(s?.Id || "").trim() === sid ||
+        String(s?.SystemId || "").trim() === sid
+      );
       if (hit) return hit;
     }
 
-    const addr = (getServerAddress?.() || "").toLowerCase();
-    if (addr) {
-      const hit = list.find(s => String(s?.ManualAddress || s?.LocalAddress || "").toLowerCase() === addr);
+    const liveUserId = pickFirstString(hints?.userId);
+    const liveToken = pickFirstString(hints?.accessToken, hints?.token);
+    if (liveUserId || liveToken) {
+      const hit = list.find(s =>
+        (liveUserId && String(s?.UserId || "").trim() === liveUserId) ||
+        (liveToken && String(s?.AccessToken || "").trim() === liveToken)
+      );
       if (hit) return hit;
     }
+
+    const currentBase = pickFirstString(
+      readApiClientServerAddress(),
+      getServerAddress?.(),
+      readStoredServerBase()
+    );
+    const exactAddr = normalizeServerAddressMatch(currentBase, false);
+    if (exactAddr) {
+      const hit = list.find(s => {
+        const manual = normalizeServerAddressMatch(s?.ManualAddress || "", false);
+        const local = normalizeServerAddressMatch(s?.LocalAddress || "", false);
+        return manual === exactAddr || local === exactAddr;
+      });
+      if (hit) return hit;
+    }
+
+    const hostPathAddr = normalizeServerAddressMatch(currentBase, true);
+    if (hostPathAddr) {
+      const hit = list.find(s => {
+        const manual = normalizeServerAddressMatch(s?.ManualAddress || "", true);
+        const local = normalizeServerAddressMatch(s?.LocalAddress || "", true);
+        return manual === hostPathAddr || local === hostPathAddr;
+      });
+      if (hit) return hit;
+    }
+
     return list[0] || null;
   } catch {
     return null;
@@ -992,33 +1086,52 @@ function pickFirstString(...values) {
 
 export function getSessionInfo() {
   try {
-    const raw = localStorage.getItem("jellyfin_credentials") || localStorage.getItem("emby_credentials") || "";
+    const raw =
+      localStorage.getItem("jellyfin_credentials") ||
+      sessionStorage.getItem("jellyfin_credentials") ||
+      localStorage.getItem("emby_credentials") ||
+      sessionStorage.getItem("emby_credentials") ||
+      localStorage.getItem("json-credentials") ||
+      sessionStorage.getItem("json-credentials") ||
+      "";
     const creds = raw ? JSON.parse(raw) : {};
-    const active = pickActiveServerEntry(creds);
+    const live = readFromApiClient() || {};
     const hints = (typeof getWebClientHints === "function" ? getWebClientHints() : null) || {};
+    const active = pickActiveServerEntry(creds, {
+      serverId: pickFirstString(live?.serverId, hints?.serverId),
+      userId: pickFirstString(live?.userId, hints?.userId),
+      accessToken: pickFirstString(live?.token, hints?.accessToken)
+    });
 
     const accessToken = pickFirstString(
+      live?.token,
+      hints?.accessToken,
       active?.AccessToken,
       creds?.AccessToken,
-      hints?.accessToken
+      safeGet("accessToken"),
+      safeGet("api-key")
     );
 
     const userId = pickFirstString(
+      live?.userId,
+      hints?.userId,
       active?.UserId,
       creds?.User?.Id,
       creds?.userId,
-      hints?.userId,
+      safeGet("userId"),
       getStoredUserId(),
       safeGet("persist_user_id")
     );
 
     const sessionId = pickFirstString(
+      live?.sessionId,
       hints?.sessionId,
       creds?.SessionId,
       creds?.sessionId
     );
 
     const deviceId = pickFirstString(
+      live?.deviceId,
       hints?.deviceId,
       creds?.DeviceId,
       creds?.ClientDeviceId,
@@ -1026,6 +1139,7 @@ export function getSessionInfo() {
       safeGet("persist_device_id")
     );
     const deviceName = pickFirstString(
+      live?.deviceName,
       hints?.deviceName,
       creds?.DeviceName,
       creds?.ClientDeviceName,
@@ -1034,17 +1148,38 @@ export function getSessionInfo() {
       detectPlatformDeviceName()
     );
     persistDeviceName(deviceName);
+    if (userId) persistUserId(userId);
 
     const clientName = pickFirstString(
+      live?.clientName,
       hints?.clientName,
       creds?.Client,
       "Jellyfin Web Client"
     );
 
     const clientVersion = pickFirstString(
+      live?.clientVersion,
       hints?.clientVersion,
       creds?.Version,
       "1.0.0"
+    );
+
+    const serverId = pickFirstString(
+      live?.serverId,
+      hints?.serverId,
+      active?.Id,
+      active?.SystemId,
+      creds?.ServerId,
+      safeGet("serverId"),
+      safeGet("persist_server_id")
+    );
+
+    const serverAddress = pickFirstString(
+      readApiClientServerAddress(),
+      active?.ManualAddress,
+      active?.LocalAddress,
+      getServerAddress?.(),
+      readStoredServerBase()
     );
 
     return {
@@ -1056,8 +1191,8 @@ export function getSessionInfo() {
       deviceName,
       clientName,
       clientVersion,
-      serverId: String(active?.Id || creds?.ServerId || ""),
-      serverAddress: String(active?.ManualAddress || active?.LocalAddress || getServerAddress?.() || "")
+      serverId,
+      serverAddress
     };
   } catch {
     return {};
@@ -1135,7 +1270,7 @@ async function makeApiRequest(url, options = {}) {
   }
 } catch {}
 
-    const fullUrl = withServer(url);
+    const fullUrl = withApiKeyIfNeeded(withServer(url), token);
     const response = await fetch(fullUrl, {
       ...options,
       headers: options.headers,

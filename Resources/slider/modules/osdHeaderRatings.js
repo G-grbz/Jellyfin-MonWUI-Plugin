@@ -11,7 +11,7 @@ function buildAuthHeaders() {
     (typeof getSessionInfo === "function" ? getSessionInfo() : null) || {};
 
   return {
-    "X-Emby-Authorization":
+    "Authorization":
       typeof getAuthHeader === "function" ? getAuthHeader() : "",
     "X-Emby-Token": s.accessToken || "",
   };

@@ -452,7 +452,7 @@ async function fetchAllUsersAuthed({ signal } = {}) {
   const headers = { Accept: "application/json" };
   try {
     const ah = getAuthHeader?.();
-    if (ah) headers["X-Emby-Authorization"] = ah;
+    if (ah) headers["Authorization"] = ah;
   } catch {}
   const res = await fetchWithTimeout(url, { headers, signal, credentials: "same-origin" }, 7000);
   if (!res.ok) return [];
@@ -475,7 +475,7 @@ async function fetchUserByIdAuthed(userId, { signal } = {}) {
   const headers = { Accept: "application/json" };
   try {
     const ah = getAuthHeader?.();
-    if (ah) headers["X-Emby-Authorization"] = ah;
+    if (ah) headers["Authorization"] = ah;
   } catch {}
   const res = await fetchWithTimeout(url, { headers, signal, credentials: "same-origin" }, 7000);
   if (!res.ok) return null;
@@ -497,7 +497,7 @@ async function fetchSessionsAuthed({ signal } = {}) {
   const headers = { Accept: "application/json" };
   try {
     const ah = getAuthHeader?.();
-    if (ah) headers["X-Emby-Authorization"] = ah;
+    if (ah) headers["Authorization"] = ah;
   } catch {}
   try {
     const res = await fetchWithTimeout(url, { headers, signal, credentials: "same-origin" }, 7000);
@@ -1002,7 +1002,7 @@ async function authenticateByName(userName, password) {
     method: "POST",
     headers: (() => {
       const h = { "Content-Type": "application/json", Accept: "application/json" };
-      try { const ah = getAuthHeader?.(); if (ah) h["X-Emby-Authorization"] = ah; } catch {}
+      try { const ah = getAuthHeader?.(); if (ah) h["Authorization"] = ah; } catch {}
       return h;
     })(),
     body: JSON.stringify({ Username: userName, Pw: password || "" }),
