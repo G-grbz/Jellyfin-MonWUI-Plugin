@@ -68,8 +68,6 @@ function bgFlushHydrationFrame() {
     .monwui-backdrop {
       opacity: 1;
       transition: opacity .28s ease, filter .34s ease, transform .34s cubic-bezier(.2,.6,.2,1);
-      will-change: opacity, filter, transform;
-      transform: translateZ(0);
     }
     .monwui-backdrop.is-lqip { filter: blur(14px); transform: scale(1.02); }
     .monwui-backdrop.is-hi-pending { opacity: .94; }

@@ -372,6 +372,26 @@ const USER_ONLY_KEYS = [
 
             enableRecentRows: formData.get('enableRecentRows') === 'on',
             showRecentRowsHeroCards: formData.get('showRecentRowsHeroCards') === 'on',
+            showRecentMoviesHeroCards: formData.get('showRecentMoviesHeroCards') === 'on',
+            showRecentSeriesHeroCards: formData.get('showRecentSeriesHeroCards') === 'on',
+            showRecentMusicHeroCards: formData.get('showRecentMusicHeroCards') === 'on',
+            showRecentTracksHeroCards: formData.get('showRecentTracksHeroCards') === 'on',
+            showRecentEpisodesHeroCards: formData.get('showRecentEpisodesHeroCards') === 'on',
+            enableTop10MoviesRow: (() => {
+              const master = formData.get('enableRecentRows') === 'on';
+              if (!master) return false;
+              return formData.get('enableTop10MoviesRow') === 'on';
+            })(),
+            enableTop10SeriesRow: (() => {
+              const master = formData.get('enableRecentRows') === 'on';
+              if (!master) return false;
+              return formData.get('enableTop10SeriesRow') === 'on';
+            })(),
+            enableTmdbTopMoviesRow: (() => {
+              const master = formData.get('enableRecentRows') === 'on';
+              if (!master) return false;
+              return formData.get('enableTmdbTopMoviesRow') === 'on';
+            })(),
             enableRecentMoviesRow: (() => {
               const master = formData.get('enableRecentRows') === 'on';
               if (!master) return false;
@@ -422,8 +442,10 @@ const USER_ONLY_KEYS = [
             })(),
 
             enableContinueMovies: formData.get('enableContinueMovies') === 'on',
+            showContinueMoviesHeroCards: formData.get('showContinueMoviesHeroCards') === 'on',
             continueMoviesCardCount: parseInt(formData.get('continueMoviesCardCount'), 10) || config.continueMoviesCardCount || 10,
             enableContinueSeries: formData.get('enableContinueSeries') === 'on',
+            showContinueSeriesHeroCards: formData.get('showContinueSeriesHeroCards') === 'on',
             continueSeriesCardCount: parseInt(formData.get('continueSeriesCardCount'), 10) || config.continueSeriesCardCount || 10,
 
             recentRowsSplitTvLibs: formData.get('recentRowsSplitTvLibs') === 'on',
@@ -452,6 +474,7 @@ const USER_ONLY_KEYS = [
             })(),
 
             enableOtherLibRows: formData.get('enableOtherLibRows') === 'on',
+            showOtherLibrariesHeroCards: formData.get('showOtherLibrariesHeroCards') === 'on',
             otherLibrariesRecentCardCount: (() => {
               const v = parseInt(formData.get('otherLibrariesRecentCardCount'), 10);
               if (Number.isFinite(v) && v > 0) return v;
@@ -494,6 +517,7 @@ const USER_ONLY_KEYS = [
             managedHomeSectionOrder: managedHomeSectionOrderValue,
 
             enableGenreHubs: formData.get('enableGenreHubs') === 'on',
+            showGenreHubsHeroCards: formData.get('showGenreHubsHeroCards') === 'on',
             studioHubsGenreCardCount: parseInt(formData.get('studioHubsGenreCardCount'), 10) || 10,
             studioHubsGenreRowsCount: parseInt(formData.get('studioHubsGenreRowsCount'), 10) || 3,
             genreHubsOrder: (() => {

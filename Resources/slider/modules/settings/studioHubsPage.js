@@ -50,6 +50,19 @@ const ALIASES = {
   "Netflix": ["netflix"],
   "DreamWorks Animation": ["dreamworks","dreamworks animation","dreamworks pictures"]
 };
+const CORE_TOKENS = {
+  "Marvel Studios": ["marvel"],
+  "Pixar": ["pixar"],
+  "Walt Disney Pictures": ["walt","disney"],
+  "Disney+": ["disney","plus"],
+  "DC": ["dc","entertainment"],
+  "Warner Bros. Pictures": ["warner"],
+  "Lucasfilm Ltd.": ["lucasfilm"],
+  "Columbia Pictures": ["columbia"],
+  "Paramount Pictures": ["paramount"],
+  "Netflix": ["netflix"],
+  "DreamWorks Animation": ["dreamworks", "animation"]
+};
 
 const JUNK_WORDS = [
   "ltd","ltd.","llc","inc","inc.","company","co.","corp","corp.","the",
@@ -130,6 +143,121 @@ function isDefaultStudioHub(name) {
   return DEFAULT_NAME_KEYS.has(nameKey(name));
 }
 
+function scoreStudioHubMatch(desired, candidate) {
+  const desiredTokens = new Set(toks(desired));
+  const candidateTokens = new Set(toks(candidate));
+  if (!desiredTokens.size || !candidateTokens.size) return 0;
+
+  let intersection = 0;
+  for (const token of desiredTokens) {
+    if (candidateTokens.has(token)) intersection++;
+  }
+
+  const hasCoreToken = (CORE_TOKENS[desired] || []).some(token => candidateTokens.has(nbase(token)));
+  if (!hasCoreToken) return 0;
+
+  return 1 + (intersection / Math.min(desiredTokens.size, candidateTokens.size));
+}
+
+function matchesStudioHubName(desired, candidate) {
+  return scoreStudioHubMatch(desired, candidate) >= 1.3;
+}
+
+async function searchStudioHubByAliases(desired, signal) {
+  const lookupTerms = [desired, ...(ALIASES[desired] || [])];
+  let bestMatch = null;
+  let bestScore = 0;
+
+  for (const term of lookupTerms) {
+    let data = null;
+    try {
+      data = await makeApiRequest(`/Studios?SearchTerm=${encodeURIComponent(term)}&Limit=20`, { signal });
+    } catch {}
+    const items = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data) ? data : []);
+    for (const studio of items) {
+      const score = scoreStudioHubMatch(desired, studio?.Name || "");
+      if (score > bestScore) {
+        bestMatch = studio;
+        bestScore = score;
+      }
+    }
+  }
+
+  return bestScore >= 1.3 ? bestMatch : null;
+}
+
+async function getStudioHubCurrentUserId(signal) {
+  try {
+    const me = await makeApiRequest("/Users/Me", { signal });
+    return String(me?.Id || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+async function defaultStudioHubHasItems(studioId, studioName, userId, runtimeConfig, signal) {
+  const cleanStudioId = String(studioId || "").trim();
+  const cleanStudioName = String(studioName || "").trim();
+  const cleanUserId = String(userId || "").trim();
+  if (!cleanStudioId || !cleanUserId) return false;
+
+  const minRating = Number.isFinite(runtimeConfig?.studioHubsMinRating)
+    ? Number(runtimeConfig.studioHubsMinRating)
+    : null;
+  const ratingPart = Number.isFinite(minRating) ? `&MinCommunityRating=${minRating}` : "";
+  const common = `StartIndex=0&Limit=1&Fields=PrimaryImageAspectRatio,ImageTags,BackdropImageTags,CommunityRating,CriticRating&Recursive=true&SortOrder=Descending${ratingPart}`;
+  const urls = [
+    `/Users/${encodeURIComponent(cleanUserId)}/Items?${common}&IncludeItemTypes=Movie,Series&StudioIds=${encodeURIComponent(cleanStudioId)}`,
+    `/Users/${encodeURIComponent(cleanUserId)}/Items?${common}&IncludeItemTypes=Movie,Series&Studios=${encodeURIComponent(cleanStudioName)}`
+  ];
+
+  for (const url of urls) {
+    try {
+      const data = await makeApiRequest(url, { signal });
+      const items = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data) ? data : []);
+      if (items.length) return true;
+    } catch {}
+  }
+
+  return false;
+}
+
+async function findEmptyDefaultStudioHubNames(runtimeConfig, signal) {
+  const userId = await getStudioHubCurrentUserId(signal);
+  if (!userId) return [];
+
+  let data = null;
+  try {
+    data = await makeApiRequest("/Studios?Limit=300&Recursive=true&SortBy=SortName&SortOrder=Ascending", { signal });
+  } catch {
+    return [];
+  }
+
+  const studios = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data) ? data : []);
+  const emptyNames = [];
+
+  for (const desired of DEFAULT_ORDER) {
+    const studio =
+      studios.find(item => matchesStudioHubName(desired, item?.Name || "")) ||
+      await searchStudioHubByAliases(desired, signal);
+    if (!studio?.Id) {
+      emptyNames.push(desired);
+      continue;
+    }
+
+    const hasItems = await defaultStudioHubHasItems(
+      studio.Id,
+      studio.Name || desired,
+      userId,
+      runtimeConfig,
+      signal
+    );
+    if (!hasItems) emptyNames.push(desired);
+  }
+
+  return emptyNames;
+}
+
 function createHiddenInput(id, value) {
   const inp = document.createElement("input");
   inp.type = "hidden";
@@ -187,6 +315,15 @@ function getManagedHomeSectionOrderLabel(name, config, labels) {
       config?.languageLabels?.personalRecommendations ||
       "Sana Özel Öneriler"
     );
+  }
+  if (name === "top10SeriesRows") {
+    return labels?.top10Series || "Top 10 Diziler";
+  }
+  if (name === "top10MovieRows") {
+    return labels?.top10Movies || "Top 10 Filmler";
+  }
+  if (name === "tmdbTopMoviesRows") {
+    return labels?.tmdbTopMovies || "TMDb En Iyi Filmler";
   }
   if (name === "recentRows") {
     return labels?.managedRecentRowsLabel || "Son Eklenenler";
@@ -1596,29 +1733,29 @@ export function createStudioHubsPanel(config, labels) {
   });
   refreshListState();
 
-  if (useGlobalVisibility) {
-    if (useGlobalOrder) applyOrderNamesToList(currentOrderNames);
-    applyHiddenNamesToList(currentHiddenNames);
-  } else {
-    (async () => {
-      try {
-        const visibility = await fetchStudioHubVisibility({
-          force: true,
-          profile: getVisibilityProfile()
-        });
-        applyOrderNamesToList(
-          Array.isArray(visibility?.orderNames) && visibility.orderNames.length
-            ? visibility.orderNames
-            : currentOrderNames
-        );
-        applyHiddenNamesToList(visibility?.hiddenNames || []);
-      } catch (e) {
-        console.warn("studioHubsPage: visibility alınamadı:", e);
-      }
-    })();
-  }
+  const visibilityLoadPromise = useGlobalVisibility
+    ? Promise.resolve().then(() => {
+        if (useGlobalOrder) applyOrderNamesToList(currentOrderNames);
+        applyHiddenNamesToList(currentHiddenNames);
+      })
+    : (async () => {
+        try {
+          const visibility = await fetchStudioHubVisibility({
+            force: true,
+            profile: getVisibilityProfile()
+          });
+          applyOrderNamesToList(
+            Array.isArray(visibility?.orderNames) && visibility.orderNames.length
+              ? visibility.orderNames
+              : currentOrderNames
+          );
+          applyHiddenNamesToList(visibility?.hiddenNames || []);
+        } catch (e) {
+          console.warn("studioHubsPage: visibility alınamadı:", e);
+        }
+      })();
 
-  (async () => {
+  const sharedDataLoadPromise = (async () => {
     try {
       manualEntries = await fetchStudioHubManualEntries();
       manualEntriesLoaded = true;
@@ -1628,6 +1765,29 @@ export function createStudioHubsPanel(config, labels) {
       refreshListState();
     } catch (e) {
       console.warn("studioHubsPage: shared data alınamadı:", e);
+    }
+  })();
+
+  (async () => {
+    const ctrl = new AbortController();
+    panel.addEventListener("jms:cleanup", () => ctrl.abort(), { once: true });
+    try {
+      await Promise.allSettled([visibilityLoadPromise, sharedDataLoadPromise]);
+      if (ctrl.signal.aborted) return;
+
+      const emptyDefaultNames = await findEmptyDefaultStudioHubNames(config, ctrl.signal);
+      if (ctrl.signal.aborted || !emptyDefaultNames.length) return;
+
+      const hiddenSet = new Set(currentHiddenNames.map(nameKey));
+      const nextHiddenNames = dedupeNames([...currentHiddenNames, ...emptyDefaultNames]);
+      const changed = emptyDefaultNames.some(name => !hiddenSet.has(nameKey(name)));
+      if (!changed) return;
+
+      applyHiddenNamesToList(nextHiddenNames);
+    } catch (e) {
+      if (!ctrl.signal.aborted) {
+        console.warn("studioHubsPage: boş varsayılan koleksiyonlar otomatik gizlenemedi:", e);
+      }
     }
   })();
 
@@ -1687,12 +1847,40 @@ export function createStudioHubsPanel(config, labels) {
   );
   recentSubWrap.appendChild(showRecentRowsHeroCards);
 
+  const enableTop10SeriesRow = createCheckbox(
+    'enableTop10SeriesRow',
+    labels?.enableTop10SeriesRow || 'Top 10 dizi satırı',
+    config.enableTop10SeriesRow !== false
+  );
+  recentSubWrap.appendChild(enableTop10SeriesRow);
+
+  const enableTop10MoviesRow = createCheckbox(
+    'enableTop10MoviesRow',
+    labels?.enableTop10MoviesRow || 'Top 10 film satırı',
+    config.enableTop10MoviesRow !== false
+  );
+  recentSubWrap.appendChild(enableTop10MoviesRow);
+
+  const enableTmdbTopMoviesRow = createCheckbox(
+    'enableTmdbTopMoviesRow',
+    labels?.enableTmdbTopMoviesRow || 'TMDb en iyi filmler satırı',
+    config.enableTmdbTopMoviesRow !== false
+  );
+  recentSubWrap.appendChild(enableTmdbTopMoviesRow);
+
   const enableRecentMoviesRow = createCheckbox(
     'enableRecentMoviesRow',
     labels?.enableRecentMoviesRow || 'Son eklenen filmler satırı',
     config.enableRecentMoviesRow !== false
   );
   recentSubWrap.appendChild(enableRecentMoviesRow);
+
+  const showRecentMoviesHeroCards = createCheckbox(
+    'showRecentMoviesHeroCards',
+    labels?.showRecentMoviesHeroCards || 'Hero kartını göster (Son Eklenen Filmler)',
+    config.showRecentMoviesHeroCards !== false
+  );
+  recentSubWrap.appendChild(showRecentMoviesHeroCards);
 
   const splitMovieLibRows = createCheckbox(
     'recentRowsSplitMovieLibs',
@@ -1717,6 +1905,13 @@ export function createStudioHubsPanel(config, labels) {
   );
   recentSubWrap.appendChild(enableRecentSeriesRow);
 
+  const showRecentSeriesHeroCards = createCheckbox(
+    'showRecentSeriesHeroCards',
+    labels?.showRecentSeriesHeroCards || 'Hero kartını göster (Son Eklenen Diziler)',
+    config.showRecentSeriesHeroCards !== false
+  );
+  recentSubWrap.appendChild(showRecentSeriesHeroCards);
+
   const splitTvLibRows = createCheckbox(
     'recentRowsSplitTvLibs',
     labels?.recentRowsSplitTvLibs || 'Dizi Kütüphanelerini Ayrı Bölümle',
@@ -1740,12 +1935,26 @@ export function createStudioHubsPanel(config, labels) {
   );
   recentSubWrap.appendChild(enableRecentMusicRow);
 
+  const showRecentMusicHeroCards = createCheckbox(
+    'showRecentMusicHeroCards',
+    labels?.showRecentMusicHeroCards || 'Hero kartını göster (Son Eklenen Albümler)',
+    config.showRecentMusicHeroCards !== false
+  );
+  recentSubWrap.appendChild(showRecentMusicHeroCards);
+
   const enableRecentMusicTracksRow = createCheckbox(
     'enableRecentMusicTracksRow',
     labels?.enableRecentMusicTracksRow || 'Son Dinlenen Parçalar',
     config.enableRecentMusicTracksRow !== false
   );
   recentSubWrap.appendChild(enableRecentMusicTracksRow);
+
+  const showRecentTracksHeroCards = createCheckbox(
+    'showRecentTracksHeroCards',
+    labels?.showRecentTracksHeroCards || 'Hero kartını göster (Son Dinlenen Şarkılar)',
+    config.showRecentTracksHeroCards !== false
+  );
+  recentSubWrap.appendChild(showRecentTracksHeroCards);
 
   const recentMusicCountWrap = createNumberInput(
     'recentMusicCardCount',
@@ -1763,6 +1972,13 @@ export function createStudioHubsPanel(config, labels) {
   );
   recentSubWrap.appendChild(enableRecentEpisodesRow);
 
+  const showRecentEpisodesHeroCards = createCheckbox(
+    'showRecentEpisodesHeroCards',
+    labels?.showRecentEpisodesHeroCards || 'Hero kartını göster (Son Eklenen Bölümler)',
+    config.showRecentEpisodesHeroCards !== false
+  );
+  recentSubWrap.appendChild(showRecentEpisodesHeroCards);
+
   const recentEpisodesCountWrap = createNumberInput(
     'recentEpisodesCardCount',
     labels?.recentEpisodesCardCount || 'Son eklenen bölümler kart sayısı',
@@ -1773,23 +1989,64 @@ export function createStudioHubsPanel(config, labels) {
   recentSubWrap.appendChild(recentEpisodesCountWrap);
 
   const getCb = wrap => wrap?.querySelector?.('input[type="checkbox"]');
+  const bindDependentCheckboxVisibility = (controllerWrap, dependentWrap) => {
+    const controllerCb = getCb(controllerWrap);
+    const dependentCb = getCb(dependentWrap);
+
+    const sync = () => {
+      const visible = !!controllerCb?.checked;
+      if (dependentWrap) dependentWrap.style.display = visible ? '' : 'none';
+      if (!visible && dependentCb) dependentCb.checked = false;
+    };
+
+    sync();
+    controllerWrap?.addEventListener?.('change', sync, { passive: true });
+    return sync;
+  };
+
   const masterCb = getCb(enableRecentRows);
+  const top10SeriesCb = getCb(enableTop10SeriesRow);
+  const top10MoviesCb = getCb(enableTop10MoviesRow);
+  const tmdbTopMoviesCb = getCb(enableTmdbTopMoviesRow);
   const recMovCb = getCb(enableRecentMoviesRow);
+  const recMovHeroCb = getCb(showRecentMoviesHeroCards);
   const recSerCb = getCb(enableRecentSeriesRow);
+  const recSerHeroCb = getCb(showRecentSeriesHeroCards);
   const recMusicCb = getCb(enableRecentMusicRow);
+  const recMusicHeroCb = getCb(showRecentMusicHeroCards);
   const recTracksCb = getCb(enableRecentMusicTracksRow);
+  const recTracksHeroCb = getCb(showRecentTracksHeroCards);
   const recEpCb  = getCb(enableRecentEpisodesRow);
+  const recEpHeroCb = getCb(showRecentEpisodesHeroCards);
+  const syncRecentMoviesHeroVisibility = bindDependentCheckboxVisibility(enableRecentMoviesRow, showRecentMoviesHeroCards);
+  const syncRecentSeriesHeroVisibility = bindDependentCheckboxVisibility(enableRecentSeriesRow, showRecentSeriesHeroCards);
+  const syncRecentMusicHeroVisibility = bindDependentCheckboxVisibility(enableRecentMusicRow, showRecentMusicHeroCards);
+  const syncRecentTracksHeroVisibility = bindDependentCheckboxVisibility(enableRecentMusicTracksRow, showRecentTracksHeroCards);
+  const syncRecentEpisodesHeroVisibility = bindDependentCheckboxVisibility(enableRecentEpisodesRow, showRecentEpisodesHeroCards);
 
   function syncRecentSubState() {
     const on = !!masterCb?.checked;
     recentSubWrap.style.display = on ? '' : 'none';
     if (!on) {
+      if (top10SeriesCb) top10SeriesCb.checked = false;
+      if (top10MoviesCb) top10MoviesCb.checked = false;
+      if (tmdbTopMoviesCb) tmdbTopMoviesCb.checked = false;
       if (recMovCb) recMovCb.checked = false;
+      if (recMovHeroCb) recMovHeroCb.checked = false;
       if (recSerCb) recSerCb.checked = false;
+      if (recSerHeroCb) recSerHeroCb.checked = false;
       if (recMusicCb) recMusicCb.checked = false;
+      if (recMusicHeroCb) recMusicHeroCb.checked = false;
       if (recTracksCb) recTracksCb.checked = false;
+      if (recTracksHeroCb) recTracksHeroCb.checked = false;
       if (recEpCb)  recEpCb.checked  = false;
+      if (recEpHeroCb) recEpHeroCb.checked = false;
     }
+    syncRecentMoviesHeroVisibility();
+    syncRecentSeriesHeroVisibility();
+    syncRecentMusicHeroVisibility();
+    syncRecentTracksHeroVisibility();
+    syncRecentEpisodesHeroVisibility();
   }
   syncRecentSubState();
   enableRecentRows.addEventListener('change', syncRecentSubState, { passive: true });
@@ -1800,6 +2057,13 @@ export function createStudioHubsPanel(config, labels) {
     !!config.enableContinueMovies
   );
   section.appendChild(enableContinueMovies);
+
+  const showContinueMoviesHeroCards = createCheckbox(
+    'showContinueMoviesHeroCards',
+    labels?.showContinueMoviesHeroCards || 'Hero kartını göster (İzlemeye Devam Et - Filmler)',
+    config.showContinueMoviesHeroCards !== false
+  );
+  section.appendChild(showContinueMoviesHeroCards);
 
   const continueMoviesCountWrap = createNumberInput(
     'continueMoviesCardCount',
@@ -1817,6 +2081,13 @@ export function createStudioHubsPanel(config, labels) {
   );
   section.appendChild(enableContinueSeries);
 
+  const showContinueSeriesHeroCards = createCheckbox(
+    'showContinueSeriesHeroCards',
+    labels?.showContinueSeriesHeroCards || 'Hero kartını göster (İzlemeye Devam Et - Diziler)',
+    config.showContinueSeriesHeroCards !== false
+  );
+  section.appendChild(showContinueSeriesHeroCards);
+
   const continueSeriesCountWrap = createNumberInput(
     'continueSeriesCardCount',
     labels?.continueSeriesCardCount || 'İzlemeye devam et (Diziler) kart sayısı',
@@ -1825,6 +2096,28 @@ export function createStudioHubsPanel(config, labels) {
     20
   );
   section.appendChild(continueSeriesCountWrap);
+
+  const continueMoviesCb = getCb(enableContinueMovies);
+  const continueMoviesHeroCb = getCb(showContinueMoviesHeroCards);
+  const continueSeriesCb = getCb(enableContinueSeries);
+  const continueSeriesHeroCb = getCb(showContinueSeriesHeroCards);
+  const syncContinueMoviesHeroVisibility = bindDependentCheckboxVisibility(enableContinueMovies, showContinueMoviesHeroCards);
+  const syncContinueSeriesHeroVisibility = bindDependentCheckboxVisibility(enableContinueSeries, showContinueSeriesHeroCards);
+
+  function syncContinueHeroState() {
+    if (continueMoviesCb && continueMoviesHeroCb && !continueMoviesCb.checked) {
+      continueMoviesHeroCb.checked = false;
+    }
+    if (continueSeriesCb && continueSeriesHeroCb && !continueSeriesCb.checked) {
+      continueSeriesHeroCb.checked = false;
+    }
+    syncContinueMoviesHeroVisibility();
+    syncContinueSeriesHeroVisibility();
+  }
+
+  syncContinueHeroState();
+  enableContinueMovies.addEventListener('change', syncContinueHeroState, { passive: true });
+  enableContinueSeries.addEventListener('change', syncContinueHeroState, { passive: true });
 
   const movieLibBox = document.createElement("div");
   movieLibBox.className = "setting-item movies";
@@ -2199,6 +2492,13 @@ export function createStudioHubsPanel(config, labels) {
   );
   section.appendChild(enableOtherLibRows);
 
+  const showOtherLibrariesHeroCards = createCheckbox(
+    "showOtherLibrariesHeroCards",
+    labels?.showOtherLibrariesHeroCards || "Hero kartını göster (Diğer Kütüphaneler)",
+    config.showOtherLibrariesHeroCards !== false
+  );
+  section.appendChild(showOtherLibrariesHeroCards);
+
   const otherLibBox = document.createElement("div");
   otherLibBox.style.paddingLeft = "8px";
   otherLibBox.style.borderLeft = "2px solid #0002";
@@ -2272,14 +2572,18 @@ export function createStudioHubsPanel(config, labels) {
   otherActions.appendChild(btnOtherNone);
 
   const otherMasterCb = enableOtherLibRows?.querySelector?.('input[type="checkbox"]');
+  const otherHeroCb = showOtherLibrariesHeroCards?.querySelector?.('input[type="checkbox"]');
+  const syncOtherHeroVisibility = bindDependentCheckboxVisibility(enableOtherLibRows, showOtherLibrariesHeroCards);
   function syncOtherBoxVisibility() {
     const on = !!otherMasterCb?.checked;
     otherLibBox.style.display = on ? "" : "none";
     if (!on) {
+      if (otherHeroCb) otherHeroCb.checked = false;
       hiddenOtherLibIds.value = "[]";
       writeJsonArrGeneric("otherLibrariesIds", []);
       [...otherGrid.querySelectorAll('input[type="checkbox"]')].forEach(i => (i.checked = false));
     }
+    syncOtherHeroVisibility();
   }
   syncOtherBoxVisibility();
   enableOtherLibRows.addEventListener("change", syncOtherBoxVisibility, { passive: true });
@@ -2366,6 +2670,7 @@ export function createStudioHubsPanel(config, labels) {
     config.showPersonalRecsHeroCards !== false
   );
   becauseYouWatchedSection.appendChild(showPersonalRecsHeroCards);
+  bindDependentCheckboxVisibility(enableBecauseYouWatched, showPersonalRecsHeroCards);
 
   const bywRowCountWrap = createNumberInput(
     'becauseYouWatchedRowCount',
@@ -2397,6 +2702,13 @@ export function createStudioHubsPanel(config, labels) {
     !!config.enableGenreHubs
   );
   genreSection.appendChild(enableGenreHubs);
+
+  const showGenreHubsHeroCards = createCheckbox(
+    'showGenreHubsHeroCards',
+    labels?.showGenreHubsHeroCards || 'Hero kartını göster (Tür Bazlı Koleksiyonlar)',
+    config.showGenreHubsHeroCards !== false
+  );
+  genreSection.appendChild(showGenreHubsHeroCards);
 
   const rowsCountWrap = createNumberInput(
     'studioHubsGenreRowsCount',
@@ -2451,6 +2763,17 @@ export function createStudioHubsPanel(config, labels) {
     const names = [...genreList.querySelectorAll(".dnd-item")].map(li => li.dataset.name);
     genreHidden.value = JSON.stringify(names);
   };
+  const genreMasterCb = enableGenreHubs?.querySelector?.('input[type="checkbox"]');
+  const genreHeroCb = showGenreHubsHeroCards?.querySelector?.('input[type="checkbox"]');
+  const syncGenreHeroVisibility = bindDependentCheckboxVisibility(enableGenreHubs, showGenreHubsHeroCards);
+  function syncGenreHeroState() {
+    if (genreMasterCb && genreHeroCb && !genreMasterCb.checked) {
+      genreHeroCb.checked = false;
+    }
+    syncGenreHeroVisibility();
+  }
+  syncGenreHeroState();
+  enableGenreHubs.addEventListener('change', syncGenreHeroState, { passive: true });
   genreList.addEventListener("dragend", refreshGenreHidden);
   genreList.addEventListener("drop", refreshGenreHidden);
   genreList.addEventListener("dnd:reorder", refreshGenreHidden);
@@ -2473,6 +2796,7 @@ export function createStudioHubsPanel(config, labels) {
     config.showDirectorRowsHeroCards !== false
   );
   dirSection.appendChild(showDirectorRowsHeroCards);
+  bindDependentCheckboxVisibility(enableDirectorRows, showDirectorRowsHeroCards);
 
   const directorRowsUseTopGenres = createCheckbox(
     'directorRowsUseTopGenres',

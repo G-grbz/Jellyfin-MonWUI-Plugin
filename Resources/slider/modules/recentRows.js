@@ -1,12 +1,18 @@
-import { getSessionInfo, makeApiRequest, playNow, waitForAuthReadyStrict } from "/Plugins/JMSFusion/runtime/api.js";
+import { getSessionInfo, makeApiRequest, playNow, waitForAuthReadyStrict, getCachedUserTopGenres } from "/Plugins/JMSFusion/runtime/api.js";
 import { getConfig, getHomeSectionsRuntimeConfig, getManagedHomeSectionRuntimeOrder } from "./config.js";
 import { getLanguageLabels } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";
 import { REOPEN_COOLDOWN_MS, OPEN_HOVER_DELAY_MS } from "./hoverTrailerModal.js";
 import { createTrailerIframe, formatOfficialRatingLabel } from "./utils.js";
-import { setupScroller } from "./personalRecommendations.js";
+import {
+  clearScrollerAwareHiResUpgrade,
+  isScrollerMediaBusy,
+  scheduleScrollerAwareHiResUpgrade,
+  setupScroller
+} from "./personalRecommendations.js";
 import { openDetailsModal } from "./detailsModalLoader.js";
 import { openDirRowsDB, makeScope, upsertItemsBatchIdle, getMeta, setMeta, getItemsByIds, } from "./recentRowsDb.js";
+import { getGlobalTmdbApiKey } from "./jmsPluginConfig.js";
 import {
   withServer,
   withServerSrcset,
@@ -40,6 +46,7 @@ const ENABLE_RECENT_EPISODES = ENABLE_RECENT_MASTER && (config.enableRecentEpiso
 const ENABLE_RECENT_MUSIC    = ENABLE_RECENT_MASTER && (config.enableRecentMusicRow !== false);
 const ENABLE_RECENT_TRACKS   = ENABLE_RECENT_MASTER && (config.enableRecentMusicTracksRow !== false);
 const DEFAULT_RECENT_ROWS_COUNT = 15;
+const TOP10_ROW_CARD_COUNT = 10;
 const ENABLE_OTHER_LIB_ROWS = !!config.enableOtherLibRows;
 const OTHER_RECENT_CARD_COUNT   = UNIFIED_ROW_ITEM_LIMIT;
 const OTHER_CONTINUE_CARD_COUNT = UNIFIED_ROW_ITEM_LIMIT;
@@ -94,6 +101,14 @@ function getRecentRowsRuntimeConfig(source = getLiveConfig()) {
 
   return {
     showHeroCards: cfg.showRecentRowsHeroCards !== false,
+    showRecentMoviesHeroCards: cfg.showRecentMoviesHeroCards !== false,
+    showRecentSeriesHeroCards: cfg.showRecentSeriesHeroCards !== false,
+    showRecentMusicHeroCards: cfg.showRecentMusicHeroCards !== false,
+    showRecentTracksHeroCards: cfg.showRecentTracksHeroCards !== false,
+    showRecentEpisodesHeroCards: cfg.showRecentEpisodesHeroCards !== false,
+    enableTop10Movies: enableRecentMaster && (cfg.enableTop10MoviesRow !== false),
+    enableTop10Series: enableRecentMaster && (cfg.enableTop10SeriesRow !== false),
+    enableTmdbTopMovies: enableRecentMaster && (cfg.enableTmdbTopMoviesRow !== false),
     enableRecentMovies: enableRecentMaster && (cfg.enableRecentMoviesRow !== false),
     enableRecentSeries: enableRecentMaster && (cfg.enableRecentSeriesRow !== false),
     enableRecentEpisodes: enableRecentMaster && (cfg.enableRecentEpisodesRow !== false),
@@ -101,7 +116,10 @@ function getRecentRowsRuntimeConfig(source = getLiveConfig()) {
     enableRecentTracks: enableRecentMaster && (cfg.enableRecentMusicTracksRow !== false),
     enableContinueMovies: homeSectionsConfig.enableContinueMovies,
     enableContinueSeries: homeSectionsConfig.enableContinueSeries,
+    showContinueMoviesHeroCards: cfg.showContinueMoviesHeroCards !== false,
+    showContinueSeriesHeroCards: cfg.showContinueSeriesHeroCards !== false,
     enableOtherLibRows: homeSectionsConfig.enableOtherLibRows,
+    showOtherLibrariesHeroCards: cfg.showOtherLibrariesHeroCards !== false,
     effectiveRecentMoviesCount: getEffectiveRowCount(clampPositiveCount(cfg.recentMoviesCardCount, DEFAULT_RECENT_ROWS_COUNT)),
     effectiveRecentSeriesCount: getEffectiveRowCount(clampPositiveCount(cfg.recentSeriesCardCount, DEFAULT_RECENT_ROWS_COUNT)),
     effectiveRecentEpisodesCount: getEffectiveRowCount(clampPositiveCount(cfg.recentEpisodesCardCount, 10)),
@@ -141,6 +159,21 @@ let __recentMountPromise = null;
 let __recentRowsRetryTo = null;
 
 const RECENT_ROW_SECTION_META = Object.freeze({
+  top10SeriesRows: {
+    id: "top10-series-rows",
+    flag: "__jmsTop10SeriesRowsDone",
+    event: "jms:top10-series-rows-done"
+  },
+  top10MovieRows: {
+    id: "top10-movie-rows",
+    flag: "__jmsTop10MovieRowsDone",
+    event: "jms:top10-movie-rows-done"
+  },
+  tmdbTopMoviesRows: {
+    id: "tmdb-top-movie-rows",
+    flag: "__jmsTmdbTopMoviesRowsDone",
+    event: "jms:tmdb-top-movie-rows-done"
+  },
   recentRows: {
     id: "recent-rows",
     flag: "__jmsRecentRowsDone",
@@ -155,6 +188,15 @@ const RECENT_ROW_SECTION_META = Object.freeze({
 
 const TTL_RECENT_MS   = Number.isFinite(config.recentRowsCacheTTLms) ? Math.max(5_000, config.recentRowsCacheTTLms|0) : 90_000;
 const TTL_CONTINUE_MS = Number.isFinite(config.continueRowsCacheTTLms) ? Math.max(5_000, config.continueRowsCacheTTLms|0) : 45_000;
+const TTL_TOP10_MS    = 2 * 60 * 60 * 1000;
+const TOP_RANK_QUERY_POOL_MULTIPLIER = 4;
+const TMDB_TOP_MOVIE_POOL_SIZE = 240;
+const TMDB_TOP_RATED_PAGE_LIMIT = 8;
+const TOP_RANK_PROFILE_TTL_MS = 10 * 60 * 1000;
+const TOP_RANK_GENRE_WEIGHTS = Object.freeze([1, 0.86, 0.74, 0.62, 0.5]);
+const FAMILY_FRIENDLY_RATINGS = new Set(["G", "PG", "TV-G", "TV-PG"]);
+
+const __topRankProfileCache = new Map();
 
 function metaKey(kind, type){ return `rr:${kind}:${type}`; }
 function movieLibMetaSuffix(movieLibId){ return movieLibId ? `@movie:${movieLibId}` : ""; }
@@ -188,6 +230,18 @@ function setContinueRowsDone(done) {
   setManagedRecentRowsDone("continueRows", done);
 }
 
+function hasTop10SeriesRowsSectionEnabled(runtimeCfg) {
+  return runtimeCfg.enableTop10Series === true;
+}
+
+function hasTop10MovieRowsSectionEnabled(runtimeCfg) {
+  return runtimeCfg.enableTop10Movies === true;
+}
+
+function hasTmdbTopMoviesRowsSectionEnabled(runtimeCfg) {
+  return runtimeCfg.enableTmdbTopMovies === true;
+}
+
 function hasRecentRowsSectionEnabled(runtimeCfg) {
   return !!(
     runtimeCfg.enableRecentMovies ||
@@ -209,6 +263,9 @@ function hasContinueRowsSectionEnabled(runtimeCfg) {
 
 function getOrderedRecentRowSectionKeys(cfg, runtimeCfg) {
   const enabled = new Set();
+  if (hasTop10SeriesRowsSectionEnabled(runtimeCfg)) enabled.add("top10SeriesRows");
+  if (hasTop10MovieRowsSectionEnabled(runtimeCfg)) enabled.add("top10MovieRows");
+  if (hasTmdbTopMoviesRowsSectionEnabled(runtimeCfg)) enabled.add("tmdbTopMoviesRows");
   if (hasRecentRowsSectionEnabled(runtimeCfg)) enabled.add("recentRows");
   if (hasContinueRowsSectionEnabled(runtimeCfg)) enabled.add("continueRows");
   if (!enabled.size) return [];
@@ -262,12 +319,16 @@ async function writeCachedList(kind, type, ids) {
   } catch {}
 }
 
-async function loadCachedRowItems(kind, type, ttlMs, { limit = 0, afterLoad = null } = {}) {
+async function loadCachedRowItems(kind, type, ttlMs, {
+  limit = 0,
+  afterLoad = null,
+  refreshUserData = false
+} = {}) {
   const { ids, fresh } = await readCachedList(kind, type, ttlMs);
   if (!ids.length) return { items: [], fresh: false };
 
   const take = limit > 0 ? Math.max(1, limit | 0) : ids.length;
-  const items = await fetchItemsByIds(ids.slice(0, take));
+  const items = await fetchItemsByIds(ids.slice(0, take), { refreshUserData });
   if (typeof afterLoad === "function") {
     await afterLoad(items);
   }
@@ -551,6 +612,7 @@ function promoteTaglessImageData(data) {
 
 function markImageSettled(img, src, { disableRecovery = false } = {}) {
   if (!img) return;
+  clearScrollerAwareHiResUpgrade(img);
   try { img.removeAttribute("srcset"); } catch {}
   if (src) {
     try { img.src = src; } catch {}
@@ -633,6 +695,11 @@ function requestHiResImage(img) {
   if (!img || !img.isConnected) return;
   const data = img.__data || {};
   if (img.__disableRecovery === true || img.__disableHi === true || hasKnownMissingImage(data)) return;
+  if (isScrollerMediaBusy(img)) {
+    scheduleScrollerAwareHiResUpgrade(img, requestHiResImage);
+    return;
+  }
+  clearScrollerAwareHiResUpgrade(img);
   if (img.__hiRequested) return;
   if (!data.hqSrc) {
     markImageSettled(img, data.lqSrc || img.currentSrc || img.src || data.fallback || PLACEHOLDER_URL, { disableRecovery: true });
@@ -748,18 +815,70 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
     delete img.__fallbackState;
     try { img.removeAttribute("srcset"); } catch {}
     const staticSrc = hqSrc || lqSrc || fb;
+    const useMobileBlurTransition = img?.classList?.contains?.("cardImage") === true;
     const alreadyStatic = (img.__mobileStaticSrc === staticSrc && img.src === staticSrc);
     try { img.loading = "lazy"; } catch {}
-    if (!alreadyStatic && img.src !== staticSrc) img.src = staticSrc;
     img.__mobileStaticSrc = staticSrc;
-    img.classList.remove("is-lqip");
-    img.classList.add("__hydrated");
     img.__phase = "static";
     img.__hiRequested = true;
     img.__disableHi = true;
-    img.__hydrated = true;
-    img.__lqLoaded = true;
     img.__pendingHi = false;
+    if (!useMobileBlurTransition) {
+      if (!alreadyStatic && img.src !== staticSrc) img.src = staticSrc;
+      img.classList.remove("is-lqip");
+      img.classList.add("__hydrated");
+      img.__hydrated = true;
+      img.__lqLoaded = true;
+      return;
+    }
+
+    const cleanupMobileStaticListeners = () => {
+      try { if (img.__onErr) img.removeEventListener("error", img.__onErr); } catch {}
+      try { if (img.__onLoad) img.removeEventListener("load", img.__onLoad); } catch {}
+      delete img.__onErr;
+      delete img.__onLoad;
+    };
+
+    const finishMobileStaticHydration = () => {
+      cleanupMobileStaticListeners();
+      img.classList.add("__hydrated");
+      requestAnimationFrame(() => {
+        try { img.classList.remove("is-lqip"); } catch {}
+      });
+      img.__hydrated = true;
+      img.__lqLoaded = true;
+    };
+
+    const failMobileStaticHydration = () => {
+      cleanupMobileStaticListeners();
+      markImageSettled(img, fb, { disableRecovery: true });
+      img.__disableHi = true;
+      img.__pendingHi = false;
+    };
+
+    if (alreadyStatic && img.__hydrated === true) {
+      img.classList.remove("is-lqip");
+      img.classList.add("__hydrated");
+      img.__lqLoaded = true;
+      return;
+    }
+
+    img.classList.add("is-lqip");
+    try { img.classList.remove("__hydrated"); } catch {}
+    img.__hydrated = false;
+    img.__lqLoaded = false;
+
+    img.__onLoad = () => finishMobileStaticHydration();
+    img.__onErr = () => failMobileStaticHydration();
+    img.addEventListener("load", img.__onLoad, { once: true });
+    img.addEventListener("error", img.__onErr, { once: true });
+
+    if (!alreadyStatic && img.src !== staticSrc) {
+      img.src = staticSrc;
+    } else if (img.complete) {
+      if (img.naturalWidth > 0) finishMobileStaticHydration();
+      else failMobileStaticHydration();
+    }
     return;
   }
 
@@ -870,12 +989,7 @@ const onLoad = () => {
     }
 
     if (img.__pendingHi) {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          if (!img.isConnected || img.__phase !== "lq" || img.__pendingHi !== true) return;
-          requestHiResImage(img);
-        });
-      });
+      scheduleScrollerAwareHiResUpgrade(img, requestHiResImage, 32);
     }
     return;
   }
@@ -907,6 +1021,7 @@ const onLoad = () => {
 }
 
 function unobserveImage(img) {
+  clearScrollerAwareHiResUpgrade(img);
   try { __imgIO.unobserve(img); } catch {}
   try { img.removeEventListener("error", img.__onErr); } catch {}
   try { img.removeEventListener("load",  img.__onLoad); } catch {}
@@ -1002,6 +1117,21 @@ function getPlaybackPercent(item) {
 
   if (!Number.isFinite(durTicks) || durTicks <= 0) return 0;
   return clamp01(pos / durTicks);
+}
+
+function hasPlaybackActivity(item) {
+  const ud = item?.UserData || item?.UserDataDto || null;
+  if (!ud) return false;
+  if (ud.Played === true) return true;
+
+  const playedPct = Number(ud.PlayedPercentage);
+  if (Number.isFinite(playedPct) && playedPct > 0) return true;
+
+  const pos = Number(ud.PlaybackPositionTicks);
+  if (Number.isFinite(pos) && pos > 0) return true;
+
+  const lastPlayedTs = getLastPlayedTs(item);
+  return lastPlayedTs > 0;
 }
 
 function samePlaybackProgressByOrder(a, b, limit) {
@@ -1356,6 +1486,604 @@ function resolveOtherLibSelection() {
   return filtered.length ? filtered : all;
 }
 
+function normalizeIdList(ids) {
+  return Array.from(
+    new Set(
+      (Array.isArray(ids) ? ids : [])
+        .map((id) => String(id || "").trim())
+        .filter(Boolean)
+    )
+  );
+}
+
+function resolveScopedParentIds(allIds, selectedIds) {
+  const all = normalizeIdList(allIds);
+  if (!all.length) return [];
+
+  const selected = normalizeIdList(selectedIds).filter((id) => all.includes(id));
+  if (!selected.length || selected.length >= all.length) {
+    return [];
+  }
+  return selected;
+}
+
+function buildTopRowMetaType(type, parentIds = []) {
+  const scoped = normalizeIdList(parentIds).sort();
+  return scoped.length ? `${type}@top:${scoped.join(",")}` : type;
+}
+
+function clampNumber(value, min, max) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return min;
+  return Math.min(max, Math.max(min, num));
+}
+
+function toTimestamp(value) {
+  if (!value) return 0;
+  const ts = Date.parse(value);
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+function getProviderIdValue(item, key) {
+  const bag = item?.ProviderIds || item?.Providerids || item?.providerIds || null;
+  if (!bag || !key) return "";
+  const candidates = [
+    bag[key],
+    bag[String(key).toLowerCase()],
+    bag[String(key).toUpperCase()],
+    key === "Tmdb" ? bag.TMDb : null,
+    key === "Imdb" ? bag.IMDb : null,
+    key === "Tmdb" ? bag.MovieDb : null,
+  ].filter(Boolean);
+  return String(candidates[0] || "").trim();
+}
+
+function normalizeComparableText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/gi, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function getItemYear(item) {
+  const year = Number(item?.ProductionYear);
+  if (Number.isFinite(year) && year > 0) return year | 0;
+  const premiereTs = toTimestamp(item?.PremiereDate);
+  if (!premiereTs) return 0;
+  return new Date(premiereTs).getUTCFullYear();
+}
+
+function buildTitleYearKey(title, year) {
+  const normalizedTitle = normalizeComparableText(title);
+  const normalizedYear = Number(year);
+  if (!normalizedTitle || !Number.isFinite(normalizedYear) || normalizedYear <= 0) return "";
+  return `${normalizedTitle}|${normalizedYear | 0}`;
+}
+
+function getTmdbResultYear(result) {
+  return getItemYear({
+    ProductionYear: result?.release_date ? new Date(result.release_date).getUTCFullYear() : null,
+    PremiereDate: result?.release_date || null
+  });
+}
+
+async function getTopRankUserProfile(userId) {
+  const cacheKey = String(userId || STATE.userId || "").trim() || "default";
+  const now = Date.now();
+  const cached = __topRankProfileCache.get(cacheKey);
+  if (cached?.value && cached.expiresAt > now) {
+    return cached.value;
+  }
+  if (cached?.pending) {
+    return cached.pending;
+  }
+
+  const pending = (async () => {
+    const rawTopGenres = await getCachedUserTopGenres(5).catch(() => []);
+    const topGenres = Array.isArray(rawTopGenres) ? rawTopGenres : [];
+    const normalizedGenres = [];
+    const queryGenres = [];
+    const seen = new Set();
+    for (const genre of topGenres) {
+      const key = normalizeComparableText(genre);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      normalizedGenres.push(key);
+      queryGenres.push(String(genre || "").trim());
+      if (normalizedGenres.length >= TOP_RANK_GENRE_WEIGHTS.length) break;
+    }
+
+    const genreWeights = new Map();
+    normalizedGenres.forEach((genre, index) => {
+      genreWeights.set(genre, TOP_RANK_GENRE_WEIGHTS[index] ?? 0.4);
+    });
+
+    return {
+      currentYear: new Date().getFullYear(),
+      topGenres: normalizedGenres,
+      queryGenres,
+      genreWeights,
+    };
+  })()
+    .then((value) => {
+      __topRankProfileCache.set(cacheKey, {
+        value,
+        expiresAt: Date.now() + TOP_RANK_PROFILE_TTL_MS,
+        pending: null
+      });
+      return value;
+    })
+    .catch((error) => {
+      __topRankProfileCache.delete(cacheKey);
+      throw error;
+    });
+
+  __topRankProfileCache.set(cacheKey, {
+    value: cached?.value || null,
+    expiresAt: cached?.expiresAt || 0,
+    pending
+  });
+  return pending;
+}
+
+function getTopRankGenreMatch(item, profile) {
+  const itemGenres = Array.isArray(item?.Genres) ? item.Genres : [];
+  if (!itemGenres.length || !(profile?.genreWeights instanceof Map) || !profile.genreWeights.size) {
+    return { score: 0, matches: 0 };
+  }
+
+  let score = 0;
+  let matches = 0;
+  const matched = new Set();
+
+  for (const genre of itemGenres) {
+    const key = normalizeComparableText(genre);
+    if (!key || matched.has(key)) continue;
+    const weight = profile.genreWeights.get(key);
+    if (!Number.isFinite(weight)) continue;
+    matched.add(key);
+    matches++;
+    score += 14 * weight;
+  }
+
+  if (matches >= 2) score += 5;
+  if (matches >= 3) score += 4;
+  return { score, matches };
+}
+
+function scoreTopRankCommunityRating(rating) {
+  const value = clampNumber(rating, 0, 10);
+  if (value >= 9.2) return 18;
+  if (value >= 8.7) return 15;
+  if (value >= 8.2) return 11;
+  if (value >= 7.6) return 7;
+  if (value >= 6.9) return 4;
+  return 0;
+}
+
+function scoreTopRankCriticRating(critic) {
+  const value = clampNumber(critic, 0, 100);
+  if (value >= 95) return 16;
+  if (value >= 90) return 13;
+  if (value >= 82) return 10;
+  if (value >= 74) return 6;
+  if (value >= 65) return 3;
+  return 0;
+}
+
+function getTopRankMatchPercentage(item, profile, sourceCount = 1) {
+  const playedPct = clampNumber(item?.UserData?.PlayedPercentage, 0, 100);
+  const rating = clampNumber(item?.CommunityRating, 0, 10);
+  const critic = clampNumber(item?.CriticRating, 0, 100);
+  const year = getItemYear(item);
+  const age = year > 0 && profile?.currentYear ? Math.max(0, profile.currentYear - year) : null;
+  const genreMatch = getTopRankGenreMatch(item, profile);
+
+  let score = 38;
+  score += genreMatch.score;
+  score += scoreTopRankCommunityRating(rating);
+  score += scoreTopRankCriticRating(critic);
+
+  if (age != null) {
+    if (age <= 3) score += 6;
+    else if (age <= 8) score += 4;
+    else if (age <= 15) score += 2;
+  }
+
+  if (item?.UserData?.IsFavorite === true) score += 6;
+  if (playedPct > 0 && playedPct < 85) score += 4;
+  if (FAMILY_FRIENDLY_RATINGS.has(String(item?.OfficialRating || "").trim())) score += 2;
+  if (sourceCount >= 4) score += 8;
+  else if (sourceCount === 3) score += 6;
+  else if (sourceCount === 2) score += 3;
+
+  if (hasPlaybackActivity(item)) score -= 8;
+  if (!String(item?.Overview || "").trim()) score -= 2;
+
+  if (rating >= 9 && critic < 70 && genreMatch.matches === 0 && sourceCount < 2) {
+    score -= 16;
+  } else if (rating >= 8.6 && critic <= 0 && genreMatch.matches === 0 && sourceCount < 2) {
+    score -= 10;
+  }
+
+  return clampNumber(Math.round(score), 0, 100);
+}
+
+function getTopRankCompositeBoost(entry, profile) {
+  const sourceCount = entry?.sources instanceof Set ? entry.sources.size : 1;
+  const matchPercentage = getTopRankMatchPercentage(entry?.item, profile, sourceCount);
+  const critic = clampNumber(entry?.item?.CriticRating, 0, 100);
+  const community = clampNumber(entry?.item?.CommunityRating, 0, 10);
+
+  let boost = matchPercentage * 6.2;
+  if (critic >= 85 && community >= 7.8) boost += 22;
+  if (sourceCount >= 3) boost += 10;
+  if (sourceCount === 1 && community >= 8.8 && critic <= 0) boost -= 18;
+  return boost;
+}
+
+function getTopRankSignals(item, index = 0, modeKey = "rating", queryWeight = 1) {
+  const playedPct = clampNumber(item?.UserData?.PlayedPercentage, 0, 100);
+  const year = getItemYear(item);
+  const now = Date.now();
+  const premiereAgeDays = (() => {
+    const ts = toTimestamp(item?.PremiereDate);
+    if (!ts) return null;
+    return Math.max(0, (now - ts) / 86400000);
+  })();
+  const createdAgeDays = (() => {
+    const ts = toTimestamp(item?.DateCreated);
+    if (!ts) return null;
+    return Math.max(0, (now - ts) / 86400000);
+  })();
+
+  const orderBias =
+    modeKey === "playCount" ? 1.08 :
+    modeKey === "profile" ? 0.98 :
+    modeKey === "premiere" ? 0.96 :
+    modeKey === "created" ? 0.9 :
+    0.72;
+  const orderScore = Math.max(0, 64 - index) * 4.15 * queryWeight * orderBias;
+  const ratingScore = scoreTopRankCommunityRating(item?.CommunityRating) * 1.3;
+  const criticScore = scoreTopRankCriticRating(item?.CriticRating) * 1.15;
+  const yearScore = year > 0 ? Math.max(0, year - 1998) * 0.18 : 0;
+  const freshnessScore = hasPlaybackActivity(item) ? 0 : 12;
+  const favoriteScore = item?.UserData?.IsFavorite === true ? 10 : 0;
+  const progressScore = (
+    Number.isFinite(playedPct) && playedPct > 0 && playedPct < 95
+      ? Math.max(0, 10 - Math.abs(50 - playedPct) * 0.14)
+      : 0
+  );
+  const premiereScore = premiereAgeDays == null ? 0 : Math.max(0, 2400 - premiereAgeDays) * 0.0065;
+  const createdScore = createdAgeDays == null ? 0 : Math.max(0, 540 - createdAgeDays) * 0.014;
+  const modeBonus =
+    modeKey === "playCount" ? 24 :
+    modeKey === "profile" ? 16 :
+    modeKey === "rating" ? 5 :
+    modeKey === "premiere" ? 13 :
+    8;
+
+  return orderScore + ratingScore + criticScore + yearScore + freshnessScore + favoriteScore + progressScore + premiereScore + createdScore + modeBonus;
+}
+
+const TOP_RANK_SORT_MODES = Object.freeze([
+  { key: "playCount", sortBy: "PlayCount,CommunityRating,PremiereDate,DateCreated", weight: 1.0 },
+  { key: "rating", sortBy: "CommunityRating,PremiereDate,DateCreated", weight: 0.56 },
+  { key: "premiere", sortBy: "PremiereDate,CommunityRating,DateCreated", weight: 0.76 },
+  { key: "created", sortBy: "DateCreated,CommunityRating,PremiereDate", weight: 0.62 }
+]);
+
+const TOP_RANK_FIELDS = [
+  COMMON_FIELDS,
+  "CriticRating",
+  "DateCreated",
+  "PremiereDate",
+  "ProviderIds",
+  "OriginalTitle"
+].join(",");
+
+function mergeRankedEntry(map, item, score, sourceKey) {
+  if (!item?.Id || !Number.isFinite(score)) return;
+  const prev = map.get(item.Id);
+  if (!prev) {
+    map.set(item.Id, { item, score, sources: new Set([sourceKey]) });
+    return;
+  }
+
+  if (!prev.sources.has(sourceKey)) {
+    const previousScore = prev.score;
+    prev.score = Math.max(previousScore, score) + (Math.min(previousScore, score) * 0.35);
+    prev.sources.add(sourceKey);
+    if (score >= previousScore) prev.item = item;
+    return;
+  }
+
+  if (score > prev.score) {
+    prev.score = score;
+    prev.item = item;
+  }
+}
+
+async function fetchTopRankedEntryPool(userId, type, poolSize, parentId, { filters = "" } = {}) {
+  const want = Math.max(24, poolSize | 0);
+  const merged = new Map();
+  let lastError = null;
+  const profile = await getTopRankUserProfile(userId).catch(() => null);
+
+  for (const mode of TOP_RANK_SORT_MODES) {
+    const url =
+      `/Users/${userId}/Items?` +
+      `IncludeItemTypes=${encodeURIComponent(type)}&Recursive=true&Fields=${encodeURIComponent(TOP_RANK_FIELDS)}&` +
+      `EnableUserData=true&` +
+      (filters ? `Filters=${encodeURIComponent(filters)}&` : ``) +
+      (parentId ? `ParentId=${encodeURIComponent(parentId)}&` : ``) +
+      `SortBy=${encodeURIComponent(mode.sortBy)}&SortOrder=Descending&Limit=${want}&` +
+      `ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop,Logo`;
+    try {
+      const data = await makeApiRequest(url);
+      const items = uniqById(Array.isArray(data?.Items) ? data.Items : [])
+        .filter((it) => it?.Type === type)
+        .slice(0, want);
+      if (!items.length) continue;
+
+      try {
+        if (STATE.db && STATE.scope) {
+          upsertItemsBatchIdle(STATE.db, STATE.scope, items, { timeout: 1500 });
+        }
+      } catch {}
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const score = getTopRankSignals(item, i, mode.key, mode.weight);
+        mergeRankedEntry(merged, item, score, mode.key);
+      }
+    } catch (e) {
+      lastError = e;
+    }
+  }
+
+  if (profile?.queryGenres?.length) {
+    const url =
+      `/Users/${userId}/Items?` +
+      `IncludeItemTypes=${encodeURIComponent(type)}&Recursive=true&Fields=${encodeURIComponent(TOP_RANK_FIELDS)}&` +
+      `EnableUserData=true&` +
+      (filters ? `Filters=${encodeURIComponent(filters)}&` : ``) +
+      (parentId ? `ParentId=${encodeURIComponent(parentId)}&` : ``) +
+      `Genres=${encodeURIComponent(profile.queryGenres.join("|"))}&` +
+      `SortBy=${encodeURIComponent("CommunityRating,PremiereDate,DateCreated")}&SortOrder=Descending&Limit=${want}&` +
+      `ImageTypeLimit=1&EnableImageTypes=Primary,Backdrop,Logo`;
+    try {
+      const data = await makeApiRequest(url);
+      const items = uniqById(Array.isArray(data?.Items) ? data.Items : [])
+        .filter((it) => it?.Type === type)
+        .slice(0, want);
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const score = getTopRankSignals(item, i, "profile", 0.88);
+        mergeRankedEntry(merged, item, score, "profile");
+      }
+    } catch (e) {
+      lastError = e;
+    }
+  }
+
+  if (merged.size) {
+    return Array.from(merged.values())
+      .map((entry) => ({
+        ...entry,
+        score: entry.score + getTopRankCompositeBoost(entry, profile)
+      }))
+      .sort((a, b) => b.score - a.score);
+  }
+
+  if (lastError) {
+    console.warn("recentRows: top ranked fetch error:", type, parentId || "all", lastError);
+  }
+  return [];
+}
+
+async function fetchTopRankedEntryPoolAcrossParents(userId, type, poolSize, parentIds = [], { filters = "" } = {}) {
+  const scopedParents = normalizeIdList(parentIds);
+  if (!scopedParents.length) {
+    return fetchTopRankedEntryPool(userId, type, poolSize, null, { filters });
+  }
+  if (scopedParents.length === 1) {
+    return fetchTopRankedEntryPool(userId, type, poolSize, scopedParents[0], { filters });
+  }
+
+  const candidateLists = await Promise.all(
+    scopedParents.map(async (parentId) => ({
+      parentId,
+      entries: await fetchTopRankedEntryPool(userId, type, poolSize, parentId, { filters })
+    }))
+  );
+
+  const merged = new Map();
+  for (const entry of candidateLists) {
+    for (let i = 0; i < entry.entries.length; i++) {
+      const ranked = entry.entries[i];
+      if (!ranked?.item?.Id) continue;
+      const libraryScore = ranked.score + Math.max(0, 36 - i) * 2.6;
+      mergeRankedEntry(merged, ranked.item, libraryScore, `lib:${entry.parentId}`);
+    }
+  }
+
+  const out = Array.from(merged.values()).sort((a, b) => b.score - a.score);
+  if (out.length) return out;
+  return fetchTopRankedEntryPool(userId, type, poolSize, null, { filters });
+}
+
+async function fetchTopRankedAcrossParents(userId, type, limit, parentIds = [], { poolSize = null } = {}) {
+  const resolvedPoolSize = Math.max(limit, poolSize || (limit * TOP_RANK_QUERY_POOL_MULTIPLIER));
+  const entries = await fetchTopRankedEntryPoolAcrossParents(userId, type, resolvedPoolSize, parentIds);
+  const items = entries.map((entry) => entry.item);
+  return items.slice(0, limit);
+}
+
+async function fetchTopRankedUnplayedFirstAcrossParents(userId, type, limit, parentIds = [], { poolSize = null } = {}) {
+  const resolvedPoolSize = Math.max(limit, poolSize || (limit * TOP_RANK_QUERY_POOL_MULTIPLIER));
+  const unseenEntries = await fetchTopRankedEntryPoolAcrossParents(
+    userId,
+    type,
+    resolvedPoolSize,
+    parentIds,
+    { filters: "IsUnplayed" }
+  );
+  const unseenItems = unseenEntries
+    .map((entry) => entry.item)
+    .filter((item) => item && !hasPlaybackActivity(item));
+  if (unseenItems.length >= limit) {
+    return unseenItems.slice(0, limit);
+  }
+
+  const fallbackEntries = await fetchTopRankedEntryPoolAcrossParents(userId, type, resolvedPoolSize, parentIds);
+  const seenIds = new Set(unseenItems.map((item) => item?.Id).filter(Boolean));
+  const fallbackItems = fallbackEntries
+    .map((entry) => entry.item)
+    .filter((item) => item?.Id && !seenIds.has(item.Id));
+
+  return [...unseenItems, ...fallbackItems].slice(0, limit);
+}
+
+function buildTmdbMovieLookup(items = []) {
+  const byTmdbId = new Map();
+  const byTitleYear = new Map();
+
+  for (const item of items) {
+    if (!item?.Id) continue;
+    const tmdbId =
+      getProviderIdValue(item, "Tmdb") ||
+      getProviderIdValue(item, "TMDb") ||
+      getProviderIdValue(item, "MovieDb");
+    if (tmdbId && !byTmdbId.has(tmdbId)) {
+      byTmdbId.set(tmdbId, item);
+    }
+
+    const year = getItemYear(item);
+    for (const title of [item?.Name, item?.OriginalTitle]) {
+      const key = buildTitleYearKey(title, year);
+      if (key && !byTitleYear.has(key)) {
+        byTitleYear.set(key, item);
+      }
+    }
+  }
+
+  return { byTmdbId, byTitleYear };
+}
+
+function resolveTmdbResultToLocalMovie(result, lookup) {
+  const tmdbId = String(result?.id || "").trim();
+  if (tmdbId && lookup?.byTmdbId?.has(tmdbId)) {
+    return lookup.byTmdbId.get(tmdbId) || null;
+  }
+
+  const releaseYear = getTmdbResultYear(result);
+  const years = releaseYear > 0 ? [releaseYear, releaseYear - 1, releaseYear + 1] : [];
+  const titles = [result?.title, result?.original_title];
+
+  for (const title of titles) {
+    for (const year of years) {
+      const key = buildTitleYearKey(title, year);
+      if (key && lookup?.byTitleYear?.has(key)) {
+        return lookup.byTitleYear.get(key) || null;
+      }
+    }
+  }
+
+  return null;
+}
+
+async function tmdbFetchJson(path, { signal } = {}) {
+  const apiKey = await getGlobalTmdbApiKey().catch(() => "");
+  if (!apiKey) throw new Error("TMDb API key missing");
+
+  const url = new URL(`https://api.themoviedb.org/3${path}`);
+  url.searchParams.set("api_key", apiKey);
+
+  const res = await fetch(url.toString(), {
+    method: "GET",
+    signal
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`TMDb HTTP ${res.status}: ${text}`);
+  }
+  return res.json();
+}
+
+async function fetchTmdbTopRatedMoviesInLibraries(userId, limit, parentIds = []) {
+  const apiKey = await getGlobalTmdbApiKey().catch(() => "");
+  if (!apiKey) {
+    return {
+      items: [],
+      reason: "missingKey"
+    };
+  }
+
+  const rankedPool = await fetchTopRankedEntryPoolAcrossParents(
+    userId,
+    "Movie",
+    TMDB_TOP_MOVIE_POOL_SIZE,
+    parentIds
+  );
+  const lookup = buildTmdbMovieLookup(rankedPool.map((entry) => entry.item));
+  if (!lookup.byTmdbId.size && !lookup.byTitleYear.size) {
+    return {
+      items: [],
+      reason: "noLocalCandidates"
+    };
+  }
+
+  const matched = [];
+  const seenIds = new Set();
+  const language = String(navigator.language || "en-US").trim() || "en-US";
+
+  for (let page = 1; page <= TMDB_TOP_RATED_PAGE_LIMIT && matched.length < limit; page++) {
+    let data = null;
+    try {
+      data = await tmdbFetchJson(`/movie/top_rated?language=${encodeURIComponent(language)}&page=${page}`);
+    } catch (e) {
+      console.warn("recentRows: tmdb top rated fetch error:", e);
+      return {
+        items: matched.slice(0, limit),
+        reason: matched.length ? "partial" : "fetchError"
+      };
+    }
+
+    const results = Array.isArray(data?.results) ? data.results : [];
+    if (!results.length) break;
+
+    for (const result of results) {
+      const localItem = resolveTmdbResultToLocalMovie(result, lookup);
+      if (!localItem?.Id || seenIds.has(localItem.Id)) continue;
+      seenIds.add(localItem.Id);
+      matched.push(localItem);
+      if (matched.length >= limit) break;
+    }
+  }
+
+  return {
+    items: matched.slice(0, limit),
+    reason: matched.length ? "ok" : "noMatches"
+  };
+}
+
+function getTopMovieParentIds() {
+  return resolveScopedParentIds(
+    (STATE.movieLibs || []).map((lib) => lib.Id),
+    resolveMovieLibSelection()
+  );
+}
+
+function getTopSeriesParentIds() {
+  return resolveScopedParentIds(
+    (STATE.tvLibs || []).map((lib) => lib.Id),
+    resolveTvLibSelection("recentSeries")
+  );
+}
+
 function getTvHashFallback() {
   return (
     config.latestSeriesHash ||
@@ -1422,12 +2150,20 @@ function queueEnterAnimation(el) {
   return el;
 }
 
-function createRecommendationCard(item, serverId, { aboveFold=false, showProgress=false } = {}) {
+function createRecommendationCard(item, serverId, {
+  aboveFold = false,
+  showProgress = false,
+  variant = "default",
+  rank = null
+} = {}) {
   const { itemId, itemName } = primeItemIdentity(item);
   const card = document.createElement("div");
   card.className = "card personal-recs-card";
+  const isTop10 = variant === "top10";
+  if (isTop10) card.classList.add("top10-card");
   queueEnterAnimation(card);
   if (itemId) card.dataset.itemId = itemId;
+  if (isTop10 && Number.isFinite(rank)) card.dataset.rank = String(rank);
 
   const posterSource = item?.__posterSource || item;
 
@@ -1449,10 +2185,35 @@ function createRecommendationCard(item, serverId, { aboveFold=false, showProgres
   const isEpisode = item.Type === "Episode";
   const isSeason  = item.Type === "Season";
   const { label: typeLabel, icon: typeIcon } = getRecentRowsCardTypeBadge(item.Type);
+  const top10IsFresh = isTop10 && !hasPlaybackActivity(item);
 
   const community = Number.isFinite(posterSource.CommunityRating)
-    ? `<div class="community-rating" title="Community Rating">⭐ ${posterSource.CommunityRating.toFixed(1)}</div>`
+    ? `<div class="community-rating" title="${escapeHtml(config.languageLabels.communityRating || "Community Rating")}">⭐ ${posterSource.CommunityRating.toFixed(1)}</div>`
     : "";
+  const top10RankHtml = (isTop10 && Number.isFinite(rank))
+    ? `<div class="top10-rank" aria-hidden="true">${Math.max(1, rank | 0)}</div>`
+    : "";
+  const top10FreshBadgeHtml = top10IsFresh
+    ? `<div class="top10-fresh-badge">${escapeHtml(getBadgeText("new"))}</div>`
+    : "";
+  const topBadgesHtml = isTop10
+    ? `
+      <div class="prc-top-badges top10-top-badges">
+        <div class="prc-type-badge top10-type-badge">
+          ${faIconHtml(typeIcon, "prc-type-icon")}
+          ${typeLabel}
+        </div>
+      </div>
+    `
+    : `
+      <div class="prc-top-badges">
+        ${community}
+        <div class="prc-type-badge">
+          ${faIconHtml(typeIcon, "prc-type-icon")}
+          ${typeLabel}
+        </div>
+      </div>
+    `;
 
   const progress = showProgress ? getPlaybackPercent(item) : 0;
   const progressHtml = (showProgress && progress > 0.02 && progress < 0.999)
@@ -1470,35 +2231,63 @@ function createRecommendationCard(item, serverId, { aboveFold=false, showProgres
     isEpisode ? formatEpisodeSubline(item) :
     isSeason  ? formatSeasonSubline(item) :
     "";
+  const logoUrl =
+    buildLogoUrl(item) ||
+    (posterSource !== item ? buildLogoUrl(posterSource) : null);
+  const escapedTitleHtml = escapeHtml(clampText(mainTitle, isTop10 ? 38 : 42));
+  const escapedSubTitle = isEpisode && subTitle ? escapeHtml(subTitle) : "";
+  const logoAltSuffix = (config.languageLabels && config.languageLabels.logoAltSuffix) || "logo";
+  const fallbackTitleHtml = `
+    <div class="prc-titleline">
+      ${escapedTitleHtml}
+      ${escapedSubTitle ? `<div class="prc-subtitleline">${escapedSubTitle}</div>` : ``}
+    </div>
+  `;
+  const titleBlockHtml = logoUrl
+    ? `
+      <div class="prc-card-logo">
+        <img src="${escapeHtml(logoUrl)}"
+          alt="${escapeHtml(`${mainTitle} ${logoAltSuffix}`.trim())}"
+          loading="${aboveFold ? "eager" : "lazy"}"
+          decoding="async"
+          ${aboveFold ? 'fetchpriority="high"' : ""}>
+      </div>
+      ${escapedSubTitle ? `<div class="prc-subtitleline prc-logo-subtitle">${escapedSubTitle}</div>` : ``}
+    `
+    : fallbackTitleHtml;
+
+  const metaHtml = isTop10
+    ? `
+      <div class="prc-meta">
+        ${ageChip ? `<span class="prc-age">${ageChip}</span><span class="prc-dot">•</span>` : ""}
+        ${year ? `<span class="prc-year">${year}</span>` : ""}
+      </div>
+    `
+    : `
+      <div class="prc-meta">
+        ${ageChip ? `<span class="prc-age">${ageChip}</span><span class="prc-dot">•</span>` : ""}
+        ${year ? `<span class="prc-year">${year}</span><span class="prc-dot">•</span>` : ""}
+        ${runtime ? `<span class="prc-runtime">${getRuntimeWithIcons(runtime)}</span>` : ""}
+      </div>
+    `;
 
   card.innerHTML = `
     <div class="cardBox">
       <a class="cardLink" href="${itemId ? getDetailsUrl(itemId, serverId) : '#'}">
         <div class="cardImageContainer" style="position:relative;">
+          ${top10RankHtml}
           <img class="cardImage"
             alt="${escapeHtml(mainTitle)}"
             loading="${aboveFold ? "eager" : "lazy"}"
             decoding="async"
             ${aboveFold ? 'fetchpriority="high"' : ""}>
-          <div class="prc-top-badges">
-            ${community}
-            <div class="prc-type-badge">
-              ${faIconHtml(typeIcon, "prc-type-icon")}
-              ${typeLabel}
-            </div>
-          </div>
-          <div class="prc-gradient"></div>
-          <div class="prc-overlay">
-            <div class="prc-titleline">
-              ${escapeHtml(clampText(mainTitle, 42))}
-              ${isEpisode && subTitle ? `<div class="prc-subtitleline">${escapeHtml(subTitle)}</div>` : ``}
-            </div>
+          ${topBadgesHtml}
+          ${top10FreshBadgeHtml}
+          <div class="prc-gradient${isTop10 ? " top10-gradient" : ""}"></div>
+          <div class="prc-overlay${isTop10 ? " top10-overlay" : ""}">
+            ${titleBlockHtml}
 
-            <div class="prc-meta">
-              ${ageChip ? `<span class="prc-age">${ageChip}</span><span class="prc-dot">•</span>` : ""}
-              ${year ? `<span class="prc-year">${year}</span><span class="prc-dot">•</span>` : ""}
-              ${runtime ? `<span class="prc-runtime">${getRuntimeWithIcons(runtime)}</span>` : ""}
-            </div>
+            ${metaHtml}
 
             <div class="prc-genres">
               ${(!isEpisode && genres) ? escapeHtml(genres) : ""}
@@ -1510,10 +2299,31 @@ function createRecommendationCard(item, serverId, { aboveFold=false, showProgres
     </div>
   `;
 
+  const logoImg = card.querySelector(".prc-card-logo img");
+  if (logoImg) {
+    logoImg.addEventListener("error", () => {
+      try {
+        const logoWrap = logoImg.closest(".prc-card-logo");
+        if (!logoWrap?.isConnected) return;
+        logoWrap.outerHTML = fallbackTitleHtml;
+        const logoSubtitle = card.querySelector(".prc-logo-subtitle");
+        if (logoSubtitle) logoSubtitle.remove();
+      } catch {}
+    }, { once: true });
+  }
+
   const img = card.querySelector(".cardImage");
   try {
-    const sizesMobile = "(max-width: 640px) 45vw, (max-width: 820px) 38vw, 200px";
-    const sizesDesk   = "(max-width: 1200px) 20vw, 200px";
+    const sizesMobile = isTop10
+      ? "(max-width: 640px) 48vw, (max-width: 820px) 42vw, 300px"
+      : showProgress
+        ? "(max-width: 640px) 78vw, (max-width: 820px) 72vw, 320px"
+        : "(max-width: 640px) 44vw, (max-width: 820px) 38vw, 262px";
+    const sizesDesk = isTop10
+      ? "(max-width: 1200px) 27vw, 300px"
+      : showProgress
+        ? "(max-width: 1200px) 34vw, 390px"
+        : "(max-width: 1200px) 22vw, 262px";
     img.setAttribute("sizes", IS_MOBILE ? sizesMobile : sizesDesk);
   } catch {}
 
@@ -1546,7 +2356,8 @@ function createRecommendationCard(item, serverId, { aboveFold=false, showProgres
     const noImg = document.createElement("div");
     noImg.className = "prc-noimg-label";
     noImg.textContent = config.languageLabels.noImage || "Görsel yok";
-    noImg.style.minHeight = "200px";
+    noImg.style.minHeight = "100%";
+    noImg.style.height = "100%";
     noImg.style.display = "flex";
     noImg.style.alignItems = "center";
     noImg.style.justifyContent = "center";
@@ -1805,6 +2616,7 @@ async function createRowHeroCard(item, serverId, labelText, { showProgress = fal
     (isEpisode || isSeason)
       ? (item.SeriesName || posterSource.Name || item.Name)
       : (isAudio ? (item.Name || posterSource.Name || "") : (posterSource.Name || item.Name || ""));
+  const heroLogoAltSuffix = (config.languageLabels && config.languageLabels.logoAltSuffix) || "logo";
 
   hero.innerHTML = `
     <div class="dir-row-hero-bg-wrap">
@@ -1821,7 +2633,7 @@ async function createRowHeroCard(item, serverId, labelText, { showProgress = fal
 
         ${logo ? `
           <div class="dir-row-hero-logo">
-            <img src="${logo}" alt="${escapeHtml(heroTitle)} logo">
+            <img src="${logo}" alt="${escapeHtml(`${heroTitle} ${heroLogoAltSuffix}`.trim())}">
           </div>
         ` : ``}
 
@@ -2063,7 +2875,7 @@ async function fetchRecentlyPlayedTracks(userId, limit, parentId) {
   }
 }
 
-async function fetchItemsByIds(ids) {
+async function fetchItemsByIds(ids, { refreshUserData = false } = {}) {
   const clean = Array.isArray(ids) ? ids.map(x => String(x||"").trim()).filter(Boolean) : [];
   if (!clean.length) return [];
 
@@ -2077,13 +2889,14 @@ async function fetchItemsByIds(ids) {
 
   const hydratedById = new Map((hydrated || []).filter(x=>x?.Id).map(x => [x.Id, x]));
   const missing = clean.filter(id => !hydratedById.has(id));
+  const networkIds = refreshUserData ? clean.slice() : missing;
 
   let fetched = [];
-  if (missing.length) {
+  if (networkIds.length) {
     const chunkSize = 100;
     const out = [];
-    for (let i = 0; i < missing.length; i += chunkSize) {
-      const chunk = missing.slice(i, i + chunkSize);
+    for (let i = 0; i < networkIds.length; i += chunkSize) {
+      const chunk = networkIds.slice(i, i + chunkSize);
       const userScoped = !!STATE.userId;
       const basePath = userScoped ? `/Users/${STATE.userId}/Items` : `/Items`;
       const url =
@@ -2112,7 +2925,7 @@ async function fetchItemsByIds(ids) {
   const final = [];
   const seen = new Set();
   for (const id of clean) {
-    const it = hydratedById.get(id) || fetchedById.get(id) || null;
+    const it = fetchedById.get(id) || hydratedById.get(id) || null;
     if (!it?.Id) continue;
     if (seen.has(it.Id)) continue;
     seen.add(it.Id);
@@ -2396,6 +3209,25 @@ function appendSection(wrap, sectionEl) {
   wrap.appendChild(sectionEl);
 }
 
+function isDeferredRecentRowsSection(sectionKey) {
+  return (
+    sectionKey === "top10SeriesRows" ||
+    sectionKey === "top10MovieRows" ||
+    sectionKey === "tmdbTopMoviesRows"
+  );
+}
+
+function hasMountedRecentRowsShell(wrap) {
+  if (!wrap) return false;
+  return !!wrap.querySelector(".recent-row-section");
+}
+
+function hasAcceptedRecentRowsMountState(wrap, sectionKey) {
+  if (hasRenderableRecentRowsContent(wrap)) return true;
+  if (!isDeferredRecentRowsSection(sectionKey)) return false;
+  return hasMountedRecentRowsShell(wrap);
+}
+
 async function fillSectionWithItems({
   wrap,
   titleText,
@@ -2406,19 +3238,160 @@ async function fillSectionWithItems({
   showProgress,
   onSeeAll,
   randomHero = false,
+  hideHero = false,
+  sectionClassName = "",
+  rowClassName = "",
+  cardVariant = "default",
+  allowEmptyRow = false,
+  emptyMessage = "",
+  deferNetworkRender = false,
 }) {
   const { section, row, heroHost, scrollWrap, btnL, btnR } = buildSectionSkeleton({
     titleText,
     badgeType,
     onSeeAll
   });
+  const resolveEmptyMessage = () => {
+    const raw = typeof emptyMessage === "function" ? emptyMessage() : emptyMessage;
+    return String(raw || config.languageLabels.noRecommendations || "Uygun içerik yok").trim();
+  };
   const runtimeCfg = getRecentRowsRuntimeConfig();
+  const useHero = runtimeCfg.showHeroCards && !hideHero;
+  if (sectionClassName) section.classList.add(...String(sectionClassName).split(/\s+/).filter(Boolean));
+  if (rowClassName) row.classList.add(...String(rowClassName).split(/\s+/).filter(Boolean));
+  if (!useHero) heroHost.style.display = "none";
 
   appendSection(wrap, section);
   renderSkeletonRow(row, cardCount);
 
   let __renderToken = (Date.now() ^ (Math.random()*1e9)) | 0;
   section.__renderToken = __renderToken;
+
+  const isRenderCurrent = () => (
+    section.__renderToken === __renderToken &&
+    !!section.isConnected &&
+    !!wrap?.isConnected
+  );
+
+  const finalizeScroller = () => {
+    setupScroller(row);
+    try { scrollWrap?.classList?.remove("rr-scroll-pending"); } catch {}
+    try {
+      if (btnL) { btnL.style.visibility = ""; btnL.style.pointerEvents = ""; btnL.disabled = false; }
+      if (btnR) { btnR.style.visibility = ""; btnR.style.pointerEvents = ""; btnR.disabled = false; }
+    } catch {}
+  };
+
+  const renderEmptyState = (message) => {
+    if (!isRenderCurrent()) return false;
+    row.innerHTML = `<div class="no-recommendations">${escapeHtml(message)}</div>`;
+    finalizeScroller();
+    return true;
+  };
+
+  const removeSection = () => {
+    try { section.parentElement?.removeChild(section); } catch {}
+    return false;
+  };
+
+  const renderResolvedItems = async (sourceItems, { aboveFoldLimit = 2 } = {}) => {
+    if (!Array.isArray(sourceItems) || !sourceItems.length || !isRenderCurrent()) {
+      return false;
+    }
+
+    const pool = sourceItems.slice();
+    await attachMusicPosterSources(pool);
+    if (!isRenderCurrent()) return false;
+
+    let best = null;
+    if (useHero && pool.length) {
+      if (randomHero) {
+        const idx = pickRandomIndex(pool.length);
+        best = idx >= 0 ? pool[idx] : pool[0];
+      } else {
+        best = pool[0];
+      }
+    }
+
+    const remaining = useHero && best
+      ? pool.filter((x) => x?.Id && x.Id !== best.Id)
+      : pool.slice();
+
+    heroHost.innerHTML = "";
+    if (useHero && best) {
+      const hero = await createRowHeroCard(best, STATE.serverId, heroLabel, { showProgress });
+      if (!isRenderCurrent()) return false;
+      heroHost.appendChild(hero);
+      queueEnterAnimation(hero);
+    }
+
+    row.innerHTML = "";
+    if (!remaining.length) {
+      return renderEmptyState(config.languageLabels.noRecommendations || "Uygun içerik yok");
+    }
+
+    if (IS_MOBILE) {
+      const mobileFrag = document.createDocumentFragment();
+      const mobileLimit = Math.min(remaining.length, cardCount);
+      for (let i = 0; i < mobileLimit; i++) {
+        mobileFrag.appendChild(createRecommendationCard(remaining[i], STATE.serverId, {
+          aboveFold: i < Math.max(aboveFoldLimit, 4),
+          showProgress,
+          variant: cardVariant,
+          rank: cardVariant === "top10" ? (i + 1) : null
+        }));
+      }
+      row.appendChild(mobileFrag);
+      finalizeScroller();
+      return true;
+    }
+
+    const initialCount = Math.min(cardCount, remaining.length);
+    const fragment = document.createDocumentFragment();
+    for (let i = 0; i < Math.min(initialCount, remaining.length); i++) {
+      fragment.appendChild(createRecommendationCard(remaining[i], STATE.serverId, {
+        aboveFold: i < Math.min(Math.max(aboveFoldLimit, 1), initialCount),
+        showProgress,
+        variant: cardVariant,
+        rank: cardVariant === "top10" ? (i + 1) : null
+      }));
+    }
+    row.appendChild(fragment);
+
+    let currentIndex = initialCount;
+    const pumpMore = () => {
+      if (!isRenderCurrent()) return;
+      if (currentIndex >= remaining.length || row.childElementCount >= cardCount) {
+        finalizeScroller();
+        return;
+      }
+      const chunkSize = IS_MOBILE ? 2 : 6;
+      const frag = document.createDocumentFragment();
+      for (let i = 0; i < chunkSize && currentIndex < remaining.length; i++) {
+        if (row.childElementCount >= cardCount) break;
+        frag.appendChild(createRecommendationCard(remaining[currentIndex], STATE.serverId, {
+          aboveFold: false,
+          showProgress,
+          variant: cardVariant,
+          rank: cardVariant === "top10" ? (currentIndex + 1) : null
+        }));
+        currentIndex++;
+      }
+      row.appendChild(frag);
+      try {
+        if (!row.__rrScrollRaf) {
+          row.__rrScrollRaf = requestAnimationFrame(() => {
+            row.__rrScrollRaf = 0;
+            try { row.dispatchEvent(new Event("scroll")); } catch {}
+          });
+        }
+      } catch {}
+      setTimeout(pumpMore, 0);
+    };
+
+    setTimeout(pumpMore, 200);
+    return true;
+  };
 
   let cachedItems = [];
   let cachedFresh = false;
@@ -2436,39 +3409,7 @@ async function fillSectionWithItems({
 
   if (cachedItems?.length) {
     try {
-      await (async () => {
-        const pool = cachedItems.slice();
-        await attachMusicPosterSources(pool);
-        const best = pool[0] || null;
-        const remaining = best ? pool.filter(x => x?.Id && x.Id !== best.Id) : pool.slice();
-
-        heroHost.innerHTML = "";
-        if (runtimeCfg.showHeroCards && best) {
-          const hero = await createRowHeroCard(best, STATE.serverId, heroLabel, { showProgress });
-          heroHost.appendChild(hero);
-          queueEnterAnimation(hero);
-        }
-
-        row.innerHTML = "";
-        const fragment = document.createDocumentFragment();
-
-        for (let i = 0; i < Math.min(remaining.length, cardCount); i++) {
-          fragment.appendChild(createRecommendationCard(remaining[i], STATE.serverId, {
-            aboveFold: i < 2,
-            showProgress
-          }));
-        }
-
-        row.appendChild(fragment);
-        setupScroller(row);
-
-        try { scrollWrap?.classList?.remove("rr-scroll-pending"); } catch {}
-        try {
-          if (btnL) { btnL.style.visibility = ""; btnL.style.pointerEvents = ""; btnL.disabled = false; }
-          if (btnR) { btnR.style.visibility = ""; btnR.style.pointerEvents = ""; btnR.disabled = false; }
-        } catch {}
-        return true;
-      })();
+      await renderResolvedItems(cachedItems, { aboveFoldLimit: 2 });
     } catch {}
   }
 
@@ -2476,135 +3417,52 @@ async function fillSectionWithItems({
     return true;
   }
 
-  let items = [];
-  try {
-    items = await fetcher();
-  } catch (e) {
-    console.warn("recentRows: fillSection fetcher error:", e);
-    items = [];
-  }
+  const fetchAndRender = async () => {
+    let items = [];
+    try {
+      items = await fetcher();
+    } catch (e) {
+      console.warn("recentRows: fillSection fetcher error:", e);
+      items = [];
+    }
 
-  if (!items?.length) {
-    if (!cachedItems?.length) {
-      try { section.parentElement?.removeChild(section); } catch {}
+    if (!isRenderCurrent()) {
       return false;
     }
-    return true;
-   }
 
-  if (cachedItems?.length) {
-    const a = cachedItems.map(x => x?.Id).filter(Boolean).slice(0, cardCount+1);
-    const b = items.map(x => x?.Id).filter(Boolean).slice(0, cardCount+1);
-    if (sameIdList(a, b)) {
-      const progressUnchanged =
-        !showProgress ||
-        samePlaybackProgressByOrder(cachedItems, items, cardCount + 1);
-      if (progressUnchanged) return true;
-    }
-  }
-
-  const pool = items.slice();
-  await attachMusicPosterSources(pool);
-
-  let best = null;
-  if (pool.length) {
-    if (randomHero) {
-      const idx = pickRandomIndex(pool.length);
-      best = idx >= 0 ? pool[idx] : pool[0];
-    } else {
-      best = pool[0];
-    }
-  }
-
-  const remaining = best ? pool.filter(x => x?.Id && x.Id !== best.Id) : pool.slice();
-
-  heroHost.innerHTML = "";
-  if (runtimeCfg.showHeroCards && best) {
-    const hero = await createRowHeroCard(best, STATE.serverId, heroLabel, { showProgress });
-    heroHost.appendChild(hero);
-    queueEnterAnimation(hero);
-  }
-
-  row.innerHTML = "";
-  if (!remaining.length) {
-    row.innerHTML = `<div class="no-recommendations">${escapeHtml(config.languageLabels.noRecommendations || "Uygun içerik yok")}</div>`;
-    setupScroller(row);
-    try { scrollWrap?.classList?.remove("rr-scroll-pending"); } catch {}
-    try {
-      if (btnL) { btnL.style.visibility = ""; btnL.style.pointerEvents = ""; }
-      if (btnR) { btnR.style.visibility = ""; btnR.style.pointerEvents = ""; }
-      btnL && (btnL.disabled = false);
-      btnR && (btnR.disabled = false);
-    } catch {}
-    return true;
-  }
-
-  if (IS_MOBILE) {
-    const mobileFrag = document.createDocumentFragment();
-    const mobileLimit = Math.min(remaining.length, cardCount);
-    for (let i = 0; i < mobileLimit; i++) {
-      mobileFrag.appendChild(createRecommendationCard(remaining[i], STATE.serverId, {
-        aboveFold: i < 4,
-        showProgress
-      }));
-    }
-    row.appendChild(mobileFrag);
-    setupScroller(row);
-    try { scrollWrap?.classList?.remove("rr-scroll-pending"); } catch {}
-    try {
-      if (btnL) { btnL.style.visibility = ""; btnL.style.pointerEvents = ""; btnL.disabled = false; }
-      if (btnR) { btnR.style.visibility = ""; btnR.style.pointerEvents = ""; btnR.disabled = false; }
-    } catch {}
-    return true;
-  }
-
-  const initialCount = Math.min(cardCount, remaining.length);
-  const fragment = document.createDocumentFragment();
-  for (let i = 0; i < Math.min(initialCount, remaining.length); i++) {
-    fragment.appendChild(createRecommendationCard(remaining[i], STATE.serverId, {
-      aboveFold: i < Math.min(6, initialCount),
-      showProgress
-    }));
-  }
-  row.appendChild(fragment);
-
-  let currentIndex = initialCount;
-  const pumpMore = () => {
-    if (currentIndex >= remaining.length || row.childElementCount >= cardCount) {
-      setupScroller(row);
-      try { scrollWrap?.classList?.remove("rr-scroll-pending"); } catch {}
-      try {
-        if (btnL) { btnL.style.visibility = ""; btnL.style.pointerEvents = ""; }
-        if (btnR) { btnR.style.visibility = ""; btnR.style.pointerEvents = ""; }
-        btnL && (btnL.disabled = false);
-        btnR && (btnR.disabled = false);
-      } catch {}
-      return;
-    }
-    const chunkSize = IS_MOBILE ? 2 : 6;
-    const frag = document.createDocumentFragment();
-    for (let i = 0; i < chunkSize && currentIndex < remaining.length; i++) {
-      if (row.childElementCount >= cardCount) break;
-      frag.appendChild(createRecommendationCard(remaining[currentIndex], STATE.serverId, {
-        aboveFold: false,
-        showProgress
-      }));
-      currentIndex++;
-    }
-    row.appendChild(frag);
-    try {
-      if (!row.__rrScrollRaf) {
-        row.__rrScrollRaf = requestAnimationFrame(() => {
-          row.__rrScrollRaf = 0;
-          try { row.dispatchEvent(new Event("scroll")); } catch {}
-        });
+    if (!items?.length) {
+      if (!cachedItems?.length) {
+        if (allowEmptyRow) {
+          return renderEmptyState(resolveEmptyMessage());
+        }
+        return removeSection();
       }
-    } catch {}
-    setTimeout(pumpMore, 0);
-  };
-  setTimeout(pumpMore, 200);
+      return true;
+    }
 
-  return true;
+    if (cachedItems?.length) {
+      const compareCount = cardCount + (useHero ? 1 : 0);
+      const a = cachedItems.map((x) => x?.Id).filter(Boolean).slice(0, compareCount);
+      const b = items.map((x) => x?.Id).filter(Boolean).slice(0, compareCount);
+      if (sameIdList(a, b)) {
+        const progressUnchanged =
+          !showProgress ||
+          samePlaybackProgressByOrder(cachedItems, items, compareCount);
+        if (progressUnchanged) return true;
+      }
+    }
+
+    return renderResolvedItems(items, {
+      aboveFoldLimit: IS_MOBILE ? 4 : 6
+    });
+  };
+
+  if (deferNetworkRender) {
+    void fetchAndRender();
+    return true;
+  }
+
+  return fetchAndRender();
 }
 
 function getActiveHomePage() {
@@ -2761,7 +3619,7 @@ async function mountRecentRowsSection(sectionKey, { force = false, options = {},
     return false;
   }
 
-  if (!force && hasRenderableRecentRowsContent(wrap)) {
+  if (!force && hasAcceptedRecentRowsMountState(wrap, sectionKey)) {
     recentRowsLog("mount:skip:already-rendered", {
       force,
       sectionKey,
@@ -2793,7 +3651,7 @@ async function mountRecentRowsSection(sectionKey, { force = false, options = {},
     });
     try { wrap.innerHTML = ""; } catch {}
     await initAndRender(wrap, sectionKey);
-    if (!hasRenderableRecentRowsContent(wrap)) {
+    if (!hasAcceptedRecentRowsMountState(wrap, sectionKey)) {
       recentRowsWarn("render:done-but-empty", {
         force,
         sectionKey,
@@ -2958,10 +3816,125 @@ async function initAndRender(wrap, sectionKey = "recentRows") {
     await resolveDefaultPages(userId);
     const runtimeCfg = getRecentRowsRuntimeConfig();
 
-    const recentPlans   = [];
-    const continuePlans = [];
-    const episodePlans  = [];
+    const top10SeriesPlans = [];
+    const top10MoviePlans  = [];
+    const tmdbTopMoviePlans = [];
+    const recentPlans      = [];
+    const continuePlans    = [];
+    const episodePlans     = [];
     const pushPlan = (bucket, fn) => { if (typeof fn === "function") bucket.push(fn); };
+
+  if (runtimeCfg.enableTop10Series) {
+    const topSeriesParentIds = getTopSeriesParentIds();
+    const topSeriesMetaType = buildTopRowMetaType("Series", topSeriesParentIds);
+    pushPlan(top10SeriesPlans, () => fillSectionWithItems({
+      wrap,
+      titleText: config.languageLabels.top10Series || "Top 10 Diziler",
+      badgeType: "series",
+      heroLabel: "",
+      cardCount: TOP10_ROW_CARD_COUNT,
+      showProgress: false,
+      hideHero: true,
+      sectionClassName: "top10-section",
+      rowClassName: "top10-row",
+      cardVariant: "top10",
+      deferNetworkRender: true,
+      fetcher: Object.assign(
+        () => fetchTopRankedUnplayedFirstAcrossParents(userId, "Series", TOP10_ROW_CARD_COUNT, topSeriesParentIds).then(async (items) => {
+          await writeCachedList("top", topSeriesMetaType, items.map((x) => x?.Id).filter(Boolean));
+          return items;
+        }),
+        {
+          cachedItems: async () => {
+            const cached = await loadCachedRowItems("top", topSeriesMetaType, TTL_TOP10_MS, {
+              limit: TOP10_ROW_CARD_COUNT,
+              refreshUserData: true
+            });
+            return { ...cached, fresh: false };
+          }
+        }
+      ),
+      onSeeAll: () => openLatestPage("Series")
+    }));
+  }
+
+  if (runtimeCfg.enableTop10Movies) {
+    const topMovieParentIds = getTopMovieParentIds();
+    const topMovieMetaType = buildTopRowMetaType("Movie", topMovieParentIds);
+    pushPlan(top10MoviePlans, () => fillSectionWithItems({
+      wrap,
+      titleText: config.languageLabels.top10Movies || "Top 10 Filmler",
+      badgeType: "movie",
+      heroLabel: "",
+      cardCount: TOP10_ROW_CARD_COUNT,
+      showProgress: false,
+      hideHero: true,
+      sectionClassName: "top10-section",
+      rowClassName: "top10-row",
+      cardVariant: "top10",
+      deferNetworkRender: true,
+      fetcher: Object.assign(
+        () => fetchTopRankedUnplayedFirstAcrossParents(userId, "Movie", TOP10_ROW_CARD_COUNT, topMovieParentIds).then(async (items) => {
+          await writeCachedList("top", topMovieMetaType, items.map((x) => x?.Id).filter(Boolean));
+          return items;
+        }),
+        {
+          cachedItems: async () => {
+            const cached = await loadCachedRowItems("top", topMovieMetaType, TTL_TOP10_MS, {
+              limit: TOP10_ROW_CARD_COUNT,
+              refreshUserData: true
+            });
+            return { ...cached, fresh: false };
+          }
+        }
+      ),
+      onSeeAll: () => openLatestPage("Movie")
+    }));
+  }
+
+  if (runtimeCfg.enableTmdbTopMovies) {
+    const tmdbMovieParentIds = getTopMovieParentIds();
+    const tmdbMovieMetaType = buildTopRowMetaType("TmdbMovie", tmdbMovieParentIds);
+    let tmdbEmptyMessage = "";
+    pushPlan(tmdbTopMoviePlans, () => fillSectionWithItems({
+      wrap,
+      titleText: config.languageLabels.tmdbTopMovies || "TMDb En Iyi Filmler",
+      badgeType: "movie",
+      heroLabel: "",
+      cardCount: TOP10_ROW_CARD_COUNT,
+      showProgress: false,
+      hideHero: true,
+      allowEmptyRow: true,
+      emptyMessage: () => tmdbEmptyMessage,
+      sectionClassName: "top10-section tmdb-top10-section",
+      rowClassName: "top10-row tmdb-top10-row",
+      cardVariant: "top10",
+      deferNetworkRender: true,
+      fetcher: Object.assign(
+        async () => {
+          const result = await fetchTmdbTopRatedMoviesInLibraries(
+            userId,
+            TOP10_ROW_CARD_COUNT,
+            tmdbMovieParentIds
+          );
+          tmdbEmptyMessage =
+            result?.reason === "missingKey"
+              ? (config.languageLabels.tmdbKeyMissing || "TMDb API key girilmemis. Ayarlardan ekleyebilirsin.")
+              : (config.languageLabels.tmdbTopMoviesEmpty || "Secili film kutuphanelerinde TMDb top rated eslesmesi bulunamadi.");
+          const items = Array.isArray(result?.items) ? result.items : [];
+          await writeCachedList("tmdb_top", tmdbMovieMetaType, items.map((x) => x?.Id).filter(Boolean));
+          return items;
+        },
+        {
+          cachedItems: () => loadCachedRowItems("tmdb_top", tmdbMovieMetaType, TTL_TOP10_MS, {
+            limit: TOP10_ROW_CARD_COUNT,
+            refreshUserData: true
+          })
+        }
+      ),
+      onSeeAll: () => openLatestPage("Movie")
+    }));
+  }
 
   if (runtimeCfg.enableRecentMovies) {
     const split = getConfig()?.recentRowsSplitMovieLibs === true;
@@ -2975,6 +3948,7 @@ async function initAndRender(wrap, sectionKey = "recentRows") {
         heroLabel: config.languageLabels.recentMoviesHero || "Son eklenen film",
         cardCount: runtimeCfg.effectiveRecentMoviesCount,
         showProgress: false,
+        hideHero: runtimeCfg.showRecentMoviesHeroCards === false,
         fetcher: Object.assign(
             () => fetchRecent(userId, "Movie", runtimeCfg.effectiveRecentMoviesCount + 1).then(async (items) => {
             await writeCachedList("recent", "Movie", items.map(x=>x?.Id).filter(Boolean));
@@ -2998,6 +3972,7 @@ async function initAndRender(wrap, sectionKey = "recentRows") {
           heroLabel: (config.languageLabels.recentMoviesHero || "Son eklenen film") + (libName ? ` • ${libName}` : ""),
           cardCount: runtimeCfg.effectiveRecentMoviesCount,
           showProgress: false,
+          hideHero: runtimeCfg.showRecentMoviesHeroCards === false,
           fetcher: Object.assign(
               () => fetchRecent(userId, "Movie", runtimeCfg.effectiveRecentMoviesCount + 1, movieLibId).then(async (items) => {
               await writeCachedList("recent", "Movie" + movieLibMetaSuffix(movieLibId), items.map(x=>x?.Id).filter(Boolean));
@@ -3027,6 +4002,7 @@ async function initAndRender(wrap, sectionKey = "recentRows") {
         heroLabel: config.languageLabels.recentSeriesHero || "Son eklenen dizi",
         cardCount: runtimeCfg.effectiveRecentSeriesCount,
         showProgress: false,
+        hideHero: runtimeCfg.showRecentSeriesHeroCards === false,
         fetcher: Object.assign(
           () => fetchRecent(userId, "Series", runtimeCfg.effectiveRecentSeriesCount + 1).then(async (items) => {
             await writeCachedList("recent", "Series", items.map(x=>x?.Id).filter(Boolean));
@@ -3050,6 +4026,7 @@ async function initAndRender(wrap, sectionKey = "recentRows") {
           heroLabel: (config.languageLabels.recentSeriesHero || "Son eklenen dizi") + (libName ? ` • ${libName}` : ""),
           cardCount: runtimeCfg.effectiveRecentSeriesCount,
           showProgress: false,
+          hideHero: runtimeCfg.showRecentSeriesHeroCards === false,
           fetcher: Object.assign(
             () => fetchRecent(userId, "Series", runtimeCfg.effectiveRecentSeriesCount + 1, tvLibId).then(async (items) => {
               await writeCachedList("recent", "Series" + tvLibMetaSuffix(tvLibId), items.map(x=>x?.Id).filter(Boolean));
@@ -3079,6 +4056,7 @@ async function initAndRender(wrap, sectionKey = "recentRows") {
         heroLabel: config.languageLabels.recentEpisodesHero || "Son eklenen bölüm",
         cardCount: runtimeCfg.effectiveRecentEpisodesCount,
         showProgress: false,
+        hideHero: runtimeCfg.showRecentEpisodesHeroCards === false,
         fetcher: Object.assign(
           () => fetchRecentEpisodes(userId, runtimeCfg.effectiveRecentEpisodesCount + 1).then(async (items) => {
             await writeCachedList("recent", "Episode", items.map(x=>x?.Id).filter(Boolean));
@@ -3103,6 +4081,7 @@ async function initAndRender(wrap, sectionKey = "recentRows") {
           heroLabel: (config.languageLabels.recentEpisodesHero || "Son eklenen bölüm") + (libName ? ` • ${libName}` : ""),
           cardCount: runtimeCfg.effectiveRecentEpisodesCount,
           showProgress: false,
+          hideHero: runtimeCfg.showRecentEpisodesHeroCards === false,
           fetcher: Object.assign(
             () => fetchRecentEpisodes(userId, runtimeCfg.effectiveRecentEpisodesCount + 1, tvLibId).then(async (items) => {
               await writeCachedList("recent", "Episode" + tvLibMetaSuffix(tvLibId), items.map(x=>x?.Id).filter(Boolean));
@@ -3129,6 +4108,7 @@ async function initAndRender(wrap, sectionKey = "recentRows") {
       heroLabel: config.languageLabels.recentMusicHero || "Son eklenen albüm",
       cardCount: runtimeCfg.effectiveRecentMusicCount,
       showProgress: false,
+      hideHero: runtimeCfg.showRecentMusicHeroCards === false,
       fetcher: Object.assign(
         () => fetchRecent(userId, "MusicAlbum", runtimeCfg.effectiveRecentMusicCount + 1).then(async (items) => {
           await writeCachedList("recent", "MusicAlbum", items.map(x=>x?.Id).filter(Boolean));
@@ -3153,6 +4133,7 @@ async function initAndRender(wrap, sectionKey = "recentRows") {
       heroLabel: config.languageLabels.continueMoviesHero || "İzlemeye devam (Film)",
       cardCount: runtimeCfg.effectiveContinueMoviesCount,
       showProgress: true,
+      hideHero: runtimeCfg.showContinueMoviesHeroCards === false,
       fetcher: Object.assign(
         () => fetchContinue(userId, "Movie", runtimeCfg.effectiveContinueMoviesCount + 1).then(async (items) => {
           await writeCachedList("resume", "Movie", items.map(x=>x?.Id).filter(Boolean));
@@ -3181,6 +4162,7 @@ async function initAndRender(wrap, sectionKey = "recentRows") {
         heroLabel: config.languageLabels.continueSeriesHero || "İzlemeye devam (Dizi)",
         cardCount: runtimeCfg.effectiveContinueSeriesCount,
         showProgress: true,
+        hideHero: runtimeCfg.showContinueSeriesHeroCards === false,
         fetcher: Object.assign(
           () => fetchContinueEpisodes(userId, runtimeCfg.effectiveContinueSeriesCount + 1).then(async (items) => {
             await writeCachedList("resume", "Episode", items.map(x=>x?.Id).filter(Boolean));
@@ -3206,6 +4188,7 @@ async function initAndRender(wrap, sectionKey = "recentRows") {
           heroLabel: (config.languageLabels.continueSeriesHero || "İzlemeye devam (Dizi)") + (libName ? ` • ${libName}` : ""),
           cardCount: runtimeCfg.effectiveContinueSeriesCount,
           showProgress: true,
+          hideHero: runtimeCfg.showContinueSeriesHeroCards === false,
           fetcher: Object.assign(
             () => fetchContinueEpisodes(userId, runtimeCfg.effectiveContinueSeriesCount + 1, tvLibId).then(async (items) => {
               await writeCachedList("resume", "Episode" + tvLibMetaSuffix(tvLibId), items.map(x=>x?.Id).filter(Boolean));
@@ -3229,7 +4212,10 @@ async function initAndRender(wrap, sectionKey = "recentRows") {
     const otherIds = resolveOtherLibSelection();
     const otherDefs = otherIds.map((libId) => {
       const lib = (STATE.otherLibs || []).find(x => x.Id === libId) || null;
-      return { libId, libName: lib?.Name || "Library" };
+      return {
+        libId,
+        libName: lib?.Name || config.languageLabels.studioHubLibraryFallbackName || "Library"
+      };
     });
 
     for (const { libId, libName } of otherDefs) {
@@ -3240,6 +4226,7 @@ async function initAndRender(wrap, sectionKey = "recentRows") {
         heroLabel: `${config.languageLabels.otherLibRecentHero || "Son eklenen"} • ${libName}`,
         cardCount: runtimeCfg.effectiveOtherRecentCount,
         showProgress: false,
+        hideHero: runtimeCfg.showOtherLibrariesHeroCards === false,
         fetcher: Object.assign(
           () => fetchRecentGeneric(userId, runtimeCfg.effectiveOtherRecentCount + 1, libId).then(async (items) => {
             await writeCachedList("other_recent", `lib:${libId}`, items.map(x=>x?.Id).filter(Boolean));
@@ -3264,6 +4251,7 @@ async function initAndRender(wrap, sectionKey = "recentRows") {
         heroLabel: `${config.languageLabels.otherLibContinueHero || "Devam"} • ${libName}`,
         cardCount: runtimeCfg.effectiveOtherContinueCount,
         showProgress: true,
+        hideHero: runtimeCfg.showOtherLibrariesHeroCards === false,
         fetcher: Object.assign(
           () => fetchContinueGeneric(userId, runtimeCfg.effectiveOtherContinueCount + 1, libId).then(async (items) => {
             await writeCachedList("other_resume", `lib:${libId}`, items.map(x=>x?.Id).filter(Boolean));
@@ -3289,6 +4277,7 @@ async function initAndRender(wrap, sectionKey = "recentRows") {
         heroLabel: `${config.languageLabels.recentEpisodesHero || "Bölüm"} • ${libName}`,
         cardCount: runtimeCfg.effectiveOtherEpisodesCount,
         showProgress: false,
+        hideHero: runtimeCfg.showOtherLibrariesHeroCards === false,
         fetcher: Object.assign(
           () => fetchRecentEpisodes(userId, runtimeCfg.effectiveOtherEpisodesCount + 1, libId).then(async (items) => {
             await writeCachedList("other_recent", `ep:${libId}`, items.map(x=>x?.Id).filter(Boolean));
@@ -3314,6 +4303,7 @@ async function initAndRender(wrap, sectionKey = "recentRows") {
       heroLabel: (config.languageLabels.recentlyPlayedTracksHero || config.languageLabels.recentTracksHero) || "Son dinlenen parça",
       cardCount: runtimeCfg.effectiveRecentTracksCount,
       showProgress: false,
+      hideHero: runtimeCfg.showRecentTracksHeroCards === false,
       fetcher: Object.assign(
         () => fetchRecentlyPlayedTracks(userId, runtimeCfg.effectiveRecentTracksCount + 1).then(async (items) => {
           await writeCachedList("played", "Audio", items.map(x=>x?.Id).filter(Boolean));
@@ -3330,9 +4320,13 @@ async function initAndRender(wrap, sectionKey = "recentRows") {
     }));
   }
 
-    const runners = (sectionKey === "continueRows")
-      ? [...continuePlans]
-      : [...recentPlans, ...episodePlans];
+    const runners = (
+      sectionKey === "top10SeriesRows" ? [...top10SeriesPlans] :
+      sectionKey === "top10MovieRows" ? [...top10MoviePlans] :
+      sectionKey === "tmdbTopMoviesRows" ? [...tmdbTopMoviePlans] :
+      sectionKey === "continueRows" ? [...continuePlans] :
+      [...recentPlans, ...episodePlans]
+    );
 
     async function runWithLimit(fns, limit) {
       const pool = new Set();
@@ -3376,8 +4370,9 @@ export function cleanupRecentRows() {
     });
     clearRecentRowsRetry();
     __recentMountPromise = null;
-    setRecentRowsDone(false);
-    setContinueRowsDone(false);
+    Object.keys(RECENT_ROW_SECTION_META).forEach((sectionKey) => {
+      setManagedRecentRowsDone(sectionKey, false);
+    });
     Object.values(RECENT_ROW_SECTION_META).forEach((meta) => {
       cleanupRecentRowsWrap(document.getElementById(meta.id));
     });

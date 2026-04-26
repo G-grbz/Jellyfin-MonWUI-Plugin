@@ -7,6 +7,9 @@ import {
 const MANAGED_HOME_SECTION_IDS = new Set([
   "studio-hubs",
   "personal-recommendations",
+  "top10-series-rows",
+  "top10-movie-rows",
+  "tmdb-top-movie-rows",
   "genre-hubs",
   "director-rows",
   "recent-rows",
@@ -43,6 +46,9 @@ function getManagedHomeSectionKey(el) {
   const id = String(el?.id || "");
   if (id === "studio-hubs") return "studioHubs";
   if (id === "personal-recommendations") return "personalRecommendations";
+  if (id === "top10-series-rows") return "top10SeriesRows";
+  if (id === "top10-movie-rows") return "top10MovieRows";
+  if (id === "tmdb-top-movie-rows") return "tmdbTopMoviesRows";
   if (id === "recent-rows") return "recentRows";
   if (id === "continue-rows") return "continueRows";
   if (id === "genre-hubs") return "genreHubs";

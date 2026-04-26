@@ -130,7 +130,6 @@ const animationStyles = `
   }
   .monwui-slide {
     transform-style: preserve-3d;
-    backface-visibility: hidden;
     transform-origin: center center;
   }
   .monwui-poster-dot {

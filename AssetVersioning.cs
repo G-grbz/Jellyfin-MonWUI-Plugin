@@ -832,7 +832,6 @@ html[data-jms-custom-splash="1"] #${LAYER_ID} {
   isolation: isolate;
   opacity: 1;
   visibility: visible;
-  transform: translateZ(0);
   background: linear-gradient(155deg, rgba(4, 8, 14, 0.98) 0%, rgba(6, 10, 18, 0.94) 46%, rgba(2, 4, 6, 0.98) 100%);
   transition: opacity 420ms ease, transform 420ms cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 420ms;
 }

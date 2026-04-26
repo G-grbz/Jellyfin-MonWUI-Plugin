@@ -281,18 +281,20 @@ function injectGEPerfStyles() {
   const st = document.createElement('style');
   st.id = 'ge-perf-css';
   st.textContent = `
-    .genre-explorer-overlay { will-change: opacity; }
-    .genre-explorer { contain: layout paint size; }
-    .ge-card {
-      content-visibility: auto;
-      contain-intrinsic-size: 320px 214px;
+    .genre-explorer-overlay,
+    .genre-explorer,
+    .ge-card,
+    .ge-card .cardImage,
+    .ge-card .cardBox {
+      contain: none !important;
+      content-visibility: visible !important;
+      contain-intrinsic-size: auto !important;
+      will-change: auto !important;
+      backface-visibility: visible !important;
+      -webkit-backface-visibility: visible !important;
     }
-    .ge-card .cardImage {
-      content-visibility: auto;
-      contain-intrinsic-size: 240px 160px;
-    }
-    .ge-card .cardBox { will-change: transform; }
-    .ge-card .cardBox:hover { transform: translateZ(0) scale(1.01); }
+
+    .ge-card .cardBox:hover { transform: scale(1.01); }
   `;
   document.head.appendChild(st);
 }

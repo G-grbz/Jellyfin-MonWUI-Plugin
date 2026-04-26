@@ -9,6 +9,9 @@ export const SETTINGS_HOTKEY_DEFAULT = "F2";
 export const DEFAULT_MANAGED_HOME_SECTION_ORDER = Object.freeze([
   "studioHubs",
   "personalRecommendations",
+  "top10SeriesRows",
+  "top10MovieRows",
+  "tmdbTopMoviesRows",
   "recentRows",
   "continueRows",
   "becauseYouWatched",
@@ -160,6 +163,18 @@ function isRecentRowsSectionEnabled(cfg = {}, masterEnabled = cfg?.enableHomeSec
   return hasRecentContent || (masterEnabled && cfg?.enableOtherLibRows === true);
 }
 
+function isTop10SeriesRowsSectionEnabled(cfg = {}, masterEnabled = cfg?.enableHomeSectionsMaster !== false) {
+  return masterEnabled && cfg?.enableRecentRows !== false && cfg?.enableTop10SeriesRow !== false;
+}
+
+function isTop10MovieRowsSectionEnabled(cfg = {}, masterEnabled = cfg?.enableHomeSectionsMaster !== false) {
+  return masterEnabled && cfg?.enableRecentRows !== false && cfg?.enableTop10MoviesRow !== false;
+}
+
+function isTmdbTopMoviesRowsSectionEnabled(cfg = {}, masterEnabled = cfg?.enableHomeSectionsMaster !== false) {
+  return masterEnabled && cfg?.enableRecentRows !== false && cfg?.enableTmdbTopMoviesRow !== false;
+}
+
 function isContinueRowsSectionEnabled(cfg = {}, masterEnabled = cfg?.enableHomeSectionsMaster !== false) {
   const recentMasterEnabled = masterEnabled && cfg?.enableRecentRows !== false;
   const hasRecentTracks = recentMasterEnabled && cfg?.enableRecentMusicTracksRow !== false;
@@ -178,6 +193,9 @@ function buildManagedHomeSectionEnabledMap(cfg = {}) {
   return {
     studioHubs: masterEnabled && cfg?.enableStudioHubs !== false,
     personalRecommendations: masterEnabled && cfg?.enablePersonalRecommendations !== false,
+    top10SeriesRows: isTop10SeriesRowsSectionEnabled(cfg, masterEnabled),
+    top10MovieRows: isTop10MovieRowsSectionEnabled(cfg, masterEnabled),
+    tmdbTopMoviesRows: isTmdbTopMoviesRowsSectionEnabled(cfg, masterEnabled),
     recentRows: isRecentRowsSectionEnabled(cfg, masterEnabled),
     continueRows: isContinueRowsSectionEnabled(cfg, masterEnabled),
     becauseYouWatched: masterEnabled && cfg?.enableBecauseYouWatched !== false,
@@ -622,7 +640,7 @@ export function getConfig() {
     useRandomContent: localStorage.getItem('useRandomContent') !== 'false',
     fullscreenMode: localStorage.getItem('fullscreenMode') === 'true' ? true : false,
     listLimit: 20,
-    version: "v2.6.1",
+    version: "v2.6.2",
     historySize: 20,
     updateInterval: 300000,
     nextTracksSource: localStorage.getItem('nextTracksSource') || 'playlist',
@@ -732,14 +750,25 @@ export function getConfig() {
 
     enableRecentRows: (localStorage.getItem('enableRecentRows') || 'true') !== 'false',
     showRecentRowsHeroCards: (localStorage.getItem('showRecentRowsHeroCards') || 'true') !== 'false',
+    showRecentMoviesHeroCards: (localStorage.getItem('showRecentMoviesHeroCards') || 'true') !== 'false',
+    showRecentSeriesHeroCards: (localStorage.getItem('showRecentSeriesHeroCards') || 'true') !== 'false',
+    showRecentMusicHeroCards: (localStorage.getItem('showRecentMusicHeroCards') || 'true') !== 'false',
+    showRecentTracksHeroCards: (localStorage.getItem('showRecentTracksHeroCards') || 'true') !== 'false',
+    showRecentEpisodesHeroCards: (localStorage.getItem('showRecentEpisodesHeroCards') || 'true') !== 'false',
+    enableTop10MoviesRow: (localStorage.getItem('enableTop10MoviesRow') || 'true') !== 'false',
+    enableTop10SeriesRow: (localStorage.getItem('enableTop10SeriesRow') || 'true') !== 'false',
+    enableTmdbTopMoviesRow: localStorage.getItem('enableTmdbTopMoviesRow') === 'true',
 
     enableContinueMovies: (localStorage.getItem('enableContinueMovies') || 'true') !== 'false',
+    showContinueMoviesHeroCards: (localStorage.getItem('showContinueMoviesHeroCards') || 'true') !== 'false',
     continueMoviesCardCount: parseInt(localStorage.getItem('continueMoviesCardCount'), 10) || 10,
 
     enableContinueSeries: (localStorage.getItem('enableContinueSeries') || 'true') !== 'false',
+    showContinueSeriesHeroCards: (localStorage.getItem('showContinueSeriesHeroCards') || 'true') !== 'false',
     continueSeriesCardCount: parseInt(localStorage.getItem('continueSeriesCardCount'), 10) || 10,
 
     enableOtherLibRows: localStorage.getItem('enableOtherLibRows') === 'true',
+    showOtherLibrariesHeroCards: (localStorage.getItem('showOtherLibrariesHeroCards') || 'true') !== 'false',
     otherLibrariesRecentCardCount: parseInt(localStorage.getItem('otherLibrariesRecentCardCount'), 10) || 10,
     otherLibrariesContinueCardCount: parseInt(localStorage.getItem('otherLibrariesContinueCardCount'), 10) || 10,
     otherLibrariesEpisodesCardCount: parseInt(localStorage.getItem('otherLibrariesEpisodesCardCount'), 10) || 10,
@@ -1093,6 +1122,7 @@ export function getConfig() {
     maxImageSizeKB: parseInt(localStorage.getItem("maxImageSizeKB"), 10) || 1500,
 
     enableGenreHubs: localStorage.getItem('enableGenreHubs') !== 'false',
+    showGenreHubsHeroCards: (localStorage.getItem('showGenreHubsHeroCards') || 'true') !== 'false',
     studioHubsGenreCardCount: parseInt(localStorage.getItem("studioHubsGenreCardCount"), 10) || 10,
     studioHubsGenreRowsCount: parseInt(localStorage.getItem("studioHubsGenreRowsCount"), 10) || 4,
     genreHubsOrder: (() => {
@@ -1163,6 +1193,9 @@ export function getHomeSectionsRuntimeConfig(source = null) {
     masterEnabled,
     enableStudioHubs: enabledMap.studioHubs,
     enablePersonalRecommendations: enabledMap.personalRecommendations,
+    enableTop10SeriesRowsSection: enabledMap.top10SeriesRows,
+    enableTop10MovieRowsSection: enabledMap.top10MovieRows,
+    enableTmdbTopMoviesRowsSection: enabledMap.tmdbTopMoviesRows,
     enableBecauseYouWatched: enabledMap.becauseYouWatched,
     enableGenreHubs: enabledMap.genreHubs,
     enableDirectorRows: enabledMap.directorRows,

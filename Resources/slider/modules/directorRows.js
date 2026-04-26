@@ -15,7 +15,12 @@ import {
 import { cleanupImageResourceRefs } from "./imageResourceCleanup.js";
 import { faIconHtml } from "./faIcons.js";
 import { resolveSliderAssetHref } from "./assetLinks.js";
-import { setupScroller } from "./personalRecommendations.js";
+import {
+  clearScrollerAwareHiResUpgrade,
+  isScrollerMediaBusy,
+  scheduleScrollerAwareHiResUpgrade,
+  setupScroller
+} from "./personalRecommendations.js";
 import {
   bindManagedSectionsBelowNative,
   waitForVisibleHomeSections
@@ -58,6 +63,16 @@ const IMAGE_RETRY_LIMITS = { lq: 2, hi: 2 };
 function dirRowsLog() {}
 
 function dirRowsWarn() {}
+
+function setDirectorRowsDone(done) {
+  const next = !!done;
+  let prev = false;
+  try { prev = window.__jmsDirectorRowsDone === true; } catch {}
+  try { window.__jmsDirectorRowsDone = next; } catch {}
+  if (next && !prev) {
+    try { document.dispatchEvent(new Event("jms:director-rows-done")); } catch {}
+  }
+}
 
 function clampConfiguredCount(value, fallback, max = UNIFIED_ROW_ITEM_LIMIT) {
   const n = Number(value);
@@ -607,6 +622,7 @@ function promoteTaglessImageData(data) {
 
 function markImageSettled(img, src, { disableRecovery = false } = {}) {
   if (!img) return;
+  clearScrollerAwareHiResUpgrade(img);
   try { img.removeAttribute("srcset"); } catch {}
   if (src) {
     try { img.src = src; } catch {}
@@ -744,6 +760,11 @@ function requestHiResImage(img) {
   if (!img || !img.isConnected) return;
   const data = img.__data || {};
   if (img.__disableRecovery === true || img.__disableHi === true || hasKnownMissingImage(data)) return;
+  if (isScrollerMediaBusy(img)) {
+    scheduleScrollerAwareHiResUpgrade(img, requestHiResImage);
+    return;
+  }
+  clearScrollerAwareHiResUpgrade(img);
   if (img.__hiRequested) return;
   if (!data.hqSrc) {
     markImageSettled(img, data.lqSrc || img.currentSrc || img.src || data.fallback || PLACEHOLDER_URL, { disableRecovery: true });
@@ -806,18 +827,70 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
     delete img.__fallbackState;
     try { img.removeAttribute('srcset'); } catch {}
     const staticSrc = hqSrc || lqSrc || fb;
+    const useMobileBlurTransition = img?.classList?.contains?.('cardImage') === true;
     const alreadyStatic = (img.__mobileStaticSrc === staticSrc && img.src === staticSrc);
     try { img.loading = "lazy"; } catch {}
-    if (!alreadyStatic && img.src !== staticSrc) img.src = staticSrc;
     img.__mobileStaticSrc = staticSrc;
-    img.classList.remove('is-lqip');
-    img.classList.add('__hydrated');
     img.__phase = 'static';
     img.__hiRequested = true;
     img.__disableHi = true;
-    img.__hydrated = true;
-    img.__lqLoaded = true;
     img.__pendingHi = false;
+    if (!useMobileBlurTransition) {
+      if (!alreadyStatic && img.src !== staticSrc) img.src = staticSrc;
+      img.classList.remove('is-lqip');
+      img.classList.add('__hydrated');
+      img.__hydrated = true;
+      img.__lqLoaded = true;
+      return;
+    }
+
+    const cleanupMobileStaticListeners = () => {
+      try { if (img.__onErr) img.removeEventListener('error', img.__onErr); } catch {}
+      try { if (img.__onLoad) img.removeEventListener('load', img.__onLoad); } catch {}
+      delete img.__onErr;
+      delete img.__onLoad;
+    };
+
+    const finishMobileStaticHydration = () => {
+      cleanupMobileStaticListeners();
+      img.classList.add('__hydrated');
+      requestAnimationFrame(() => {
+        try { img.classList.remove('is-lqip'); } catch {}
+      });
+      img.__hydrated = true;
+      img.__lqLoaded = true;
+    };
+
+    const failMobileStaticHydration = () => {
+      cleanupMobileStaticListeners();
+      markImageSettled(img, fb, { disableRecovery: true });
+      img.__disableHi = true;
+      img.__pendingHi = false;
+    };
+
+    if (alreadyStatic && img.__hydrated === true) {
+      img.classList.remove('is-lqip');
+      img.classList.add('__hydrated');
+      img.__lqLoaded = true;
+      return;
+    }
+
+    img.classList.add('is-lqip');
+    try { img.classList.remove('__hydrated'); } catch {}
+    img.__hydrated = false;
+    img.__lqLoaded = false;
+
+    img.__onLoad = () => finishMobileStaticHydration();
+    img.__onErr = () => failMobileStaticHydration();
+    img.addEventListener('load', img.__onLoad, { once: true });
+    img.addEventListener('error', img.__onErr, { once: true });
+
+    if (!alreadyStatic && img.src !== staticSrc) {
+      img.src = staticSrc;
+    } else if (img.complete) {
+      if (img.naturalWidth > 0) finishMobileStaticHydration();
+      else failMobileStaticHydration();
+    }
     return;
   }
 
@@ -930,12 +1003,7 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
     }
 
     if (img.__pendingHi) {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          if (!img.isConnected || img.__phase !== "lq" || img.__pendingHi !== true) return;
-          requestHiResImage(img);
-        });
-      });
+      scheduleScrollerAwareHiResUpgrade(img, requestHiResImage, 32);
     }
     return;
   }
@@ -967,6 +1035,7 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
 }
 
 function unobserveImage(img) {
+  clearScrollerAwareHiResUpgrade(img);
   try { __imgIO.unobserve(img); } catch {}
   try { img.removeEventListener('error', img.__onErr); } catch {}
   try { img.removeEventListener('load',  img.__onLoad); } catch {}
@@ -1143,6 +1212,23 @@ function createRecommendationCard(item, serverId, aboveFold = false) {
     ? `<div class="community-rating" title="Community Rating">⭐ ${item.CommunityRating.toFixed(1)}</div>`
     : "";
   const progress = getPlaybackPercent(item);
+  const logoUrl = buildLogoUrl(item);
+  const fallbackTitleHtml = `
+    <div class="prc-titleline">
+      ${escapeHtml(clampText(itemName, 42))}
+    </div>
+  `;
+  const titleBlockHtml = logoUrl
+    ? `
+      <div class="prc-card-logo">
+        <img src="${escapeHtml(logoUrl)}"
+          alt="${escapeHtml(itemName)} logo"
+          loading="${aboveFold ? 'eager' : 'lazy'}"
+          decoding="async"
+          ${aboveFold ? 'fetchpriority="high"' : ''}>
+      </div>
+    `
+    : fallbackTitleHtml;
   const progressHtml = (progress > 0.02 && progress < 0.999)
     ? `<div class="rr-progress-wrap" aria-label="${escapeHtml(config.languageLabels?.progress || "İlerleme")}">
          <div class="rr-progress-bar" style="width:${Math.round(progress * 100)}%"></div>
@@ -1167,9 +1253,7 @@ function createRecommendationCard(item, serverId, aboveFold = false) {
           </div>
           <div class="prc-gradient"></div>
           <div class="prc-overlay">
-          <div class="prc-titleline">
-            ${escapeHtml(clampText(itemName, 42))}
-          </div>
+            ${titleBlockHtml}
             <div class="prc-meta">
               ${ageChip ? `<span class="prc-age">${ageChip}</span><span class="prc-dot">•</span>` : ""}
               ${year ? `<span class="prc-year">${year}</span><span class="prc-dot">•</span>` : ""}
@@ -1183,10 +1267,21 @@ function createRecommendationCard(item, serverId, aboveFold = false) {
     </div>
   `;
 
+  const logoImg = card.querySelector('.prc-card-logo img');
+  if (logoImg) {
+    logoImg.addEventListener('error', () => {
+      try {
+        const logoWrap = logoImg.closest('.prc-card-logo');
+        if (!logoWrap?.isConnected) return;
+        logoWrap.outerHTML = fallbackTitleHtml;
+      } catch {}
+    }, { once: true });
+  }
+
   const img = card.querySelector('.cardImage');
   try {
-    const sizesMobile = '(max-width: 640px) 45vw, (max-width: 820px) 38vw, 200px';
-    const sizesDesk   = '(max-width: 1200px) 20vw, 200px';
+    const sizesMobile = '(max-width: 640px) 42vw, (max-width: 820px) 37vw, 252px';
+    const sizesDesk   = '(max-width: 1200px) 21vw, 252px';
     img.setAttribute('sizes', IS_MOBILE ? sizesMobile : sizesDesk);
   } catch {}
 
@@ -1204,7 +1299,8 @@ function createRecommendationCard(item, serverId, aboveFold = false) {
     noImg.textContent =
       (config.languageLabels && (config.languageLabels.noImage || config.languageLabels.loadingText))
       || (labels.noImage || 'Görsel yok');
-    noImg.style.minHeight = '200px';
+    noImg.style.minHeight = '100%';
+    noImg.style.height = '100%';
     noImg.style.display = 'flex';
     noImg.style.alignItems = 'center';
     noImg.style.justifyContent = 'center';
@@ -2798,6 +2894,8 @@ async function initAndRenderFirstBatch(wrap) {
 
   STATE.nextIndex = 0;
   STATE.renderedCount = 0;
+  setDirectorRowsDone(false);
+  try { window.__directorFirstRowReady = false; } catch {}
 
   dirRowsLog(`DirectorRows: ${STATE.directors.length} yönetmen (${fromCache ? "DB cache" : "API"}) , ilk row hemen render ediliyor...`);
 
@@ -2813,11 +2911,15 @@ async function initAndRenderFirstBatch(wrap) {
 
 async function renderNextDirectorBatch() {
   if (STATE.loading || STATE.renderedCount >= STATE.maxRenderCount) {
+    if (STATE.renderedCount >= STATE.maxRenderCount) {
+      setDirectorRowsDone(true);
+    }
     return;
   }
 
   if (STATE.nextIndex >= STATE.directors.length) {
     dirRowsLog('Tüm yönetmenler render edildi.');
+    setDirectorRowsDone(true);
     if (STATE.batchObserver) {
       STATE.batchObserver.disconnect();
     }
@@ -2867,6 +2969,7 @@ async function renderNextDirectorBatch() {
 
   if (STATE.nextIndex >= STATE.directors.length || STATE.renderedCount >= STATE.maxRenderCount) {
     dirRowsLog('Tüm yönetmen rowları yüklendi.');
+    setDirectorRowsDone(true);
     if (STATE.batchObserver) {
       STATE.batchObserver.disconnect();
       STATE.batchObserver = null;
@@ -3246,6 +3349,7 @@ export function cleanupDirectorRows() {
     __directorMountPromise = null;
     __directorDeferredStartPromise = null;
     try { window.__directorFirstRowReady = false; } catch {}
+    setDirectorRowsDone(false);
     if (__dirDeferredWarmTimer) {
       clearTimeout(__dirDeferredWarmTimer);
       __dirDeferredWarmTimer = null;

@@ -1939,7 +1939,6 @@ function injectOrUpdateModalStyle() {
       transition:
         opacity 250ms cubic-bezier(0.25, 0.46, 0.45, 0.94),
         transform 250ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
-      will-change: transform, opacity;
       font-family: "Inter", "Netflix Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
       pointer-events: auto;
       border: 1.5px solid rgba(255, 255, 255, 0.10);
@@ -1947,8 +1946,6 @@ function injectOrUpdateModalStyle() {
       user-select: none;
       box-sizing: border-box;
       max-width: calc(100vw - 32px);
-      transform: translateZ(0);
-      backface-visibility: hidden;
       perspective: 1000px;
     }
 
@@ -1970,7 +1967,6 @@ function injectOrUpdateModalStyle() {
       overflow: hidden;
       z-index: 2;
       box-shadow: 0 2px 12px rgba(0, 0, 0, 0.21);
-      transform: translateZ(0);
       opacity: 1;
       transition: opacity 0.3s ease;
     }
@@ -1987,7 +1983,6 @@ function injectOrUpdateModalStyle() {
       top: 50%;
       transform: translate(-50%, -50%);
       pointer-events: auto;
-      transform: translateZ(0);
     }
 
     .video-preview-modal .preview-close-mobile {
@@ -2005,7 +2000,6 @@ function injectOrUpdateModalStyle() {
       border: 1px solid rgba(194, 194, 255, 0.17);
       z-index: 5;
       cursor: pointer;
-      transform: translateZ(0);
       transition:
         transform 0.15s ease,
         background-color 0.2s ease;
@@ -2034,7 +2028,6 @@ function injectOrUpdateModalStyle() {
       align-items: center;
       justify-content: center;
       overflow: hidden;
-      transform: translateZ(0);
     }
 
     .video-preview-modal .preview-backdrop--visible {
@@ -2054,7 +2047,6 @@ function injectOrUpdateModalStyle() {
       justify-content: center;
       overflow: hidden;
       box-shadow: 0 4px 18px 0 rgba(20, 20, 50, 0.06);
-      transform: translateZ(0);
       opacity: 1;
     }
 
@@ -2068,7 +2060,6 @@ function injectOrUpdateModalStyle() {
       transition:
         opacity 0.4s ease,
         transform 0.3s ease;
-      transform: translateZ(0);
     }
 
     .video-preview-modal .preview-video--hidden {
@@ -2089,7 +2080,6 @@ function injectOrUpdateModalStyle() {
       grid-template-rows: repeat(3, auto);
       gap: 6px 16px;
       align-items: end;
-      transform: translateZ(0);
       opacity: 1;
     }
 
@@ -2106,7 +2096,6 @@ function injectOrUpdateModalStyle() {
       padding: 0;
       text-shadow: 0 2px 8px rgba(0, 0, 0, 0.42);
       line-height: 1.13;
-      transform: translateZ(0);
     }
 
     .video-preview-modal .preview-episode {
@@ -2117,7 +2106,6 @@ function injectOrUpdateModalStyle() {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      transform: translateZ(0);
     }
 
     .video-preview-modal .preview-meta {
@@ -2131,7 +2119,6 @@ function injectOrUpdateModalStyle() {
       opacity: 0.95;
       align-items: center;
       margin: 0 0 -6px 0;
-      transform: translateZ(0);
     }
 
     .video-preview-modal img.range-icon,
@@ -2142,7 +2129,6 @@ function injectOrUpdateModalStyle() {
       background: rgba(30, 30, 40, 0.7);
       border-radius: 4px;
       padding: 1px;
-      transform: translateZ(0);
     }
 
     .video-preview-modal .preview-genres {
@@ -2154,7 +2140,6 @@ function injectOrUpdateModalStyle() {
       color: #a8aac7;
       width: 99%;
       overflow: hidden;
-      transform: translateZ(0);
       opacity: 1;
     }
 
@@ -2163,13 +2148,11 @@ function injectOrUpdateModalStyle() {
       overflow: hidden;
       text-overflow: ellipsis;
       display: inline-block;
-      transform: translateZ(0);
     }
 
     .video-preview-modal .genre-separator {
       color: #a8aac7;
       margin: 0 4px;
-      transform: translateZ(0);
     }
 
     .video-preview-modal .preview-buttons {
@@ -2199,7 +2182,6 @@ function injectOrUpdateModalStyle() {
       padding: 0;
       background: none;
       font: inherit;
-      transform: translateZ(0);
     }
 
     .video-preview-modal .preview-play-button {
@@ -2223,7 +2205,6 @@ function injectOrUpdateModalStyle() {
       text-overflow: ellipsis;
       text-shadow: 0 2px 8px rgba(0, 0, 0, 0.42);
       line-height: 1.13;
-      transform: translateZ(0);
     }
 
     .video-preview-modal .preview-play-button:hover {
@@ -2255,7 +2236,6 @@ function injectOrUpdateModalStyle() {
         background 0.18s ease,
         transform 0.15s cubic-bezier(0.25, 0.46, 0.45, 0.94);
       box-shadow: 0 1px 4px 0 rgba(23, 22, 31, 0.07);
-      transform: translateZ(0);
     }
 
     .video-preview-modal .preview-favorite-button.favorited {
@@ -2303,7 +2283,6 @@ function injectOrUpdateModalStyle() {
       color: #eee;
       z-index: 1;
       pointer-events: none;
-      transform: translateZ(0);
       opacity: 1;
       transition: opacity 0.3s ease;
     }
@@ -2327,7 +2306,6 @@ function injectOrUpdateModalStyle() {
       display: flex;
       align-items: center;
       justify-content: center;
-      transform: translateZ(0);
       opacity: 1;
       transition: opacity 0.3s ease;
     }
@@ -2344,7 +2322,6 @@ function injectOrUpdateModalStyle() {
       background: transparent;
       pointer-events: auto;
       touch-action: manipulation;
-      transform: translateZ(0);
     }
 
     /* Mobile responsive */
@@ -2389,8 +2366,9 @@ function injectOrUpdateModalStyle() {
 
     /* Performance optimizations */
     .video-preview-modal * {
-      transform: translateZ(0);
-      backface-visibility: hidden;
+      will-change: auto;
+      -webkit-backface-visibility: visible;
+      backface-visibility: visible;
     }
 
     /* Content fade animations */

@@ -2630,6 +2630,154 @@ function isHomeVisible() {
   return hasVisibleHomePage() && isHomeRouteActive();
 }
 
+function ensureLayerPropertySanitizer() {
+  if (window.__jmsLayerSanitizerReady) return;
+  window.__jmsLayerSanitizerReady = true;
+
+  const root = document.documentElement;
+  const CLASS_NAME = "jms-layer-sanitized";
+  const STYLE_ID = "jms-layer-sanitizer-css";
+
+  // Keep peakslider and the live subtitle transform pipeline out of the
+  // default sanitizer; those flows still rely on targeted compositor hints.
+  const nonPeakSliderTargets = [
+    "#monwui-slides-container",
+    "#monwui-slides-container .monwui-slide",
+    "#monwui-slides-container .monwui-bckdrp-cntnr",
+    "#monwui-slides-container .monwui-backdrop",
+    "#monwui-slides-container .monwui-horizontal-gradient-overlay",
+    "#monwui-slides-container .monwui-horizontal-gradient-overlay:before",
+    "#monwui-slides-container .monwui-horizontal-gradient-overlay:after",
+    "#monwui-slides-container .monwui-logo-container",
+    "#monwui-slides-container .monwui-logo-container .logo-img",
+    "#monwui-slides-container .monwui-title-container",
+    "#monwui-slides-container .monwui-plot-container",
+    "#monwui-slides-container .monwui-provider-container",
+    "#monwui-slides-container .monwui-info-container",
+    "#monwui-slides-container .monwui-language-container",
+    "#monwui-slides-container .monwui-status-container",
+    "#monwui-slides-container .monwui-meta-container",
+    "#monwui-slides-container .monwui-slider-wrapper",
+    "#monwui-slides-container .monwui-button-container",
+    "#monwui-slides-container .monwui-button-container *",
+    "#monwui-slides-container .monwui-dot-navigation-container",
+    "#monwui-slides-container .monwui-dot",
+    "#monwui-slides-container .monwui-poster-dot",
+    "#monwui-slides-container img.monwui-dot-poster-image"
+  ];
+
+  const pluginSurfaceTargets = [
+    ".video-preview-modal",
+    ".video-preview-modal *",
+    ".mini-poster-popover",
+    ".mini-poster-popover *",
+    ".mini-trailer-popover",
+    ".mini-trailer-popover *",
+    ".genre-explorer-overlay",
+    ".genre-explorer",
+    ".genre-explorer *",
+    ".ge-card",
+    ".ge-card *",
+    "#jms-details-modal-root",
+    "#jms-details-modal-root *",
+    "#studio-hubs",
+    "#studio-hubs *",
+    ".hub-preview-popover",
+    ".hub-preview-popover *",
+    "#jms-pause-overlay",
+    "#jms-pause-overlay *",
+    "#jms-reco-panel",
+    "#jms-reco-panel *",
+    "#jms-reco-badge",
+    "#jms-reco-badge *",
+    ".rating-genre-overlay",
+    ".rating-genre-overlay *",
+    ".rating-icons-overlay",
+    ".rating-icons-overlay *",
+    ".jms-cast-modal",
+    ".jms-cast-modal *",
+    ".jms-cast-slide",
+    ".jms-cast-slide *",
+    ".gmmp-radio-modal",
+    ".gmmp-radio-modal *",
+    "#modern-music-player",
+    "#modern-music-player *",
+    "#player-lyrics-container",
+    "#player-lyrics-container *",
+    ".jellyfin-playlist-modal",
+    ".jellyfin-playlist-modal *",
+    ".playlistselect-modal",
+    ".playlistselect-modal *",
+    ".top-tracks-modal",
+    ".top-tracks-modal *"
+  ];
+
+  const nativeHomeCardTargets = [
+    "#indexPage:not(.hide) .itemsContainer .cardBox",
+    "#indexPage:not(.hide) .itemsContainer .cardBox *",
+    "#indexPage:not(.hide) .itemsContainer .cardScalable",
+    "#indexPage:not(.hide) .itemsContainer .cardScalable *",
+    "#indexPage:not(.hide) .itemsContainer .cardOverlayContainer",
+    "#indexPage:not(.hide) .itemsContainer .cardOverlayContainer *",
+    "#indexPage:not(.hide) .itemsContainer .cardImageContainer",
+    "#indexPage:not(.hide) .itemsContainer .cardImageContainer *",
+    "#indexPage:not(.hide) .itemsContainer .cardText",
+    "#indexPage:not(.hide) .itemsContainer .cardText *",
+    "#homePage:not(.hide) .itemsContainer .cardBox",
+    "#homePage:not(.hide) .itemsContainer .cardBox *",
+    "#homePage:not(.hide) .itemsContainer .cardScalable",
+    "#homePage:not(.hide) .itemsContainer .cardScalable *",
+    "#homePage:not(.hide) .itemsContainer .cardOverlayContainer",
+    "#homePage:not(.hide) .itemsContainer .cardOverlayContainer *",
+    "#homePage:not(.hide) .itemsContainer .cardImageContainer",
+    "#homePage:not(.hide) .itemsContainer .cardImageContainer *",
+    "#homePage:not(.hide) .itemsContainer .cardText",
+    "#homePage:not(.hide) .itemsContainer .cardText *"
+  ];
+
+  const sanitizeRule = `
+    contain: none !important;
+    content-visibility: visible !important;
+    contain-intrinsic-size: auto !important;
+    will-change: auto !important;
+    backface-visibility: visible !important;
+    -webkit-backface-visibility: visible !important;
+  `;
+
+  const scoped = (selectors, prefix) =>
+    selectors.map((selector) => `${prefix} ${selector}`).join(",\n");
+
+  const injectStyle = () => {
+    if (!document.head || document.getElementById(STYLE_ID)) return;
+    const st = document.createElement("style");
+    st.id = STYLE_ID;
+    st.textContent = `
+      ${scoped(nonPeakSliderTargets, `html.${CLASS_NAME}:not([data-css-variant=peakslider])`)} {
+        ${sanitizeRule}
+      }
+
+      ${scoped(pluginSurfaceTargets, `html.${CLASS_NAME}`)} {
+        ${sanitizeRule}
+      }
+
+      ${scoped(nativeHomeCardTargets, `html.${CLASS_NAME}`)} {
+        ${sanitizeRule}
+      }
+    `;
+    document.head.appendChild(st);
+  };
+
+  root?.classList.add(CLASS_NAME);
+
+  if (document.head) {
+    injectStyle();
+  } else {
+    document.addEventListener("DOMContentLoaded", injectStyle, { once: true });
+  }
+}
+
+ensureLayerPropertySanitizer();
+
 function uniqueByIdStable(arr) {
   const seen = new Set();
   const out = [];

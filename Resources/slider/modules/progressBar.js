@@ -140,7 +140,7 @@ function setBarScale(fill, scale, maxScale = 1) {
     return;
   }
   fill.__lastScale = nextScale;
-  fill.style.transform = `translateZ(0) scaleX(${nextScale})`;
+  fill.style.transform = `scaleX(${nextScale})`;
 }
 
 function ensureProgressFill(bar) {
@@ -161,10 +161,7 @@ function ensureProgressFill(bar) {
     background: 'rgba(255,255,255,0.10)',
     transform: 'none',
     transformOrigin: '50% 50%',
-    transition: 'none',
-    willChange: 'auto',
-    contain: 'layout style paint',
-    backfaceVisibility: 'hidden'
+    transition: 'none'
   });
 
   Object.assign(fill.style, {
@@ -175,14 +172,12 @@ function ensureProgressFill(bar) {
     background: 'var(--color-e91e63, #e91e63)',
     borderRadius: 'inherit',
     transformOrigin: '0 50%',
-    transition: 'none',
-    willChange: 'transform',
-    backfaceVisibility: 'hidden'
+    transition: 'none'
   });
 
   if (isNew) {
     fill.__lastScale = 0;
-    fill.style.transform = 'translateZ(0) scaleX(0)';
+    fill.style.transform = 'scaleX(0)';
   }
 
   return fill;

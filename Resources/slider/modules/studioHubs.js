@@ -76,6 +76,7 @@ const DEFAULT_ORDER = [
   "Netflix","DreamWorks Animation"
 ];
 const CANONICALS = new Map(DEFAULT_ORDER.map(n => [n.toLowerCase(), n]));
+const DEFAULT_NAME_KEYS = new Set(DEFAULT_ORDER.map(name => String(name || "").trim().toLowerCase()));
 const JUNK_WORDS = ["ltd","ltd.","llc","inc","inc.","company","co.","corp","corp.","the","pictures","studios","animation","film","films","pictures.","studios."];
 const ALIAS_TO_CANON = (() => {
   const m = new Map();
@@ -162,6 +163,10 @@ function mergeOrder(defaults, custom) {
 
 function nameKey(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+function isDefaultStudioHub(name) {
+  return DEFAULT_NAME_KEYS.has(nameKey(name));
 }
 
 const LOGO_BASE = "./slider/src/images/studios/";
@@ -805,7 +810,7 @@ async function getStudioOrderList(manualEntries = []) {
   }
 }
 
-async function chooseBackdropForStudio(studio, userId, signal) {
+async function chooseBackdropForStudio(studio, userId, signal, options = {}) {
   const map = loadCache(IMG_KEY, IMG_TTL) || {};
   const cached = map[studio.Id];
   if (cached?.itemId && Number.isInteger(cached?.index)) {
@@ -818,7 +823,9 @@ async function chooseBackdropForStudio(studio, userId, signal) {
     return { itemId, index: idx, url };
   }
 
-  const items = await fetchStudioItemsViaUsers(studio.Id, studio.Name, userId, signal);
+  const items = Array.isArray(options.items)
+    ? options.items
+    : await fetchStudioItemsViaUsers(studio.Id, studio.Name, userId, signal);
   if (!items.length) return null;
 
   const withBd = items.filter(it => Array.isArray(it.BackdropImageTags) && it.BackdropImageTags.length);
@@ -943,6 +950,7 @@ export async function renderStudioHubs() {
     if (!row) {
       return;
     }
+    const section = row.closest("#studio-hubs");
      setupScroller(row);
      resetHubRowScrollPosition(row);
      row.innerHTML = "";
@@ -959,7 +967,7 @@ export async function renderStudioHubs() {
     const effectiveOrder = mergeOrder(manualOrder, userOrder);
     const visibleOrder = effectiveOrder.filter(name => !hiddenNames.has(nameKey(name)));
     if (!visibleOrder.length) {
-      row.parentElement.style.display = "none";
+      if (section) section.style.display = "none";
       setStudioHubsReady(true);
       return;
     }
@@ -976,7 +984,7 @@ export async function renderStudioHubs() {
       if (!existing) row.appendChild(card);
       shells[desired] = card;
     }
-    row.parentElement.style.display = "";
+    if (section) section.style.display = "";
 
     const cached = loadCache(LS_KEY, CACHE_TTL);
     const studios = cached || await fetchStudios(__fetchAbort.signal).catch(() => []);
@@ -994,12 +1002,29 @@ export async function renderStudioHubs() {
     }
     saveCache(MAP_KEY, nameMap);
 
+    const resolvedNames = new Set(resolved.map(({ name }) => nameKey(name)));
+    for (const desired of wanted) {
+      if (resolvedNames.has(nameKey(desired))) continue;
+      if (!isDefaultStudioHub(desired)) continue;
+      try { shells[desired]?.remove?.(); } catch {}
+      delete shells[desired];
+    }
+
     await Promise.allSettled(resolved.map(async ({ name, studio }) => {
       const card = shells[name];
       if (!card) return;
       const detailsHref = buildStudioHref(studio.Id, serverId);
       card.href = detailsHref;
       card.classList.remove("hub-card-textonly");
+
+      const isDefaultHub = isDefaultStudioHub(name);
+      const studioItems = isDefaultHub
+        ? await fetchStudioItemsViaUsers(studio.Id, studio.Name || name, userId, __fetchAbort.signal)
+        : null;
+      if (isDefaultHub && !studioItems?.length) {
+        try { card.remove(); } catch {}
+        return;
+      }
 
       let used = false;
       const manualEntry = (manualEntries || []).find(entry => nameKey(entry?.name || entry?.Name) === nameKey(name)) || null;
@@ -1020,7 +1045,7 @@ export async function renderStudioHubs() {
       }
 
       if (!used) {
-        const chosen = await chooseBackdropForStudio(studio, userId, __fetchAbort.signal);
+        const chosen = await chooseBackdropForStudio(studio, userId, __fetchAbort.signal, { items: studioItems });
         if (chosen?.url) {
           const img = upsertImg(card, "hub-img");
           img.alt = name;
@@ -1057,7 +1082,10 @@ export async function renderStudioHubs() {
       } catch {}
     });
 
-    if (!resolved.length) {
+    const renderedCards = row.querySelectorAll(".hub-card").length;
+    if (section) section.style.display = renderedCards ? "" : "none";
+
+    if (!resolved.length || !renderedCards) {
       setStudioHubsReady(true);
     }
 

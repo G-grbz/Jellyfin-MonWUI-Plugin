@@ -101,6 +101,10 @@ function isPersonalRecsHeroEnabled() {
   return getConfig()?.showPersonalRecsHeroCards !== false;
 }
 
+function isGenreHubsHeroEnabled() {
+  return getConfig()?.showGenreHubsHeroCards !== false;
+}
+
 function prcLog() {}
 
 function prcWarn() {}
@@ -941,6 +945,11 @@ const __genreCache = new Map();
 const __globalGenreHeroLoose = new Set();
 const __globalGenreHeroStrict = new Set();
 const TOUCH_STICKY_GRACE_MS = 1500;
+const SCROLLER_BUSY_ATTR = "data-jms-scroll-active";
+const SCROLLER_BUSY_IDLE_MS = 140;
+const SCROLLER_BUSY_COOLDOWN_MS = 220;
+const SCROLLER_BUSY_MAX_MS = 700;
+const SCROLLER_BUSY_RETRY_MS = 90;
 
 function __shouldRequestHiRes() {
   try {
@@ -950,6 +959,44 @@ function __shouldRequestHiRes() {
     if (/^2g$|slow-2g/i.test(et)) return false;
   } catch {}
   return true;
+}
+
+function getScrollerMediaHost(node) {
+  return node?.closest?.(".itemsContainer.personal-recs-row, .personal-recs-row, .genre-row") || null;
+}
+
+export function isScrollerMediaBusy(node) {
+  const row = getScrollerMediaHost(node);
+  if (!row) return false;
+  if (row.getAttribute?.(SCROLLER_BUSY_ATTR) === "1") return true;
+  return Number(row.__jmsScrollerBusyUntil || 0) > Date.now();
+}
+
+export function clearScrollerAwareHiResUpgrade(img) {
+  if (!img) return;
+  const tid = Number(img.__pendingHiTimer || 0);
+  if (tid > 0) {
+    try { clearTimeout(tid); } catch {}
+  }
+  delete img.__pendingHiTimer;
+}
+
+export function scheduleScrollerAwareHiResUpgrade(img, requestFn, delayMs = SCROLLER_BUSY_RETRY_MS) {
+  if (!img || typeof requestFn !== "function") return;
+  img.__pendingHi = true;
+  if (img.__pendingHiTimer) return;
+
+  const run = () => {
+    delete img.__pendingHiTimer;
+    if (!img?.isConnected || img.__pendingHi !== true) return;
+    if (isScrollerMediaBusy(img)) {
+      img.__pendingHiTimer = window.setTimeout(run, Math.max(32, delayMs | 0));
+      return;
+    }
+    requestFn(img);
+  };
+
+  img.__pendingHiTimer = window.setTimeout(run, Math.max(32, delayMs | 0));
 }
 
 function clearHeroHost(heroHost) {
@@ -1013,6 +1060,7 @@ function resetImageFailures(img, phase = null) {
 
 function markImageSettled(img, src, { disableRecovery = false, disableHi = false } = {}) {
   if (!img) return;
+  clearScrollerAwareHiResUpgrade(img);
   try { img.removeAttribute('srcset'); } catch {}
   if (src) {
     try { img.src = src; } catch {}
@@ -1045,6 +1093,11 @@ function requestHiResImage(img) {
   }
   if (img.__disableHi) return;
   if (!__shouldRequestHiRes()) return;
+  if (isScrollerMediaBusy(img)) {
+    scheduleScrollerAwareHiResUpgrade(img, requestHiResImage);
+    return;
+  }
+  clearScrollerAwareHiResUpgrade(img);
 
   const now = Date.now();
   const retryAfter = Number(img.__retryAfter || 0);
@@ -1478,18 +1531,70 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
     const staticSrc = (isKnownMissingImage(hqSrc) || isKnownMissingImage(lqSrc))
       ? fb
       : (hqSrc || lqSrc || fb);
+    const useMobileBlurTransition = img?.classList?.contains?.('cardImage') === true;
     const alreadyStatic = (img.__mobileStaticSrc === staticSrc && img.src === staticSrc);
     try { img.loading = "lazy"; } catch {}
-    if (!alreadyStatic && img.src !== staticSrc) img.src = staticSrc;
     img.__mobileStaticSrc = staticSrc;
-    img.classList.remove('is-lqip');
-    img.classList.add('__hydrated');
     img.__phase = 'static';
     img.__hiRequested = true;
     img.__disableHi = true;
-    img.__hydrated = true;
-    img.__lqLoaded = true;
     img.__pendingHi = false;
+    if (!useMobileBlurTransition) {
+      if (!alreadyStatic && img.src !== staticSrc) img.src = staticSrc;
+      img.classList.remove('is-lqip');
+      img.classList.add('__hydrated');
+      img.__hydrated = true;
+      img.__lqLoaded = true;
+      return;
+    }
+
+    const cleanupMobileStaticListeners = () => {
+      try { if (img.__onErr) img.removeEventListener('error', img.__onErr); } catch {}
+      try { if (img.__onLoad) img.removeEventListener('load', img.__onLoad); } catch {}
+      delete img.__onErr;
+      delete img.__onLoad;
+    };
+
+    const finishMobileStaticHydration = () => {
+      cleanupMobileStaticListeners();
+      img.classList.add('__hydrated');
+      requestAnimationFrame(() => {
+        try { img.classList.remove('is-lqip'); } catch {}
+      });
+      img.__hydrated = true;
+      img.__lqLoaded = true;
+    };
+
+    const failMobileStaticHydration = () => {
+      cleanupMobileStaticListeners();
+      markImageSettled(img, fb, { disableRecovery: true, disableHi: true });
+      img.__disableHi = true;
+      img.__pendingHi = false;
+    };
+
+    if (alreadyStatic && img.__hydrated === true) {
+      img.classList.remove('is-lqip');
+      img.classList.add('__hydrated');
+      img.__lqLoaded = true;
+      return;
+    }
+
+    img.classList.add('is-lqip');
+    try { img.classList.remove('__hydrated'); } catch {}
+    img.__hydrated = false;
+    img.__lqLoaded = false;
+
+    img.__onLoad = () => finishMobileStaticHydration();
+    img.__onErr = () => failMobileStaticHydration();
+    img.addEventListener('load', img.__onLoad, { once: true });
+    img.addEventListener('error', img.__onErr, { once: true });
+
+    if (!alreadyStatic && img.src !== staticSrc) {
+      img.src = staticSrc;
+    } else if (img.complete) {
+      if (img.naturalWidth > 0) finishMobileStaticHydration();
+      else failMobileStaticHydration();
+    }
     return;
   }
 
@@ -1626,12 +1731,7 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
       }
 
       if (img.__pendingHi) {
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            if (!img.isConnected || img.__phase !== 'lq' || img.__pendingHi !== true) return;
-            requestHiResImage(img);
-          });
-        });
+        scheduleScrollerAwareHiResUpgrade(img, requestHiResImage, 32);
       }
       return;
     }
@@ -1674,6 +1774,7 @@ function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
 }
 
 function unobserveImage(img) {
+  clearScrollerAwareHiResUpgrade(img);
   try { __imgIO.unobserve(img); } catch {}
   try { img.removeEventListener('error', img.__onErr); } catch {}
   try { img.removeEventListener('load',  img.__onLoad); } catch {}
@@ -1771,14 +1872,24 @@ function hasRenderablePersonalRecsContent(indexPage) {
   );
 }
 
-function hasRenderableBecauseYouWatchedContent(indexPage) {
-  const sections = Array.from(
+function getBecauseYouWatchedSections(indexPage) {
+  return Array.from(
     indexPage?.querySelectorAll?.('[id^="because-you-watched--"], #because-you-watched') || []
-  );
+  ).filter((section) => !!section?.isConnected);
+}
+
+function hasRenderableBecauseYouWatchedContent(indexPage) {
+  const sections = getBecauseYouWatchedSections(indexPage);
   if (!sections.length) return false;
   return sections.some((section) => !!section.querySelector(
     ".byw-row .personal-recs-card:not(.skeleton), .byw-row .no-recommendations"
   ));
+}
+
+function hasReadyBecauseYouWatchedState(indexPage) {
+  if (hasRenderableBecauseYouWatchedContent(indexPage)) return true;
+  const sections = getBecauseYouWatchedSections(indexPage);
+  return sections.length === 0 && getBywDone();
 }
 
 function hasMountedRecommendationUi(runtimeConfig, indexPage) {
@@ -1792,7 +1903,7 @@ function hasMountedRecommendationUi(runtimeConfig, indexPage) {
     hasRenderableGenreHubContent(getScopedSection("genre-hubs", indexPage));
   const bywOk =
     !runtimeConfig.enableBecauseYouWatched ||
-    hasRenderableBecauseYouWatchedContent(indexPage);
+    hasReadyBecauseYouWatchedState(indexPage);
 
   return personalOk && genreOk && bywOk;
 }
@@ -1900,7 +2011,7 @@ export async function renderPersonalRecommendations(options = {}) {
       (!!window.__jmsGenreHubsDone && hasRenderableGenreHubContent(getScopedSection("genre-hubs", activeIndexPage)));
     const bywOk =
       !runtimeConfig.enableBecauseYouWatched ||
-      (getBywDone() && hasRenderableBecauseYouWatchedContent(activeIndexPage));
+      hasReadyBecauseYouWatchedState(activeIndexPage);
     if (personalOk && genreOk && bywOk) {
       prcLog("render:skip:init-already-complete", {
         force,
@@ -2107,6 +2218,25 @@ function ensureBecauseContainer(indexPage, key = "0") {
   placeSection(section, homeSections, false);
   try { enforceOrder(parent); } catch {}
   return section;
+}
+
+function cleanupBecauseYouWatchedSection(section) {
+  if (!section) return;
+  try {
+    section.querySelectorAll('.personal-recs-card, .dir-row-hero').forEach((el) => {
+      try { el.dispatchEvent(new Event('jms:cleanup')); } catch {}
+    });
+  } catch {}
+  try {
+    section.querySelectorAll('.byw-row').forEach((row) => {
+      try { row.dispatchEvent(new Event('jms:cleanup')); } catch {}
+    });
+  } catch {}
+  try {
+    const heroHost = section.__heroHost || section.querySelector('.dir-row-hero-host');
+    if (heroHost) clearHeroHost(heroHost);
+  } catch {}
+  try { section.remove(); } catch {}
 }
 
 function getEffectiveLang3() {
@@ -2353,8 +2483,22 @@ async function renderBecauseYouWatchedAuto(indexPage, options = {}) {
   }
 
   if (!seeds.length) {
+    for (const section of getBecauseYouWatchedSections(indexPage)) {
+      cleanupBecauseYouWatchedSection(section);
+    }
+    scheduleHomeScrollerRefresh(0);
     setBywDone(true);
     return;
+  }
+
+  const activeSectionIds = new Set(
+    seeds.map((_, index) => `because-you-watched--${index}`)
+  );
+  for (const section of getBecauseYouWatchedSections(indexPage)) {
+    const sectionId = String(section?.id || "").trim();
+    if (!activeSectionIds.has(sectionId)) {
+      cleanupBecauseYouWatchedSection(section);
+    }
   }
 
   const ctxs = [];
@@ -2372,26 +2516,31 @@ async function renderBecauseYouWatchedAuto(indexPage, options = {}) {
   }
 
   const jobs = ctxs.map((ctx) => async () => {
-    const { i, seed, seedId, seedName, section, row } = ctx;
-    const { items } = await fetchBecauseYouWatched(userId, bywCardCount, MIN_RATING, seedId, { force });
+    const { i, seedId, seedName, section, row } = ctx;
+    const showHero = isPersonalRecsHeroEnabled();
+    const fetchCount = showHero
+      ? Math.min(UNIFIED_ROW_ITEM_LIMIT, bywCardCount + 1)
+      : bywCardCount;
+    const { items } = await fetchBecauseYouWatched(userId, fetchCount, MIN_RATING, seedId, { force });
     clearRowWithCleanup(row);
     if (!items || !items.length) {
-      const heroHost = section.__heroHost || section.querySelector('.dir-row-hero-host');
-      if (heroHost) clearHeroHost(heroHost);
-      row.innerHTML = `<div class="no-recommendations">${(config.languageLabels?.noRecommendations) || labels.noRecommendations || "Öneri bulunamadı"}</div>`;
-      triggerScrollerUpdate(row);
+      cleanupBecauseYouWatchedSection(section);
       return;
     }
+
+    const heroItem = showHero ? (items[0] || null) : null;
+    let rowItems = showHero
+      ? items.slice(1, 1 + bywCardCount)
+      : items.slice(0, bywCardCount);
+    if (!rowItems.length) rowItems = items.slice(0, bywCardCount);
 
     try {
       const heroHost = section.__heroHost || section.querySelector('.dir-row-hero-host');
       if (heroHost) {
-        const showHero = isPersonalRecsHeroEnabled();
         heroHost.style.display = showHero ? '' : 'none';
         if (!showHero) {
           clearHeroHost(heroHost);
         } else {
-          const heroItem = seed || items[0];
           if (resolveItemId(heroItem)) {
             const heroLabel = formatBecauseYouWatchedTitle(seedName);
             const { hero: heroEl, changed } = mountHero(heroHost, heroItem, serverId, heroLabel, { aboveFold: i === 0 });
@@ -2424,8 +2573,11 @@ async function renderBecauseYouWatchedAuto(indexPage, options = {}) {
     } catch {}
 
     const frag = document.createDocumentFragment();
-    for (let k = 0; k < Math.min(items.length, bywCardCount); k++) {
-      frag.appendChild(createRecommendationCard(items[k], serverId, k < (IS_MOBILE ? 2 : 3)));
+    for (let k = 0; k < Math.min(rowItems.length, bywCardCount); k++) {
+      frag.appendChild(createRecommendationCard(rowItems[k], serverId, {
+        aboveFold: k < (IS_MOBILE ? 2 : 3),
+        sizeHint: "byw"
+      }));
     }
     row.appendChild(frag);
     try { applyResumeLabelsToCards(Array.from(row.querySelectorAll('.personal-recs-card')), userId); } catch {}
@@ -2433,6 +2585,8 @@ async function renderBecauseYouWatchedAuto(indexPage, options = {}) {
   });
 
   await runWithConcurrency(jobs, IS_MOBILE ? MOBILE_ROW_BATCH_SIZE : 2);
+  try { enforceOrder(getHomeSectionsContainer(indexPage)); } catch {}
+  scheduleHomeScrollerRefresh(0);
   setBywDone(true);
 }
 
@@ -2770,7 +2924,10 @@ function renderRecommendationCards(row, items, serverId) {
     const limit = Math.min(slice.length, personalCardCount);
 
     for (let i = 0; i < limit; i++) {
-      const c = createRecommendationCard(slice[i], serverId, i < 4);
+      const c = createRecommendationCard(slice[i], serverId, {
+        aboveFold: i < 4,
+        sizeHint: "personal"
+      });
       mobileCards.push(c);
       mobileFrag.appendChild(c);
     }
@@ -2795,7 +2952,10 @@ function renderRecommendationCards(row, items, serverId) {
     const k = makePRCKey(it);
     if (k && domSeen.has(k)) continue;
     if (k) domSeen.add(k);
-    const c = createRecommendationCard(it, serverId, rendered < aboveFoldCount);
+    const c = createRecommendationCard(it, serverId, {
+      aboveFold: rendered < aboveFoldCount,
+      sizeHint: "personal"
+    });
     allCards.push(c);
     frag.appendChild(c);
     rendered++;
@@ -3063,7 +3223,14 @@ function queueEnterAnimation(el) {
   return el;
 }
 
-function createRecommendationCard(item, serverId, aboveFold = false) {
+function createRecommendationCard(item, serverId, renderOptions = false) {
+  const normalizedOptions = (typeof renderOptions === "object" && renderOptions !== null)
+    ? renderOptions
+    : { aboveFold: !!renderOptions };
+  const {
+    aboveFold = false,
+    sizeHint = "personal"
+  } = normalizedOptions;
   const { itemId, itemName } = primeItemIdentity(item);
   const card = document.createElement("div");
   card.className = "card personal-recs-card";
@@ -3083,6 +3250,23 @@ function createRecommendationCard(item, serverId, aboveFold = false) {
   const community = Number.isFinite(item.CommunityRating)
     ? `<div class="community-rating" title="Community Rating">⭐ ${item.CommunityRating.toFixed(1)}</div>`
     : "";
+  const logoUrl = buildLogoUrl(item);
+  const fallbackTitleHtml = `
+    <div class="prc-titleline">
+      ${escapeHtml(clampText(itemName, 42))}
+    </div>
+  `;
+  const titleBlockHtml = logoUrl
+    ? `
+      <div class="prc-card-logo">
+        <img src="${escapeHtml(logoUrl)}"
+          alt="${escapeHtml(itemName)} logo"
+          loading="${aboveFold ? 'eager' : 'lazy'}"
+          decoding="async"
+          ${aboveFold ? 'fetchpriority="high"' : ''}>
+      </div>
+    `
+    : fallbackTitleHtml;
 
   card.innerHTML = `
     <div class="cardBox">
@@ -3102,9 +3286,7 @@ function createRecommendationCard(item, serverId, aboveFold = false) {
           </div>
           <div class="prc-gradient"></div>
           <div class="prc-overlay">
-            <div class="prc-titleline">
-              ${escapeHtml(clampText(itemName, 42))}
-              </div>
+            ${titleBlockHtml}
             <div class="prc-meta">
               ${ageChip ? `<span class="prc-age">${ageChip}</span><span class="prc-dot">•</span>` : ""}
               ${year ? `<span class="prc-year">${year}</span><span class="prc-dot">•</span>` : ""}
@@ -3117,27 +3299,51 @@ function createRecommendationCard(item, serverId, aboveFold = false) {
     </div>
   `;
 
+  const logoImg = card.querySelector('.prc-card-logo img');
+  if (logoImg) {
+    logoImg.addEventListener('error', () => {
+      try {
+        const logoWrap = logoImg.closest('.prc-card-logo');
+        if (!logoWrap?.isConnected) return;
+        logoWrap.outerHTML = fallbackTitleHtml;
+      } catch {}
+    }, { once: true });
+  }
+
   const img = card.querySelector('.cardImage');
   try {
-  const sizesMobile = '(max-width: 640px) 45vw, (max-width: 820px) 38vw, 220px';
-  const sizesDesk   = '(max-width: 1200px) 22vw, 220px';
-  img.setAttribute('sizes', IS_MOBILE ? sizesMobile : sizesDesk);
-} catch {}
-if (posterUrlHQ) {
-  hydrateBlurUp(img, {
-    lqSrc: posterUrlLQ,
-    hqSrc: posterUrlHQ,
-    hqSrcset: posterSetHQ,
-    fallback: PLACEHOLDER_URL
-  });
-} else {
+    const sizePreset = sizeHint === "byw"
+      ? {
+          mobile: '(max-width: 640px) 42vw, (max-width: 820px) 37vw, 252px',
+          desktop: '(max-width: 1200px) 21vw, 252px'
+        }
+      : sizeHint === "genre"
+        ? {
+            mobile: '(max-width: 640px) 44vw, (max-width: 820px) 39vw, 276px',
+            desktop: '(max-width: 1200px) 23vw, 276px'
+          }
+        : {
+            mobile: '(max-width: 640px) 48vw, (max-width: 820px) 42vw, 300px',
+            desktop: '(max-width: 1200px) 27vw, 300px'
+          };
+    img.setAttribute('sizes', IS_MOBILE ? sizePreset.mobile : sizePreset.desktop);
+  } catch {}
+  if (posterUrlHQ) {
+    hydrateBlurUp(img, {
+      lqSrc: posterUrlLQ,
+      hqSrc: posterUrlHQ,
+      hqSrcset: posterSetHQ,
+      fallback: PLACEHOLDER_URL
+    });
+  } else {
     try { img.style.display = 'none'; } catch {}
     const noImg = document.createElement('div');
     noImg.className = 'prc-noimg-label';
     noImg.textContent =
       (config.languageLabels && (config.languageLabels.noImage || config.languageLabels.loadingText))
       || (labels.noImage || 'Görsel yok');
-    noImg.style.minHeight = '220px';
+    noImg.style.minHeight = '100%';
+    noImg.style.height = '100%';
     noImg.style.display = 'flex';
     noImg.style.alignItems = 'center';
     noImg.style.justifyContent = 'center';
@@ -3181,19 +3387,30 @@ if (posterUrlHQ) {
 
 function cleanupScroller(row) {
   const s = row && row.__scroller;
-  if (!s) { try { row.dataset.scrollerMounted = "0"; } catch {} return; }
+  if (!s) {
+    try { row.classList.remove("is-animating"); } catch {}
+    try { row.removeAttribute(SCROLLER_BUSY_ATTR); } catch {}
+    try { delete row.__jmsScrollerBusyUntil; } catch {}
+    try { row.dataset.scrollerMounted = "0"; } catch {}
+    return;
+  }
 
+  try { s.clearAnimCleanupTimer?.(); } catch {}
   try { s.mo?.disconnect?.(); } catch {}
   try { s.ro?.disconnect?.(); } catch {}
 
   try { row.removeEventListener("wheel", s.onWheel); } catch {}
   try { row.removeEventListener("scroll", s.onScroll); } catch {}
-  try { row.removeEventListener("touchstart", s.onTs); } catch {}
-  try { row.removeEventListener("touchmove", s.onTm); } catch {}
+  try { row.removeEventListener("scrollend", s.onScrollEnd); } catch {}
+  try { row.removeEventListener("touchstart", s.onTouchStartStop); } catch {}
+  try { row.removeEventListener("touchmove", s.onTouchMoveStop); } catch {}
   try { row.removeEventListener("load", s.onLoadCapture, true); } catch {}
 
   try { s.btnL?.removeEventListener?.("click", s.onClickL); } catch {}
   try { s.btnR?.removeEventListener?.("click", s.onClickR); } catch {}
+  try { row.classList.remove("is-animating"); } catch {}
+  try { row.removeAttribute(SCROLLER_BUSY_ATTR); } catch {}
+  try { delete row.__jmsScrollerBusyUntil; } catch {}
 
   try { delete row.__scroller; } catch { row.__scroller = null; }
   try { delete row.__ro; } catch {}
@@ -3218,79 +3435,69 @@ export function setupScroller(row) {
   const btnL = wrap?.querySelector?.(".hub-scroll-left") || null;
   const btnR = wrap?.querySelector?.(".hub-scroll-right") || null;
   const canScroll = () => row.scrollWidth > row.clientWidth + 2;
-  const STEP_PCT = 0.88;
-  const stepPx   = () => Math.max(320, Math.floor(row.clientWidth * STEP_PCT));
+  const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+  const supportsNativeSmoothScroll =
+    typeof row.scrollTo === "function" &&
+    "scrollBehavior" in document.documentElement.style;
+  const scrollIdleMs = prefersReducedMotion || !supportsNativeSmoothScroll ? 40 : SCROLLER_BUSY_IDLE_MS;
+  const scrollMaxMs = prefersReducedMotion || !supportsNativeSmoothScroll ? 140 : SCROLLER_BUSY_MAX_MS;
+  const stepPx = () => Math.max(240, Math.floor(row.clientWidth * 0.9));
   const SNAP_EPSILON = 2;
-
-  const getScrollItems = () => {
-    const rowRect = row.getBoundingClientRect();
-    return Array.from(row.children || [])
-      .map((child) => {
-        if (!(child instanceof HTMLElement)) return null;
-        const anchor =
-          child.matches?.(".cardImageContainer, .dir-row-hero, .dir-row-loading, .no-recommendations")
-            ? child
-            : child.querySelector?.(".cardImageContainer, .dir-row-hero, .dir-row-loading, .no-recommendations") || child;
-        if (!(anchor instanceof HTMLElement)) return null;
-
-        const rect = anchor.getBoundingClientRect();
-        if (!(rect.width > 0)) return null;
-
-        const left = row.scrollLeft + (rect.left - rowRect.left);
-        const right = left + rect.width;
-        return { left, right };
-      })
-      .filter(Boolean);
-  };
-
-  const uniqueStops = (stops) => {
-    const sorted = (stops || [])
-      .filter((value) => Number.isFinite(value))
-      .map((value) => Math.max(0, value))
-      .sort((a, b) => a - b);
-
-    const out = [];
-    for (const stop of sorted) {
-      if (!out.length || Math.abs(out[out.length - 1] - stop) > SNAP_EPSILON) {
-        out.push(stop);
-      }
-    }
-    return out;
-  };
-
-  const pickNearestStop = (stops, desired, fallback) => {
-    let best = Number.isFinite(fallback) ? fallback : null;
-    let bestDist = Number.isFinite(best) ? Math.abs(best - desired) : Infinity;
-    for (const stop of stops || []) {
-      const dist = Math.abs(stop - desired);
-      if (dist < bestDist) {
-        best = stop;
-        bestDist = dist;
-      }
-    }
-    return best;
-  };
-
-  const getScrollStops = () => {
-    const max = Math.max(0, row.scrollWidth - row.clientWidth);
-    const items = getScrollItems();
-    if (!items.length) return uniqueStops([0, max]);
-
-    const last = items[items.length - 1];
-    const endStop = Math.max(0, Math.min(max, last.right - row.clientWidth));
-    const stops = [0, endStop];
-    for (const item of items) {
-      stops.push(Math.min(endStop, item.left));
-    }
-    return uniqueStops(stops);
-  };
+  const maxScrollLeft = () => Math.max(0, row.scrollWidth - row.clientWidth);
 
   let _rafToken = null;
+  let _animCleanupTimer = 0;
+  let _animHardStopTimer = 0;
+
+  const clearAnimCleanupTimer = () => {
+    if (_animCleanupTimer) {
+      clearTimeout(_animCleanupTimer);
+      _animCleanupTimer = 0;
+    }
+    if (_animHardStopTimer) {
+      clearTimeout(_animHardStopTimer);
+      _animHardStopTimer = 0;
+    }
+  };
+
+  const endProgrammaticScroll = () => {
+    clearAnimCleanupTimer();
+    try { row.classList.remove("is-animating"); } catch {}
+    try { row.removeAttribute(SCROLLER_BUSY_ATTR); } catch {}
+    row.__jmsScrollerBusyUntil = Date.now() + SCROLLER_BUSY_COOLDOWN_MS;
+  };
+
+  const armProgrammaticScroll = () => {
+    clearAnimCleanupTimer();
+    try { row.setAttribute(SCROLLER_BUSY_ATTR, "1"); } catch {}
+    row.__jmsScrollerBusyUntil = Date.now() + scrollMaxMs + SCROLLER_BUSY_COOLDOWN_MS;
+    _animCleanupTimer = window.setTimeout(endProgrammaticScroll, scrollIdleMs);
+    _animHardStopTimer = window.setTimeout(endProgrammaticScroll, scrollMaxMs);
+  };
 
   const updateButtonsNow = () => {
     const scrollable = canScroll();
-    if (btnL) { btnL.setAttribute("aria-disabled", scrollable ? "false" : "true"); btnL.disabled = !scrollable; }
-    if (btnR) { btnR.setAttribute("aria-disabled", scrollable ? "false" : "true"); btnR.disabled = !scrollable; }
+    const max = maxScrollLeft();
+    const atStart = row.scrollLeft <= SNAP_EPSILON;
+    const atEnd = row.scrollLeft >= max - SNAP_EPSILON;
+    if (btnL) {
+      btnL.setAttribute("aria-disabled", scrollable ? "false" : "true");
+      btnL.disabled = !scrollable;
+      if (scrollable && atStart) {
+        btnL.dataset.wrapTarget = "end";
+      } else {
+        delete btnL.dataset.wrapTarget;
+      }
+    }
+    if (btnR) {
+      btnR.setAttribute("aria-disabled", scrollable ? "false" : "true");
+      btnR.disabled = !scrollable;
+      if (scrollable && atEnd) {
+        btnR.dataset.wrapTarget = "start";
+      } else {
+        delete btnR.dataset.wrapTarget;
+      }
+    }
   };
 
   const scheduleUpdate = () => {
@@ -3307,60 +3514,42 @@ export function setupScroller(row) {
   const onLoadCapture = () => scheduleUpdate();
   row.addEventListener("load", onLoadCapture, true);
 
-  let _animSeq = 0;
-  function animateScrollTo(targetLeft, duration = 320) {
-    const start = row.scrollLeft;
-    const dist  = targetLeft - start;
-    if (Math.abs(dist) < 1) { row.scrollLeft = targetLeft; scheduleUpdate(); try { row.classList.remove('is-animating'); } catch {} return; }
-
-    const seq = ++_animSeq;
-    try { row.classList.add('is-animating'); } catch {}
-    let startTs = null;
-    const easeInOutCubic = t =>
-      t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-
-    function tick(ts) {
-      if (seq !== _animSeq) return;
-      if (startTs == null) startTs = ts;
-      const p = Math.min(1, (ts - startTs) / duration);
-      row.scrollLeft = start + dist * easeInOutCubic(p);
-      if (p < 1) requestAnimationFrame(tick);
-      else {
-        scheduleUpdate();
-        if (seq === _animSeq) { try { row.classList.remove('is-animating'); } catch {} }
-      }
+  const scrollToPosition = (left) => {
+    if (!canScroll()) return;
+    armProgrammaticScroll();
+    const target = Math.max(0, Math.min(maxScrollLeft(), Number(left) || 0));
+    if (prefersReducedMotion || !supportsNativeSmoothScroll) {
+      row.scrollLeft = target;
+      scheduleUpdate();
+      return;
     }
-    requestAnimationFrame(tick);
-  }
+    try {
+      row.scrollTo({ left: target, behavior: "smooth" });
+    } catch {
+      row.scrollLeft = target;
+    }
+    scheduleUpdate();
+  };
+
+  const scrollByStep = (dir, evt) => {
+    if (!canScroll()) return;
+    const fast = evt?.shiftKey ? 1.35 : 1;
+    const delta = stepPx() * fast * dir;
+    scrollToPosition(row.scrollLeft + delta);
+  };
 
   function doScroll(dir, evt) {
     if (!canScroll()) return;
-    const stops = getScrollStops();
-    const max = stops.length ? stops[stops.length - 1] : Math.max(0, row.scrollWidth - row.clientWidth);
-    const left = row.scrollLeft;
-    const fast = evt?.shiftKey ? 1.35 : 1;
-    const delta = stepPx() * fast;
-    let target;
-
-    if (dir > 0) {
-      if (left >= max - SNAP_EPSILON) {
-        target = 0;
-      } else {
-        const candidates = stops.filter((stop) => stop > left + SNAP_EPSILON);
-        const desired = Math.min(max, left + delta);
-        target = pickNearestStop(candidates, desired, max) ?? max;
-      }
-    } else if (left <= SNAP_EPSILON) {
-      target = max;
-    } else {
-      const candidates = stops.filter((stop) => stop < left - SNAP_EPSILON);
-      const desired = Math.max(0, left - delta);
-      target = pickNearestStop(candidates, desired, 0) ?? 0;
+    const max = maxScrollLeft();
+    if (dir > 0 && row.scrollLeft >= max - SNAP_EPSILON) {
+      scrollToPosition(0);
+      return;
     }
-
-    const dist = Math.abs(target - left);
-    const duration = Math.max(180, Math.min(650, Math.round(dist / 3.2)));
-    animateScrollTo(target, duration);
+    if (dir < 0 && row.scrollLeft <= SNAP_EPSILON) {
+      scrollToPosition(max);
+      return;
+    }
+    scrollByStep(dir, evt);
   }
 
   const onClickL = (e) => { e.preventDefault(); e.stopPropagation(); doScroll(-1, e); };
@@ -3378,8 +3567,6 @@ export function setupScroller(row) {
   const onWheel = (e) => {
     const horizontalIntent = Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.shiftKey;
     if (!horizontalIntent) return;
-    _animSeq++;
-    try { row.classList.remove('is-animating'); } catch {}
     const delta = e.deltaX !== 0 ? e.deltaX : e.deltaY;
     row.scrollLeft += delta;
     e.preventDefault();
@@ -3387,17 +3574,42 @@ export function setupScroller(row) {
   };
   row.addEventListener("wheel", onWheel, { passive: false });
 
-  const onTs = (e)=>e.stopPropagation();
-  const onTm = (e)=>e.stopPropagation();
-  row.addEventListener("touchstart", onTs, { passive: true });
-  row.addEventListener("touchmove", onTm, { passive: true });
+  const onTouchStartStop = (e) => { e.stopPropagation(); };
+  const onTouchMoveStop = (e) => { e.stopPropagation(); };
+  row.addEventListener("touchstart", onTouchStartStop, { passive: true });
+  row.addEventListener("touchmove", onTouchMoveStop, { passive: true });
 
-  const onScroll = () => scheduleUpdate();
+  const onScroll = () => {
+    if (row.getAttribute?.(SCROLLER_BUSY_ATTR) === "1") {
+      if (_animCleanupTimer) clearTimeout(_animCleanupTimer);
+      _animCleanupTimer = window.setTimeout(endProgrammaticScroll, scrollIdleMs);
+      row.__jmsScrollerBusyUntil = Date.now() + scrollIdleMs + SCROLLER_BUSY_COOLDOWN_MS;
+    }
+    scheduleUpdate();
+  };
   row.addEventListener("scroll", onScroll, { passive: true });
+  const onScrollEnd = () => endProgrammaticScroll();
+  if ("onscrollend" in row) {
+    row.addEventListener("scrollend", onScrollEnd, { passive: true });
+  }
 
   const ro = new ResizeObserver(() => scheduleUpdate());
   ro.observe(row);
-  row.__scroller = { btnL, btnR, onClickL: onClickL2, onClickR: onClickR2, onWheel, onScroll, onTs, onTm, ro, mo, onLoadCapture };
+  row.__scroller = {
+    btnL,
+    btnR,
+    onClickL: onClickL2,
+    onClickR: onClickR2,
+    onWheel,
+    onScroll,
+    onScrollEnd,
+    onTouchStartStop,
+    onTouchMoveStop,
+    ro,
+    mo,
+    onLoadCapture,
+    clearAnimCleanupTimer
+  };
   row.addEventListener("jms:cleanup", () => {
     try { cleanupScroller(row); } catch {}
   }, { once: true });
@@ -3630,7 +3842,10 @@ async function ensureGenreLoaded(idx) {
 
       let added = 0;
       for (let k = 0; k < chunk && j < list.length; k++, j++) {
-        f.appendChild(createRecommendationCard(list[j], serverId, false));
+        f.appendChild(createRecommendationCard(list[j], serverId, {
+          aboveFold: false,
+          sizeHint: "genre"
+        }));
         added++;
       }
 
@@ -3688,7 +3903,7 @@ async function ensureGenreLoaded(idx) {
       const remaining = (bestIndex >= 0) ? pool.filter((_, i) => i !== bestIndex) : pool.slice();
 
       if (heroHost) {
-        const showHero = isPersonalRecsHeroEnabled();
+        const showHero = isGenreHubsHeroEnabled();
         heroHost.style.display = showHero ? '' : 'none';
         if (!showHero || !best) {
           clearHeroHost(heroHost);
@@ -3725,7 +3940,10 @@ async function ensureGenreLoaded(idx) {
       if (IS_MOBILE) {
         const mobileFrag = document.createDocumentFragment();
         for (let i = 0; i < unique.length; i++) {
-          mobileFrag.appendChild(createRecommendationCard(unique[i], serverId, i < Math.min(6, unique.length)));
+          mobileFrag.appendChild(createRecommendationCard(unique[i], serverId, {
+            aboveFold: i < Math.min(6, unique.length),
+            sizeHint: "genre"
+          }));
         }
         row.appendChild(mobileFrag);
         triggerScrollerUpdate(row);
@@ -3742,7 +3960,10 @@ async function ensureGenreLoaded(idx) {
 
       const f1 = document.createDocumentFragment();
       for (let i = 0; i < head; i++) {
-        f1.appendChild(createRecommendationCard(unique[i], serverId, i < Math.min(6, head)));
+        f1.appendChild(createRecommendationCard(unique[i], serverId, {
+          aboveFold: i < Math.min(6, head),
+          sizeHint: "genre"
+        }));
       }
       row.appendChild(f1);
       triggerScrollerUpdate(row);
