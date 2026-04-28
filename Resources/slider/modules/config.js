@@ -1,4 +1,4 @@
-import { getLanguageLabels, getDefaultLanguage } from '../language/index.js';
+import { getLanguageLabels, getDefaultLanguage, getStoredLanguagePreference } from '../language/index.js';
 
 let __globalOverride =
   (typeof window !== "undefined" && window.__JMS_MANAGED_STORAGE__?.bootstrapOverride)
@@ -462,6 +462,8 @@ export function getConfig() {
   const fallbackShowOsdHeaderCommunityRating = localStorage.getItem('showCommunityRating') !== 'false';
   const fallbackShowOsdHeaderCriticRating = localStorage.getItem('showCriticRating') !== 'false';
   const fallbackShowOsdHeaderOfficialRating = localStorage.getItem('showOfficialRating') !== 'false';
+  const normalizePauseOverlayCssVariant = (value) =>
+    String(value || '').trim() === 'pauseModul2' ? 'pauseModul2' : 'pauseModul';
   const readPauseBool = (obj, key, fallback) =>
     Object.prototype.hasOwnProperty.call(obj || {}, key)
       ? obj[key] !== false
@@ -474,6 +476,7 @@ export function getConfig() {
       const safeMin = Math.max(1, mv);
       const cfg = {
         enabled: j.enabled !== false,
+        cssVariant: normalizePauseOverlayCssVariant(j.cssVariant),
         imagePreference: j.imagePreference || 'auto',
         showPlot: j.showPlot !== false,
         debug: j.debug !== false,
@@ -500,13 +503,18 @@ export function getConfig() {
         'showOsdHeaderCriticRating',
         'showOsdHeaderOfficialRating'
       ].some(key => !Object.prototype.hasOwnProperty.call(j, key));
-      if (safeMin !== mv || missingOsdRatingKeys) {
+      if (
+        safeMin !== mv ||
+        missingOsdRatingKeys ||
+        normalizePauseOverlayCssVariant(j.cssVariant) !== String(j.cssVariant || '')
+      ) {
         try { localStorage.setItem('pauseOverlay', JSON.stringify(cfg)); } catch {}
       }
       return cfg;
     } catch {}
   }
 
+  const rawCssVariant = localStorage.getItem('pauseOverlayCssVariant');
   const rawImagePref = localStorage.getItem('pauseOverlayImagePreference');
   const rawShowPlot = localStorage.getItem('pauseOverlayShowPlot');
   const rawShowMeta = localStorage.getItem('pauseOverlayShowMetadata');
@@ -522,6 +530,7 @@ export function getConfig() {
 
   const legacy = {
     enabled: raw !== 'false',
+    cssVariant: normalizePauseOverlayCssVariant(rawCssVariant),
     imagePreference: rawImagePref || 'auto',
     showPlot: rawShowPlot !== 'false',
     debug: rawDebug !== 'false',
@@ -640,7 +649,7 @@ export function getConfig() {
     useRandomContent: localStorage.getItem('useRandomContent') !== 'false',
     fullscreenMode: localStorage.getItem('fullscreenMode') === 'true' ? true : false,
     listLimit: 20,
-    version: "v2.6.3",
+    version: "v2.6.4",
     historySize: 20,
     updateInterval: 300000,
     nextTracksSource: localStorage.getItem('nextTracksSource') || 'playlist',
@@ -1272,6 +1281,12 @@ function pruneGlobalConfig(cfg) {
     if (deny.has(k)) continue;
     out[k] = v;
   }
+
+  const storedLanguagePreference = getStoredLanguagePreference();
+  if (storedLanguagePreference !== null && storedLanguagePreference !== undefined) {
+    out.defaultLanguage = storedLanguagePreference;
+  }
+
   return out;
 }
 

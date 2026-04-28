@@ -18,6 +18,7 @@ const CAST_MODAL_TICK_MS = 1000;
 const VOLUME_COMMIT_DELAY_MS = 180;
 const SCROLL_DEBOUNCE_MS = 80;
 const CAST_ACCESS_CACHE_MS = 30_000;
+const REMOTE_GMMP_STATE_STALE_MS = 12_000;
 
 let castModalState = null;
 let castModalCssPromise = null;
@@ -454,9 +455,18 @@ function isAudioLikeItem(item) {
 function looksLikeRemoteBrowserSession(session = null, device = null) {
   const haystack = [
     session?.Client,
+    decodePossiblyEncodedLabel(session?.Client || ""),
     session?.DeviceName,
+    decodePossiblyEncodedLabel(session?.DeviceName || ""),
+    session?.DeviceId,
+    decodePossiblyEncodedLabel(session?.DeviceId || ""),
+    session?.DeviceType,
     device?.client,
-    device?.deviceName
+    decodePossiblyEncodedLabel(device?.client || ""),
+    device?.deviceName,
+    decodePossiblyEncodedLabel(device?.deviceName || ""),
+    device?.deviceId,
+    decodePossiblyEncodedLabel(device?.deviceId || "")
   ]
     .map((value) => String(value || "").trim().toLowerCase())
     .filter(Boolean)
@@ -1008,6 +1018,8 @@ function normalizeRemoteGmmpState(rawState) {
   return {
     sessionId,
     deviceId,
+    userId: String(rawState?.UserId || rawState?.userId || "").trim(),
+    userName: String(rawState?.UserName || rawState?.userName || "").trim(),
     remoteKey: sessionId ? `session:${sessionId}` : `device:${deviceId}`,
     trackId: String(rawState?.TrackId || rawState?.trackId || "").trim(),
     itemId: String(rawState?.ItemId || rawState?.itemId || "").trim(),
@@ -1018,8 +1030,24 @@ function normalizeRemoteGmmpState(rawState) {
     positionTicks: Math.max(0, Number(rawState?.PositionTicks ?? rawState?.positionTicks ?? 0) || 0),
     runtimeTicks: Math.max(0, Number(rawState?.RuntimeTicks ?? rawState?.runtimeTicks ?? 0) || 0),
     isLiveStream: rawState?.IsLiveStream === true || rawState?.isLiveStream === true,
-    updatedAt: String(rawState?.updatedAt || rawState?.UpdatedAt || "").trim()
+    updatedAt: String(rawState?.updatedAt || rawState?.UpdatedAt || "").trim(),
+    updatedAtMs: (() => {
+      const rawUpdatedAt = String(rawState?.updatedAt || rawState?.UpdatedAt || "").trim();
+      const parsed = rawUpdatedAt ? Date.parse(rawUpdatedAt) : NaN;
+      return Number.isFinite(parsed) ? parsed : 0;
+    })()
   };
+}
+
+function isRemoteGmmpStateFresh(remoteState) {
+  if (!remoteState) return false;
+
+  const updatedAtMs = Number(remoteState?.updatedAtMs || 0);
+  if (!Number.isFinite(updatedAtMs) || updatedAtMs <= 0) {
+    return true;
+  }
+
+  return (Date.now() - updatedAtMs) <= REMOTE_GMMP_STATE_STALE_MS;
 }
 
 async function fetchRemoteGmmpStateMap({ signal } = {}) {
@@ -1056,12 +1084,172 @@ function getRemoteGmmpStateForDevice(deviceOrSession, remoteGmmpStateMap) {
   const lookupKeys = buildRemoteGmmpLookupKeys(deviceOrSession);
   for (const key of lookupKeys) {
     const remoteState = remoteGmmpStateMap.get(key);
-    if (remoteState) {
+    if (isRemoteGmmpStateFresh(remoteState)) {
       return remoteState;
     }
   }
 
+  if (lookupKeys.length > 0) {
+    return null;
+  }
+
+  const allRemoteStates = Array.from(
+    new Map(
+      Array.from(remoteGmmpStateMap.values())
+        .filter(Boolean)
+        .map((state) => [String(state?.remoteKey || ""), state])
+    ).values()
+  ).filter((state) => isRemoteGmmpStateFresh(state) && state?.hasCurrentTrack);
+
+  if (!allRemoteStates.length) {
+    return null;
+  }
+
+  const targetUserId = normalizeIdentityToken(
+    deviceOrSession?.session?.UserId ||
+    deviceOrSession?.UserId ||
+    ""
+  );
+  const targetItemId = normalizeIdentityToken(
+    deviceOrSession?.itemId ||
+    deviceOrSession?.item?.Id ||
+    deviceOrSession?.itemDetails?.Id ||
+    deviceOrSession?.NowPlayingItem?.Id ||
+    deviceOrSession?.session?.NowPlayingItem?.Id ||
+    deviceOrSession?.NowPlayingItemId ||
+    ""
+  );
+  const effectiveItem =
+    deviceOrSession?.itemDetails ||
+    deviceOrSession?.item ||
+    deviceOrSession?.NowPlayingItem ||
+    deviceOrSession?.session?.NowPlayingItem ||
+    null;
+  const mediaHint = String(deviceOrSession?.mediaTypeText || "").trim().toLowerCase();
+  const iconHint = String(deviceOrSession?.mediaIconClass || "").trim().toLowerCase();
+  const isAudioCandidate =
+    isAudioLikeItem(effectiveItem) ||
+    /audio|song|music|audiobook/.test(mediaHint) ||
+    ["fa-music", "fa-headphones", "fa-compact-disc", "fa-book-open"].includes(iconHint);
+
+  if (targetUserId && targetItemId) {
+    const exactUserAndTrack = allRemoteStates.find((state) => {
+      const remoteUserId = normalizeIdentityToken(state?.userId);
+      const remoteTrackId = normalizeIdentityToken(state?.trackId || state?.itemId);
+      return remoteUserId === targetUserId && remoteTrackId === targetItemId;
+    });
+    if (exactUserAndTrack) {
+      return exactUserAndTrack;
+    }
+  }
+
+  if (targetItemId) {
+    const sameTrackStates = allRemoteStates.filter((state) => {
+      const remoteTrackId = normalizeIdentityToken(state?.trackId || state?.itemId);
+      return remoteTrackId === targetItemId;
+    });
+    if (sameTrackStates.length === 1) {
+      return sameTrackStates[0];
+    }
+  }
+
+  if (targetUserId) {
+    const sameUserStates = allRemoteStates.filter((state) =>
+      normalizeIdentityToken(state?.userId) === targetUserId
+    );
+    if (sameUserStates.length === 1 && (
+      isAudioCandidate ||
+      !!targetItemId ||
+      looksLikeRemoteBrowserSession(
+        deviceOrSession?.session || deviceOrSession,
+        deviceOrSession
+      )
+    )) {
+      return sameUserStates[0];
+    }
+  }
+
+  if (allRemoteStates.length === 1) {
+    if (isAudioCandidate || looksLikeRemoteBrowserSession(
+      deviceOrSession?.session || deviceOrSession,
+      deviceOrSession
+    )) {
+      return allRemoteStates[0];
+    }
+  }
+
   return null;
+}
+
+function hasExactRemoteGmmpIdentityMatch(deviceOrSession, remoteState) {
+  if (!deviceOrSession || !remoteState) return false;
+
+  const targetSessionId = normalizeIdentityToken(
+    deviceOrSession?.sessionId ||
+    deviceOrSession?.SessionId ||
+    deviceOrSession?.Id ||
+    deviceOrSession?.session?.Id ||
+    ""
+  );
+  const targetDeviceId = normalizeIdentityToken(
+    deviceOrSession?.deviceId ||
+    deviceOrSession?.DeviceId ||
+    deviceOrSession?.session?.DeviceId ||
+    ""
+  );
+  const remoteSessionId = normalizeIdentityToken(remoteState?.sessionId);
+  const remoteDeviceId = normalizeIdentityToken(remoteState?.deviceId);
+
+  return (
+    (!!targetSessionId && !!remoteSessionId && targetSessionId === remoteSessionId) ||
+    (!!targetDeviceId && !!remoteDeviceId && targetDeviceId === remoteDeviceId)
+  );
+}
+
+function sanitizeVisiblePlaybackSessions(
+  sessions = [],
+  {
+    gmmpState = null,
+    videoState = null,
+    remoteGmmpStateMap = null
+  } = {}
+) {
+  const list = Array.isArray(sessions) ? sessions : [];
+  if (!list.length) return [];
+
+  const localSessionId = resolveCurrentBrowserSessionId(list, gmmpState);
+
+  return list.filter((session) => {
+    const hasPlaybackHint = !!(
+      getSessionNowPlayingItemId(session) ||
+      String(session?.NowPlayingItemName || "").trim() ||
+      String(session?.NowPlayingItem?.Name || "").trim()
+    );
+    if (!hasPlaybackHint) {
+      return false;
+    }
+
+    const itemSnapshot = normalizeNowPlayingItem(session?.NowPlayingItem, session);
+    if (!isAudioLikeItem(itemSnapshot)) {
+      return true;
+    }
+
+    const sessionId = normalizeIdentityToken(session?.Id);
+    const isLocalSession = localSessionId
+      ? sessionId === normalizeIdentityToken(localSessionId)
+      : isCurrentBrowserSession(session, gmmpState);
+
+    if (isLocalSession) {
+      return !!gmmpState?.hasCurrentTrack || !!videoState?.hasActiveVideo;
+    }
+
+    if (looksLikeRemoteBrowserSession(session)) {
+      const remoteState = getRemoteGmmpStateForDevice(session, remoteGmmpStateMap);
+      return !!remoteState?.hasCurrentTrack;
+    }
+
+    return true;
+  });
 }
 
 function isPotentialRemoteGmmpTarget(device, controlSnapshot = null) {
@@ -1092,7 +1280,10 @@ async function refreshDeviceControlMode(device, { signal } = {}) {
   let localSessionId = "";
 
   try {
-    const sessions = await fetchVisiblePlaybackSessions({ signal });
+    const sessions = sanitizeVisiblePlaybackSessions(
+      await fetchVisiblePlaybackSessions({ signal }),
+      { gmmpState, videoState, remoteGmmpStateMap }
+    );
     if (Array.isArray(sessions) && sessions.length) {
       localSessionId = resolveCurrentBrowserSessionId(sessions, gmmpState);
       const freshSession = sessions.find((session) =>
@@ -1137,6 +1328,8 @@ function applyGmmpStateToDevice(device, gmmpState) {
 
   const volumeLevel = clamp(gmmpState.volumeLevel ?? device.volumeLevel, 0, 100);
   device.controlMode = "gmmp";
+  device.remoteGmmpState = null;
+  device.hasRemoteGmmpState = false;
   device.isPaused = !!gmmpState.isPaused;
   device.confirmedIsPaused = device.isPaused;
   device.isMuted = !!gmmpState.isMuted;
@@ -1178,6 +1371,8 @@ function applyLocalVideoStateToDevice(device, videoState) {
 
   const volumeLevel = clamp(videoState.volumeLevel ?? device.volumeLevel, 0, 100);
   device.controlMode = "local-video";
+  device.remoteGmmpState = null;
+  device.hasRemoteGmmpState = false;
   device.isPaused = !!videoState.isPaused;
   device.confirmedIsPaused = device.isPaused;
   device.isMuted = !!videoState.isMuted;
@@ -1218,12 +1413,13 @@ function applyRemoteGmmpStateToDevice(device, remoteState) {
   if (!device || !remoteState) return false;
 
   const volumeLevel = clamp(remoteState.volumeLevel ?? device.volumeLevel, 0, 100);
+  const remoteTrackId = String(remoteState.trackId || remoteState.itemId || "").trim();
   device.controlMode = "gmmp-remote";
   device.remoteGmmpState = remoteState;
   device.hasRemoteGmmpState = !!remoteState?.hasCurrentTrack;
   device.deviceId = String(remoteState.deviceId || device.deviceId || "").trim();
-  if (!device.itemId) {
-    device.itemId = String(remoteState.trackId || remoteState.itemId || "").trim();
+  if (remoteTrackId) {
+    device.itemId = remoteTrackId;
   }
   device.isPaused = !!remoteState.isPaused;
   device.confirmedIsPaused = device.isPaused;
@@ -1250,7 +1446,6 @@ function syncDeviceControlMode(device, session, gmmpState, videoState = null, re
   const isLocalSession = localSessionId
     ? normalizeIdentityToken(effectiveSession?.Id) === normalizeIdentityToken(localSessionId)
     : isCurrentBrowserSession(effectiveSession, gmmpState);
-  const previousControlMode = String(device?.controlMode || "").trim();
   const gmmpConfidenceScore = scoreLikelyCurrentGmmpSession(
     effectiveSession,
     gmmpState,
@@ -1290,9 +1485,10 @@ function syncDeviceControlMode(device, session, gmmpState, videoState = null, re
     return applyLocalVideoStateToDevice(device, videoState);
   }
 
+  const exactRemoteIdentityMatch = hasExactRemoteGmmpIdentityMatch(device || session, remoteGmmpState);
   const hasMatchingRemoteGmmpState =
     !!remoteGmmpState?.hasCurrentTrack &&
-    !isLocalSession;
+    (!isLocalSession || exactRemoteIdentityMatch);
   const preserveExistingRemoteGmmpMode = device?.controlMode === "gmmp-remote" &&
     hasMatchingRemoteGmmpState;
   const shouldUseRemoteGmmp = preserveExistingRemoteGmmpMode || hasMatchingRemoteGmmpState;
@@ -1301,11 +1497,8 @@ function syncDeviceControlMode(device, session, gmmpState, videoState = null, re
     return applyRemoteGmmpStateToDevice(device, remoteGmmpState);
   }
 
-  if (previousControlMode === "gmmp" && isAudioLikeItem(effectiveItem)) {
-    device.controlMode = "gmmp";
-    return false;
-  }
-
+  device.remoteGmmpState = null;
+  device.hasRemoteGmmpState = false;
   device.controlMode = "session";
   return false;
 }
@@ -2347,15 +2540,16 @@ function updateDeviceFromSession(device, session, state, gmmpState = null, video
 }
 
 async function hydrateCastModal(state, { preferredSessionId = "" } = {}) {
-  const sessions = await fetchVisiblePlaybackSessions({ signal: state.abortController.signal });
+  const gmmpState = await getGmmpPlaybackSnapshot();
+  const videoState = getLocalVideoPlaybackSnapshot();
+  const remoteGmmpStateMap = await fetchRemoteGmmpStateMap({ signal: state.abortController.signal });
+  const sessions = sanitizeVisiblePlaybackSessions(
+    await fetchVisiblePlaybackSessions({ signal: state.abortController.signal }),
+    { gmmpState, videoState, remoteGmmpStateMap }
+  );
   if (!isActiveModalState(state)) return;
 
   if (!sessions.length && state.devices.length) {
-    const gmmpState = await getGmmpPlaybackSnapshot();
-    const videoState = getLocalVideoPlaybackSnapshot();
-    const remoteGmmpStateMap = await fetchRemoteGmmpStateMap({ signal: state.abortController.signal });
-    if (!isActiveModalState(state)) return;
-
     if (preserveKnownDeviceStates(state, { gmmpState, videoState, remoteGmmpStateMap })) {
       applyAllDevicesToDom(state);
       return;
@@ -2408,10 +2602,13 @@ async function syncCastModalState(state) {
 
   state.isSyncing = true;
   try {
-    const sessions = await fetchVisiblePlaybackSessions({ signal: state.abortController.signal });
     const gmmpState = await getGmmpPlaybackSnapshot();
     const videoState = getLocalVideoPlaybackSnapshot();
     const remoteGmmpStateMap = await fetchRemoteGmmpStateMap({ signal: state.abortController.signal });
+    const sessions = sanitizeVisiblePlaybackSessions(
+      await fetchVisiblePlaybackSessions({ signal: state.abortController.signal }),
+      { gmmpState, videoState, remoteGmmpStateMap }
+    );
     const localSessionId = resolveCurrentBrowserSessionId(sessions, gmmpState);
     if (!isActiveModalState(state)) return;
 
@@ -2492,7 +2689,7 @@ async function sendSessionCommand(sessionId, name, args = undefined, { signal } 
   });
 }
 
-async function sendRemoteGmmpCommand(target, name, args = undefined, { signal } = {}) {
+async function sendRemoteGmmpCommand(target, name, args = undefined, { signal, bindToCurrentTrack = true } = {}) {
   const sessionId = String(
     target?.sessionId ||
     target?.SessionId ||
@@ -2515,6 +2712,8 @@ async function sendRemoteGmmpCommand(target, name, args = undefined, { signal } 
     }, {})
   };
   const itemId = String(
+    target?.remoteGmmpState?.trackId ||
+    target?.remoteGmmpState?.itemId ||
     target?.itemId ||
     target?.item?.Id ||
     target?.itemDetails?.Id ||
@@ -2522,13 +2721,17 @@ async function sendRemoteGmmpCommand(target, name, args = undefined, { signal } 
     ""
   ).trim();
 
-  if (itemId) {
+  if (bindToCurrentTrack && itemId) {
     if (!payload.arguments.ItemId) payload.arguments.ItemId = itemId;
     if (!payload.arguments.TrackId) payload.arguments.TrackId = itemId;
   }
 
   try {
-    console.warn("[GMMP remote] enqueue command", payload);
+    console.warn("[GMMP remote] enqueue command", {
+      ...payload,
+      bindToCurrentTrack,
+      resolvedItemId: itemId
+    });
   } catch {}
 
   return makeCastApiRequest("/Plugins/JMSFusion/gmmp/commands", {
@@ -2565,7 +2768,9 @@ async function handlePlaybackToggle(state, sessionId) {
   if (!device) return;
 
   const controlSnapshot = await refreshDeviceControlMode(device, { signal: state.abortController.signal });
-  const shouldSendRemoteGmmp = !!controlSnapshot?.remoteGmmpState?.hasCurrentTrack && controlSnapshot?.isLocalSession !== true;
+  const shouldSendRemoteGmmp =
+    device.controlMode === "gmmp-remote" ||
+    (!!controlSnapshot?.remoteGmmpState?.hasCurrentTrack && controlSnapshot?.isLocalSession !== true);
   const shouldAttemptRemoteGmmp = shouldSendRemoteGmmp || isPotentialRemoteGmmpTarget(device, controlSnapshot);
   try {
     console.warn("[GMMP remote] route", {
@@ -2593,7 +2798,10 @@ async function handlePlaybackToggle(state, sessionId) {
         device,
         nextPaused ? "Pause" : "Unpause",
         undefined,
-        { signal: state.abortController.signal }
+        {
+          signal: state.abortController.signal,
+          bindToCurrentTrack: shouldSendRemoteGmmp || device.controlMode === "gmmp-remote"
+        }
       );
       device.confirmedIsPaused = nextPaused;
     } else if (device.controlMode === "local-video") {
@@ -2633,7 +2841,9 @@ async function handleMuteToggle(state, sessionId) {
   if (!device) return;
 
   const controlSnapshot = await refreshDeviceControlMode(device, { signal: state.abortController.signal });
-  const shouldSendRemoteGmmp = !!controlSnapshot?.remoteGmmpState?.hasCurrentTrack && controlSnapshot?.isLocalSession !== true;
+  const shouldSendRemoteGmmp =
+    device.controlMode === "gmmp-remote" ||
+    (!!controlSnapshot?.remoteGmmpState?.hasCurrentTrack && controlSnapshot?.isLocalSession !== true);
   const shouldAttemptRemoteGmmp = shouldSendRemoteGmmp || isPotentialRemoteGmmpTarget(device, controlSnapshot);
   try {
     console.warn("[GMMP remote] route", {
@@ -2675,7 +2885,10 @@ async function handleMuteToggle(state, sessionId) {
         device,
         nextMuted ? "Mute" : "Unmute",
         undefined,
-        { signal: state.abortController.signal }
+        {
+          signal: state.abortController.signal,
+          bindToCurrentTrack: shouldSendRemoteGmmp || device.controlMode === "gmmp-remote"
+        }
       );
       device.confirmedIsMuted = nextMuted;
       if (!nextMuted && device.volumeLevel > 0) {
@@ -2746,7 +2959,9 @@ async function commitVolume(state, sessionId) {
   if (!device) return;
 
   const controlSnapshot = await refreshDeviceControlMode(device, { signal: state.abortController.signal });
-  const shouldSendRemoteGmmp = !!controlSnapshot?.remoteGmmpState?.hasCurrentTrack && controlSnapshot?.isLocalSession !== true;
+  const shouldSendRemoteGmmp =
+    device.controlMode === "gmmp-remote" ||
+    (!!controlSnapshot?.remoteGmmpState?.hasCurrentTrack && controlSnapshot?.isLocalSession !== true);
   const shouldAttemptRemoteGmmp = shouldSendRemoteGmmp || isPotentialRemoteGmmpTarget(device, controlSnapshot);
   try {
     console.warn("[GMMP remote] route", {
@@ -2771,7 +2986,10 @@ async function commitVolume(state, sessionId) {
         device,
         "SetVolume",
         { Volume: targetVolume },
-        { signal: state.abortController.signal }
+        {
+          signal: state.abortController.signal,
+          bindToCurrentTrack: shouldSendRemoteGmmp || device.controlMode === "gmmp-remote"
+        }
       );
       device.volumeLevel = targetVolume;
       device.confirmedVolumeLevel = targetVolume;
@@ -3083,15 +3301,16 @@ function renderEmbeddedPanelMarkup(state) {
 }
 
 async function hydrateEmbeddedCastPanel(state) {
-  const sessions = await fetchVisiblePlaybackSessions({ signal: state.abortController.signal });
+  const gmmpState = await getGmmpPlaybackSnapshot();
+  const videoState = getLocalVideoPlaybackSnapshot();
+  const remoteGmmpStateMap = await fetchRemoteGmmpStateMap({ signal: state.abortController.signal });
+  const sessions = sanitizeVisiblePlaybackSessions(
+    await fetchVisiblePlaybackSessions({ signal: state.abortController.signal }),
+    { gmmpState, videoState, remoteGmmpStateMap }
+  );
   if (!isActiveEmbeddedState(state)) return;
 
   if (!sessions.length && state.devices.length) {
-    const gmmpState = await getGmmpPlaybackSnapshot();
-    const videoState = getLocalVideoPlaybackSnapshot();
-    const remoteGmmpStateMap = await fetchRemoteGmmpStateMap({ signal: state.abortController.signal });
-    if (!isActiveEmbeddedState(state)) return;
-
     if (preserveKnownDeviceStates(state, { gmmpState, videoState, remoteGmmpStateMap })) {
       applyAllDevicesToDom(state);
       return;
@@ -3382,10 +3601,18 @@ export async function loadAvailableDevices(itemId, dropdown) {
       return;
     }
 
-    const [sessions, visibleSessions] = await Promise.all([
+    const [sessions, rawVisibleSessions, gmmpState, remoteGmmpStateMap] = await Promise.all([
       fetchSessionsForCurrentUser(),
-      fetchVisiblePlaybackSessions()
+      fetchVisiblePlaybackSessions(),
+      getGmmpPlaybackSnapshot(),
+      fetchRemoteGmmpStateMap()
     ]);
+    const videoState = getLocalVideoPlaybackSnapshot();
+    const visibleSessions = sanitizeVisiblePlaybackSessions(rawVisibleSessions, {
+      gmmpState,
+      videoState,
+      remoteGmmpStateMap
+    });
 
     const videoDevices = sessions.filter(
       (session) => playable(session) || ["android", "ios", "iphone", "ipad"].some((term) => session.Client?.toLowerCase().includes(term))

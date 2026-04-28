@@ -46,23 +46,114 @@ function getEmbyTokenSafe_apply() {
   }
 }
 
+function readBooleanish_apply(value) {
+  if (value === true || value === "true" || value === 1 || value === "1") return true;
+  if (value === false || value === "false" || value === 0 || value === "0") return false;
+  return null;
+}
+
+function readAdminFlagFromPolicy_apply(policy) {
+  if (!policy || typeof policy !== "object") return null;
+
+  const candidates = [policy.IsAdministrator, policy.IsAdmin, policy.IsAdminUser];
+  for (const candidate of candidates) {
+    const normalized = readBooleanish_apply(candidate);
+    if (normalized !== null) return normalized;
+  }
+
+  return null;
+}
+
+function readAdminFlagFromUser_apply(user) {
+  if (!user || typeof user !== "object") return null;
+
+  const policyFlag = readAdminFlagFromPolicy_apply(user.Policy || user.UserPolicy);
+  if (policyFlag !== null) return policyFlag;
+
+  const candidates = [user.IsAdministrator, user.isAdministrator, user.IsAdmin, user.isAdmin];
+  for (const candidate of candidates) {
+    const normalized = readBooleanish_apply(candidate);
+    if (normalized !== null) return normalized;
+  }
+
+  return null;
+}
+
+async function resolveLiveAdminFlag_apply() {
+  const liveCandidates = [];
+
+  try {
+    const sessionInfo = typeof getSessionInfo === "function" ? getSessionInfo() : null;
+    if (sessionInfo?.User) liveCandidates.push(sessionInfo.User);
+    if (sessionInfo?.user) liveCandidates.push(sessionInfo.user);
+    if (sessionInfo) liveCandidates.push(sessionInfo);
+  } catch {}
+
+  try {
+    if (window.ApiClient?._currentUser) {
+      liveCandidates.push(window.ApiClient._currentUser);
+    }
+  } catch {}
+
+  for (const candidate of liveCandidates) {
+    const flag = readAdminFlagFromUser_apply(candidate);
+    if (flag !== null) return flag;
+  }
+
+  try {
+    const currentUser = await window.ApiClient?.getCurrentUser?.();
+    const currentFlag = readAdminFlagFromUser_apply(currentUser);
+    if (currentFlag !== null) return currentFlag;
+  } catch {}
+
+  try {
+    const cachedFlag = readBooleanish_apply(localStorage.getItem("currentUserIsAdmin"));
+    if (cachedFlag !== null) return cachedFlag;
+  } catch {}
+
+  return null;
+}
+
+function buildAdminProbeHeaders_apply(token) {
+  const headers = { Accept: "application/json" };
+  if (token) headers["X-Emby-Token"] = token;
+
+  try {
+    const authHeader = String(
+      (typeof getAuthHeader === "function" ? getAuthHeader() : "") || ""
+    ).trim();
+    if (authHeader) headers.Authorization = authHeader;
+  } catch {}
+
+  return headers;
+}
+
 async function isAdminUser_apply() {
   if (__isAdminCached_apply !== null) return __isAdminCached_apply;
 
   try {
+    const liveAdmin = await resolveLiveAdminFlag_apply();
+    if (liveAdmin === true) return (__isAdminCached_apply = true);
+
     const token = getEmbyTokenSafe_apply();
-    if (!token) return (__isAdminCached_apply = false);
+    if (token) {
+      const jfRoot = getJfRootFromLocation_apply();
+      const r = await fetch(`${jfRoot}/Users/Me`, {
+        cache: "no-store",
+        headers: buildAdminProbeHeaders_apply(token)
+      });
 
-    const jfRoot = getJfRootFromLocation_apply();
-    const r = await fetch(`${jfRoot}/Users/Me`, {
-      cache: "no-store",
-      headers: { "Accept": "application/json", "X-Emby-Token": token }
-    });
-    if (!r.ok) return (__isAdminCached_apply = false);
+      if (r.ok) {
+        const me = await r.json();
+        const fetchedAdmin = readAdminFlagFromUser_apply(me);
+        if (fetchedAdmin !== null) {
+          return (__isAdminCached_apply = fetchedAdmin);
+        }
+      }
+    }
 
-    const me = await r.json();
-    const pol = me?.Policy || {};
-    return (__isAdminCached_apply = !!(pol.IsAdministrator || pol.IsAdmin || pol.IsAdminUser));
+    if (liveAdmin !== null) return (__isAdminCached_apply = liveAdmin);
+    return (__isAdminCached_apply = false);
   } catch {
     return (__isAdminCached_apply = false);
   }
@@ -789,6 +880,10 @@ const USER_ONLY_KEYS = [
 
             pauseOverlay: {
               enabled: formData.get('pauseOverlay') === 'on',
+              cssVariant: (() => {
+                const value = String(formData.get('pauseOverlayCssVariant') || '').trim();
+                return value === 'pauseModul2' ? 'pauseModul2' : 'pauseModul';
+              })(),
               imagePreference: formData.get('pauseOverlayImagePreference') || 'auto',
               showPlot: formData.get('pauseOverlayShowPlot') === 'on',
               debug: formData.get('pauseOverlayDebug') === 'on',

@@ -62,6 +62,7 @@ namespace Jellyfin.Plugin.JMSFusion
   var PROGRESS_API_KEY = "__JMS_CUSTOM_SPLASH_PROGRESS__";
   var FALLBACK_TIMEOUT_MS = 16000;
   var FALLBACK_CLEANUP_MS = 460;
+  var PING_PATHS = ["/JMSFusion/ping", "/Plugins/JMSFusion/ping"];
 
   function toCssContent(value) {
     return '"' + String(value || "")
@@ -78,7 +79,76 @@ namespace Jellyfin.Plugin.JMSFusion
     return true;
   }
 
-  if (!root || !readEnabled()) {
+  function isHomeRouteHashValue(value) {
+    var hash = String(value || "").toLowerCase().trim();
+    return hash === "" || hash === "#" || hash.indexOf("#/home") === 0 || hash.indexOf("#/index") === 0;
+  }
+
+  function getVisibleSplashPage() {
+    return document.querySelector(
+      "#reactRoot [data-role='page']:not(.hide), [data-role='page']:not(.hide), #reactRoot #indexPage:not(.hide), #reactRoot #homePage:not(.hide), #indexPage:not(.hide), #homePage:not(.hide)"
+    );
+  }
+
+  function isHomeSplashPage(page) {
+    if (!page) return false;
+
+    var pageId = String(page.id || "").toLowerCase();
+    if (pageId === "indexpage" || pageId === "homepage") {
+      return true;
+    }
+
+    var routeHint = String(
+      (page.getAttribute && (page.getAttribute("data-url") || page.getAttribute("data-page"))) ||
+      (page.dataset && page.dataset.url) ||
+      ""
+    ).toLowerCase();
+
+    return /(?:^|\/)(?:index|home)(?:\.html)?(?:[?#/]|$)/i.test(routeHint);
+  }
+
+  function isHomeSplashContext() {
+    var visiblePage = getVisibleSplashPage();
+    if (visiblePage) {
+      return isHomeSplashPage(visiblePage);
+    }
+
+    return isHomeRouteHashValue(window.location && window.location.hash);
+  }
+
+  function buildPingProbeUrl(path) {
+    var raw = String(path || "").trim();
+    if (!raw) return "";
+
+    var suffix = "_ts=" + Date.now();
+    var version = String(window.__JMS_ASSET_VERSION__ || "").trim();
+    if (version) {
+      suffix += "&v=" + encodeURIComponent(version);
+    }
+
+    return raw + (raw.indexOf("?") >= 0 ? "&" : "?") + suffix;
+  }
+
+  function canReachPluginPresenceSync() {
+    // Fail closed when cached bootstrap code survives after the plugin is gone.
+    for (var i = 0; i < PING_PATHS.length; i += 1) {
+      try {
+        var xhr = new XMLHttpRequest();
+        xhr.open("GET", buildPingProbeUrl(PING_PATHS[i]), false);
+        xhr.setRequestHeader("Cache-Control", "no-store, no-cache, max-age=0");
+        xhr.setRequestHeader("Pragma", "no-cache");
+        xhr.send(null);
+        var status = Number(xhr.status || 0);
+        if ((status >= 200 && status < 300) || status === 401 || status === 403) {
+          return true;
+        }
+      } catch {}
+    }
+
+    return false;
+  }
+
+  if (!root || !readEnabled() || !isHomeSplashContext() || !canReachPluginPresenceSync()) {
     return;
   }
 
@@ -712,12 +782,26 @@ namespace Jellyfin.Plugin.JMSFusion
     } catch {}
     root.setAttribute(HIDDEN_ATTR, "1");
 
+    var cleanupDelayMs = options.cleanupDelayMs == null
+      ? FALLBACK_CLEANUP_MS
+      : Number(options.cleanupDelayMs);
+
     fallbackCleanupId = window.setTimeout(function () {
       fallbackCleanupId = 0;
       cleanupSplashFallback();
-    }, Math.max(0, Number(options.cleanupDelayMs) || FALLBACK_CLEANUP_MS));
+    }, Math.max(0, isFinite(cleanupDelayMs) ? cleanupDelayMs : FALLBACK_CLEANUP_MS));
 
     return true;
+  }
+
+  function enforceSplashHomeOnly() {
+    if (!root || !root.hasAttribute(ACTIVE_ATTR)) return false;
+    if (isHomeSplashContext()) return true;
+    return dismissSplashFallback("bootstrap-route-not-home", {
+      updateProgress: false,
+      instant: true,
+      cleanupDelayMs: 0
+    });
   }
 
   function armSplashFallbackTimeout() {
@@ -791,13 +875,18 @@ namespace Jellyfin.Plugin.JMSFusion
   }
 
   document.addEventListener("readystatechange", syncBootstrapReadyState);
+  document.addEventListener("readystatechange", enforceSplashHomeOnly);
   window.addEventListener("load", function () {
     setProgress(0.22, {
       stage: localeCopy.stageFlow,
       detail: formatLocaleTemplate(localeCopy.detailFlow, { title: customTitle })
     });
   }, { once: true });
+  window.addEventListener("hashchange", enforceSplashHomeOnly, { passive: true });
+  window.addEventListener("popstate", enforceSplashHomeOnly, { passive: true });
+  window.addEventListener("pageshow", enforceSplashHomeOnly, { passive: true });
   syncBootstrapReadyState();
+  enforceSplashHomeOnly();
   armSplashFallbackTimeout();
   scheduleSplashUserTitleRefresh();
   window.addEventListener("load", resolveCurrentUserTitleAsync, { once: true });
@@ -822,6 +911,8 @@ html[data-jms-custom-splash="1"]:not([data-jms-custom-splash-hidden="1"]) #react
 }
 html[data-jms-custom-splash="1"] #${LAYER_ID} {
   --jms-splash-progress: 0.04;
+  --jms-splash-font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --jms-splash-font-display: var(--jms-splash-font-ui);
   position: fixed;
   inset: 0;
   z-index: 2147483646;
@@ -934,8 +1025,8 @@ html[data-jms-custom-splash="1"] .jms-boot-splash-copy {
   justify-items: center;
 }
 html[data-jms-custom-splash="1"] #${TITLE_ID} {
-  font-family: 'Space Grotesk', 'Inter', system-ui, -apple-system, sans-serif;
-  font-weight: 500;
+  font-family: var(--jms-splash-font-display);
+  font-weight: 600;
   font-size: 13px;
   letter-spacing: 0.3em;
   text-transform: uppercase;
@@ -946,7 +1037,7 @@ html[data-jms-custom-splash="1"] #${TITLE_ID} {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 html[data-jms-custom-splash="1"] #${CAPTION_ID} {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: var(--jms-splash-font-ui);
   font-weight: 500;
   font-size: 15px;
   letter-spacing: -0.01em;
@@ -972,7 +1063,7 @@ html[data-jms-custom-splash="1"] .jms-boot-splash-progress-head {
 }
 html[data-jms-custom-splash="1"] #${PROGRESS_STAGE_ID} {
   color: rgba(176, 214, 255, 0.86);
-  font: 700 11px/1.2 Inter, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, system-ui, sans-serif;
+  font: 700 11px/1.2 var(--jms-splash-font-ui);
   letter-spacing: 0.16em;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -989,7 +1080,7 @@ html[data-jms-custom-splash="1"] #${PROGRESS_VALUE_ID} {
     inset 0 1px 0 rgba(255, 255, 255, 0.08),
     0 12px 28px rgba(5, 14, 25, 0.36);
   color: rgba(239, 247, 255, 0.94);
-  font: 700 11px/1 Inter, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, system-ui, sans-serif;
+  font: 700 11px/1 var(--jms-splash-font-ui);
   letter-spacing: 0.14em;
   text-align: center;
 }
@@ -1068,7 +1159,7 @@ html[data-jms-custom-splash="1"] #${PROGRESS_ORB_ID} {
 }
 html[data-jms-custom-splash="1"] #${PROGRESS_DETAIL_ID} {
   color: rgba(201, 218, 243, 0.72);
-  font: 500 11px/1.45 Inter, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, system-ui, sans-serif;
+  font: 500 11px/1.45 var(--jms-splash-font-ui);
   letter-spacing: 0.04em;
   text-align: center;
   max-width: 100%;

@@ -689,6 +689,28 @@ function safeSet(k, v) {
   try { if (v) { localStorage.setItem(k, v); sessionStorage.setItem(k, v); } } catch {}
 }
 
+function readStoredCurrentUserName(expectedUserId = "") {
+  try {
+    const storedName = pickFirstString(
+      sessionStorage.getItem("currentUserName"),
+      localStorage.getItem("currentUserName")
+    );
+    if (!storedName) return "";
+
+    const storedUserId = pickFirstString(
+      sessionStorage.getItem("currentUserId"),
+      localStorage.getItem("currentUserId")
+    );
+    const wantedUserId = pickFirstString(expectedUserId);
+    if (wantedUserId && storedUserId && storedUserId !== wantedUserId) {
+      return "";
+    }
+    return storedName;
+  } catch {
+    return "";
+  }
+}
+
 function withApiKeyIfNeeded(url, token) {
   const raw = String(url || "").trim();
   const apiKey = String(token || "").trim();
@@ -976,11 +998,24 @@ function readFromApiClient() {
       api._serverInfo?.SystemId ||
       api._serverInfo?.Id ||
       null;
+    const userName = pickFirstString(
+      api?._currentUser?.Name,
+      api?._currentUser?.Username,
+      api?._currentUser?.userName,
+      api?._currentUser?.username,
+      api?._serverInfo?.User?.Name,
+      api?._serverInfo?.User?.Username,
+      api?._serverInfo?.User?.userName,
+      api?._serverInfo?.User?.username,
+      api?._serverInfo?.UserName,
+      api?._serverInfo?.Username,
+      readStoredCurrentUserName(userId)
+    );
 
     if (!token || !userId) return null;
     const deviceName = persistDeviceName(readApiClientDeviceName() || getStoredDeviceName() || detectPlatformDeviceName());
     return {
-      token, userId, sessionId: api._sessionId || null, serverId,
+      token, userId, userName, sessionId: api._sessionId || null, serverId,
       deviceId, deviceName, clientName: "Jellyfin Web Client", clientVersion: "1.0.0"
     };
   } catch {
@@ -1181,11 +1216,42 @@ export function getSessionInfo() {
       getServerAddress?.(),
       readStoredServerBase()
     );
+    const userName = pickFirstString(
+      live?.userName,
+      active?.UserName,
+      active?.Username,
+      active?.Name,
+      creds?.User?.Name,
+      creds?.User?.Username,
+      creds?.User?.userName,
+      creds?.User?.username,
+      creds?.UserName,
+      creds?.Username,
+      creds?.userName,
+      readStoredCurrentUserName(userId)
+    );
+    const normalizedUser = (creds?.User && typeof creds.User === "object")
+      ? { ...creds.User }
+      : {};
+    if (userId && !pickFirstString(normalizedUser?.Id)) {
+      normalizedUser.Id = userId;
+    }
+    if (userName && !pickFirstString(
+      normalizedUser?.Name,
+      normalizedUser?.Username,
+      normalizedUser?.userName,
+      normalizedUser?.username
+    )) {
+      normalizedUser.Name = userName;
+    }
 
     return {
       ...creds,
       accessToken,
       userId,
+      userName,
+      UserName: userName || creds?.UserName || creds?.Username || "",
+      User: normalizedUser,
       sessionId,
       deviceId,
       deviceName,

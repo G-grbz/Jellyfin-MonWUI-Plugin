@@ -6,6 +6,7 @@ import { resolveSliderAssetHref } from "./assetLinks.js";
 import { withServer } from "./jfUrl.js";
 import { faIconHtml } from "./faIcons.js";
 import { openDetailsModal } from "./detailsModalLoader.js";
+import { applyHeaderIconButtonMode, findHeaderMountTarget } from "./headerCompat.js";
 
 const config = getConfig();
 let __castModulePromise = null;
@@ -58,6 +59,7 @@ const CREATED_TS_CACHE_MAX = 2000;
 const TOAST_QUEUE_MAX = 60;
 const NOTIF_THEME_LINK_ID = "jfNotifCss";
 const NOTIF_THEME_HREF_FRAGMENT = "slider/src/notifications";
+const NOTIF_HEADER_LEGACY_CLASS = "headerSyncButton syncButton headerButton headerButtonRight paper-icon-button-light";
 let __uiReady = false;
 let __forcePEObs = null;
 let __notifCssObs = null;
@@ -164,39 +166,21 @@ function setupNotifHover() {
 }
 
 function findHeaderContainer() {
-  const roots = Array.from(document.querySelectorAll(".skinHeader"));
-  const pick = (root) =>
-    root.querySelector(".headerRight") ||
-    root.querySelector(".headerButtons") ||
-    root.querySelector(".paper-icon-buttons") ||
-    root;
-  for (const r of roots) {
-    const el = pick(r);
-    if (el) return el;
-  }
-  return (
-    document.querySelector(".skinHeader .headerRight") ||
-    document.querySelector(".skinHeader .headerButtons") ||
-    document.querySelector(".headerRight") ||
-    document.querySelector(".headerButtons") ||
-    document.querySelector(".skinHeader") ||
-    null
-  );
+  return findHeaderMountTarget({ variant: "actions" });
 }
 
 let __notifBtn = null;
 let __headerObs = null;
 
-function ensureNotifButtonIn(el) {
+function ensureNotifButtonIn(el, mode = "legacy") {
   if (!el) return false;
   if (!__notifBtn) {
     const btn = document.createElement("button");
     btn.id = "jfNotifBtn";
     btn.type = "button";
-    btn.className = "headerSyncButton syncButton headerButton headerButtonRight paper-icon-button-light";
-    btn.setAttribute("is", "paper-icon-button-light");
     btn.setAttribute("aria-label", config.languageLabels.recentNotifications);
     btn.title = config.languageLabels.recentNotifications;
+    btn.setAttribute("aria-haspopup", "dialog");
     btn.innerHTML = `
       ${faIconHtml("bell", "jf-notif-icon notif")}
       <span class="jf-notif-badge" hidden></span>
@@ -204,6 +188,9 @@ function ensureNotifButtonIn(el) {
     btn.addEventListener("click", openModal);
     __notifBtn = btn;
   }
+  applyHeaderIconButtonMode(__notifBtn, mode, {
+    legacyClassName: NOTIF_HEADER_LEGACY_CLASS,
+  });
   if (__notifBtn.parentElement === el) return true;
   try { el.insertBefore(__notifBtn, el.firstChild); } catch { el.appendChild(__notifBtn); }
   return true;
@@ -214,16 +201,19 @@ function startHeaderIconSentinel() {
   const mount = () => {
     const target = document.querySelector(".skinHeader") || document.body;
     if (!target) return;
-    ensureNotifButtonIn(findHeaderContainer());
+    const host = findHeaderContainer();
+    ensureNotifButtonIn(host.element, host.mode);
     if (__headerObs) __headerObs.disconnect();
     __headerObs = new MutationObserver(() => {
-      const host = findHeaderContainer();
-      if (!host) return;
-      if (!__notifBtn || !host.contains(__notifBtn)) {
-        ensureNotifButtonIn(host);
+      const nextHost = findHeaderContainer();
+      if (!nextHost.element) return;
+      if (!__notifBtn || !nextHost.element.contains(__notifBtn)) {
+        ensureNotifButtonIn(nextHost.element, nextHost.mode);
         updateBadge();
         setTimeout(setupNotifHover, 0);
+        return;
       }
+      ensureNotifButtonIn(nextHost.element, nextHost.mode);
     });
     __headerObs.observe(target, { childList: true, subtree: true });
   };
@@ -234,7 +224,8 @@ function startHeaderIconSentinel() {
   }
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
-      ensureNotifButtonIn(findHeaderContainer());
+      const host = findHeaderContainer();
+      ensureNotifButtonIn(host.element, host.mode);
       updateBadge();
     }
   });
@@ -644,7 +635,7 @@ function ensureUI() {
   injectCriticalNotifCSS();
   ensureCastTabStyles();
   const header = findHeaderContainer();
-  if (header) ensureNotifButtonIn(header);
+  if (header.element) ensureNotifButtonIn(header.element, header.mode);
   startHeaderIconSentinel();
 
   if (!document.querySelector("#jfNotifModal")) {
@@ -903,6 +894,21 @@ function injectCriticalNotifCSS() {
   style.textContent = `
     #jfNotifModal { display: none !important; }
     #jfNotifModal.open { display: block !important; }
+    #jfNotifBtn.jms-mui-header-icon-button {
+      align-items: center;
+      background: transparent;
+      border: 0;
+      border-radius: 999px;
+      display: inline-flex !important;
+      height: 40px;
+      justify-content: center;
+      position: relative;
+      text-shadow: none !important;
+      width: 40px;
+    }
+    #jfNotifBtn.jms-mui-header-icon-button:hover {
+      background: rgba(255,255,255,0.08);
+    }
   `;
   document.head.appendChild(style);
 }
@@ -1740,8 +1746,14 @@ export async function initNotifications() {
   ensureUI();
   ensureSystemTabPresence();
 
-  setTimeout(() => ensureNotifButtonIn(findHeaderContainer()), 250);
-  setTimeout(() => ensureNotifButtonIn(findHeaderContainer()), 750);
+  setTimeout(() => {
+    const host = findHeaderContainer();
+    ensureNotifButtonIn(host.element, host.mode);
+  }, 250);
+  setTimeout(() => {
+    const host = findHeaderContainer();
+    ensureNotifButtonIn(host.element, host.mode);
+  }, 750);
 
   await backfillFromLastSeen();
   await pollLatest({ seedIfFirstRun: true });

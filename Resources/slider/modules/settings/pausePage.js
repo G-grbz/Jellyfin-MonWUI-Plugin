@@ -19,6 +19,41 @@ export function createPausePanel(_config, labels) {
 
   const section = createSection(labels.pauseSettings || 'Duraklatma Ekranı Ayarları');
 
+  const pauseCssVariantContainer = document.createElement('div');
+  pauseCssVariantContainer.className = 'fsetting-item';
+
+  const pauseCssVariantLabel = document.createElement('label');
+  pauseCssVariantLabel.textContent = labels.pauseOverlayCssVariant || 'Duraklatma Ekranı Stili';
+  pauseCssVariantLabel.htmlFor = 'pauseOverlayCssVariant';
+  pauseCssVariantLabel.className = 'settings-label';
+
+  const pauseCssVariantSelect = document.createElement('select');
+  pauseCssVariantSelect.name = 'pauseOverlayCssVariant';
+  pauseCssVariantSelect.id = 'pauseOverlayCssVariant';
+  pauseCssVariantSelect.className = 'settings-select';
+
+  [
+    ['pauseModul', labels.pauseOverlayCssVariant_pauseModul || 'Stil 1'],
+    ['pauseModul2', labels.pauseOverlayCssVariant_pauseModul2 || 'Stil 2']
+  ].forEach(([value, text]) => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = text;
+    option.selected = (config.pauseOverlay?.cssVariant || 'pauseModul') === value;
+    pauseCssVariantSelect.appendChild(option);
+  });
+
+  pauseCssVariantContainer.appendChild(pauseCssVariantLabel);
+  pauseCssVariantContainer.appendChild(pauseCssVariantSelect);
+  section.appendChild(pauseCssVariantContainer);
+
+  const pauseCssVariantDescription = document.createElement('div');
+  pauseCssVariantDescription.className = 'description-text';
+  pauseCssVariantDescription.textContent =
+    labels.pauseOverlayCssVariantDescription ||
+    'Duraklatma ekranında kullanılacak CSS tasarımını seçin.';
+  section.appendChild(pauseCssVariantDescription);
+
   const enableCheckbox = createCheckbox(
     'pauseOverlay',
     labels.enablePauseOverlay || 'Durdurma Ekranını Etkinleştir',

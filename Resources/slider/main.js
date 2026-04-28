@@ -6,7 +6,7 @@ import {
   isDetailsModalModuleEnabled,
   isSubtitleCustomizerModuleEnabled
 } from "./modules/config.js";
-import { getLanguageLabels, getDefaultLanguage } from "./language/index.js";
+import { getLanguageLabels, getDefaultLanguage, ensureAutoLanguageSync } from "./language/index.js";
 import { getCurrentIndex, setCurrentIndex } from "./modules/sliderState.js";
 import { startSlideTimer, stopSlideTimer, pauseSlideTimer, resumeSlideTimer } from "./modules/timer.js";
 import { ensureProgressBarExists, resetProgressBar, pauseProgressBar, resumeProgressBar, updateProgressBarPosition } from "./modules/progressBar.js";
@@ -31,6 +31,7 @@ export { loadCSS } from "./modules/playerStyles.js";
 export { waitForAnyVisible };
 const idle = window.requestIdleCallback || ((cb) => setTimeout(cb, 0));
 const cancelIdle = window.cancelIdleCallback || ((id) => clearTimeout(id));
+ensureAutoLanguageSync({ reloadOnChange: true });
 const MATERIAL_ICONS_REPAIR_STYLE_ID = "jms-material-icons-utf8-repair";
 const MATERIAL_ICONS_PROBE_CLASS = "_10k";
 const MATERIAL_ICONS_PROBE_CONTENT = "\ue951";
@@ -44,6 +45,8 @@ const CUSTOM_SPLASH_STORAGE_KEY = "enableCustomSplashScreen";
 const CUSTOM_SPLASH_TITLE_VAR = "--jms-custom-splash-title";
 const CUSTOM_SPLASH_CAPTION_VAR = "--jms-custom-splash-caption";
 const CUSTOM_SPLASH_PROGRESS_KEY = "__JMS_CUSTOM_SPLASH_PROGRESS__";
+const CUSTOM_SPLASH_PING_PATHS = ["/JMSFusion/ping", "/Plugins/JMSFusion/ping"];
+const CUSTOM_SPLASH_PING_CACHE_MS = 15_000;
 const CUSTOM_SPLASH_TIMEOUT_MS = 12_000;
 const CUSTOM_SPLASH_CLEANUP_MS = 420;
 const CUSTOM_SPLASH_EXIT_SYNC_MS = 120;
@@ -60,6 +63,10 @@ let __customSplashObserver = null;
 let __customSplashCleanupTimer = 0;
 let __customSplashHideTimer = 0;
 let __customSplashHardTimer = 0;
+let __customSplashAvailabilityPromise = null;
+let __customSplashAvailabilityCheckedAt = 0;
+let __customSplashAvailabilityValue = null;
+let __customSplashRouteGuardReady = false;
 let __authContextRecoveryTimer = 0;
 let __lastRecoveredAuthContextKey = "";
 const __customSplashProgressState = {
@@ -585,7 +592,7 @@ function getCurrentCustomSplashUserName() {
 
 function getCustomSplashLoadingFallback(title) {
   const safeTitle = String(title || "MonWui").trim() || "MonWui";
-  const lang = (typeof getDefaultLanguage === "function" ? getDefaultLanguage() : null) || "tur";
+  const lang = (typeof getDefaultLanguage === "function" ? getDefaultLanguage() : null) || "eng";
 
   switch (lang) {
     case "eng":
@@ -599,8 +606,9 @@ function getCustomSplashLoadingFallback(title) {
     case "rus":
       return `${safeTitle} подготавливается`;
     case "tur":
-    default:
       return `${safeTitle} hazırlanıyor`;
+    default:
+      return `${safeTitle} is starting`;
   }
 }
 
@@ -732,6 +740,87 @@ function hasCustomSplashVisibleNonHomePage() {
   return !!(pageId || routeHint);
 }
 
+function isCustomSplashHomeContext() {
+  const page = getCustomSplashVisiblePage();
+  if (page) {
+    return isCustomSplashHomePageElement(page);
+  }
+
+  try {
+    return isHomeRouteActive();
+  } catch {
+    const hash = String(window.location.hash || "").toLowerCase().trim();
+    return hash.startsWith("#/home") || hash.startsWith("#/index") || hash === "" || hash === "#";
+  }
+}
+
+function buildCustomSplashPingUrl(path, { force = false } = {}) {
+  const base = normalizeWithServer(path);
+  const cacheBucket = force ? String(Date.now()) : String(Math.floor(Date.now() / CUSTOM_SPLASH_PING_CACHE_MS));
+
+  try {
+    const url = new URL(base, window.location.origin);
+    url.searchParams.set("_ts", cacheBucket);
+
+    const version = String(window.__JMS_ASSET_VERSION__ || "").trim();
+    if (version) {
+      url.searchParams.set("v", version);
+    }
+
+    return url.toString();
+  } catch {
+    const sep = base.includes("?") ? "&" : "?";
+    return `${base}${sep}_ts=${encodeURIComponent(cacheBucket)}`;
+  }
+}
+
+async function probeCustomSplashPluginAvailability({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && __customSplashAvailabilityPromise) {
+    return __customSplashAvailabilityPromise;
+  }
+  if (
+    !force &&
+    __customSplashAvailabilityValue !== null &&
+    (now - __customSplashAvailabilityCheckedAt) < CUSTOM_SPLASH_PING_CACHE_MS
+  ) {
+    return __customSplashAvailabilityValue;
+  }
+
+  const task = (async () => {
+    for (const path of CUSTOM_SPLASH_PING_PATHS) {
+      try {
+        const res = await fetch(buildCustomSplashPingUrl(path, { force }), {
+          method: "GET",
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: {
+            "Cache-Control": "no-store, no-cache, max-age=0",
+            Pragma: "no-cache"
+          }
+        });
+
+        if (res.ok || res.status === 401 || res.status === 403) {
+          __customSplashAvailabilityValue = true;
+          __customSplashAvailabilityCheckedAt = Date.now();
+          return true;
+        }
+      } catch {}
+    }
+
+    __customSplashAvailabilityValue = false;
+    __customSplashAvailabilityCheckedAt = Date.now();
+    return false;
+  })();
+
+  __customSplashAvailabilityPromise = task;
+  try {
+    return await task;
+  } finally {
+    __customSplashAvailabilityPromise = null;
+  }
+}
+
 function getCustomSplashCandidateSlide(targetSlide = null) {
   if (targetSlide?.isConnected) {
     return targetSlide;
@@ -812,6 +901,7 @@ function hasCustomSplashFirstSlideReady() {
 function isCustomSplashReady() {
   const root = getCustomSplashRoot();
   if (!root?.hasAttribute(CUSTOM_SPLASH_ACTIVE_ATTR)) return true;
+  if (!isCustomSplashHomeContext()) return true;
   if (isCustomSplashSliderDisabled()) return true;
   if (hasCustomSplashFirstSlideReady()) return true;
   if (hasCustomSplashVisibleNonHomePage()) return true;
@@ -835,6 +925,52 @@ function stopCustomSplashWatchers() {
     clearTimeout(__customSplashHardTimer);
     __customSplashHardTimer = 0;
   }
+}
+
+function dismissCustomSplashImmediately(reason = "disabled") {
+  stopCustomSplashWatchers();
+  if (__customSplashCleanupTimer) {
+    clearTimeout(__customSplashCleanupTimer);
+    __customSplashCleanupTimer = 0;
+  }
+  if (__customSplashHideTimer) {
+    clearTimeout(__customSplashHideTimer);
+    __customSplashHideTimer = 0;
+  }
+
+  try {
+    getCustomSplashProgressApi()?.dismiss?.(reason, {
+      updateProgress: false,
+      instant: true,
+      cleanupDelayMs: 0
+    });
+  } catch {}
+
+  cleanupCustomSplashAttrs();
+
+  try {
+    getCustomSplashRoot()?.removeAttribute("data-jms-custom-splash-reason");
+  } catch {}
+
+  return false;
+}
+
+function ensureCustomSplashRouteGuard() {
+  if (__customSplashRouteGuardReady) return;
+  __customSplashRouteGuardReady = true;
+
+  const enforce = () => {
+    const root = getCustomSplashRoot();
+    if (!root?.hasAttribute(CUSTOM_SPLASH_ACTIVE_ATTR)) return;
+    if (isCustomSplashHomeContext()) return;
+    dismissCustomSplashImmediately("route-not-home");
+  };
+
+  document.addEventListener("readystatechange", enforce);
+  window.addEventListener("hashchange", enforce, { passive: true });
+  window.addEventListener("popstate", enforce, { passive: true });
+  window.addEventListener("pageshow", enforce, { passive: true });
+  enforce();
 }
 
 function finalizeCustomSplashHide(reason = "ready") {
@@ -938,10 +1074,23 @@ function initCustomSplash() {
         return false;
       }
 
+      if (!isCustomSplashHomeContext()) {
+        dismissCustomSplashImmediately("route-not-home");
+        return false;
+      }
+
       if (sliderDisabled) {
         hideCustomSplash("slider-disabled");
         return false;
       }
+
+      void probeCustomSplashPluginAvailability({ force: true }).then((available) => {
+        if (!available) {
+          dismissCustomSplashImmediately("plugin-unavailable");
+        }
+      }).catch(() => {
+        dismissCustomSplashImmediately("plugin-unavailable");
+      });
 
       if (!root?.hasAttribute(CUSTOM_SPLASH_ACTIVE_ATTR)) return true;
       applyCustomSplashCopy();
@@ -954,6 +1103,7 @@ function initCustomSplash() {
     window.__JMS_CUSTOM_SPLASH__ = api;
   } catch {}
 
+  ensureCustomSplashRouteGuard();
   if (!root) return api;
   if (!readCustomSplashEnabled(true)) {
     cleanupCustomSplashAttrs();
@@ -962,6 +1112,18 @@ function initCustomSplash() {
   if (!root.hasAttribute(CUSTOM_SPLASH_ACTIVE_ATTR)) {
     return api;
   }
+  if (!isCustomSplashHomeContext()) {
+    dismissCustomSplashImmediately("route-not-home");
+    return api;
+  }
+
+  void probeCustomSplashPluginAvailability().then((available) => {
+    if (!available) {
+      dismissCustomSplashImmediately("plugin-unavailable");
+    }
+  }).catch(() => {
+    dismissCustomSplashImmediately("plugin-unavailable");
+  });
 
   resetCustomSplashProgressState();
   applyCustomSplashCopy();
@@ -1466,7 +1628,7 @@ function installHomeTabSliderOnlyGate() {
 
 function __getLabelsSafe() {
   try {
-    const lang = (typeof getDefaultLanguage === "function" ? getDefaultLanguage() : null) || "tur";
+    const lang = (typeof getDefaultLanguage === "function" ? getDefaultLanguage() : null) || "eng";
     return (typeof getLanguageLabels === "function" ? getLanguageLabels(lang) : {}) || {};
   } catch {
     return {};
@@ -1970,6 +2132,13 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
     auroraslider: '/slider/src/auroraSlider.css'
   };
 
+  function getPauseOverlayCssHref(cfg = getLiveConfig()) {
+    const variant = String(cfg?.pauseOverlay?.cssVariant || '').trim();
+    return variant === 'pauseModul2'
+      ? '/slider/src/pauseModul2.css'
+      : '/slider/src/pauseModul.css';
+  }
+
   function applyFeatureCss() {
     const cfg = getLiveConfig();
     const variant = getCssVariant(cfg);
@@ -1986,7 +2155,7 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
 
     syncCSS('/slider/src/fontawesome/all.min.css', 'jms-css-fontawesome', true);
     D.getElementById('jms-css-notifications')?.remove();
-    syncCSS('/slider/src/pauseModul.css', 'jms-css-pause', pauseFeatureCssEnabled);
+    syncCSS(getPauseOverlayCssHref(cfg), 'jms-css-pause', pauseFeatureCssEnabled);
     syncCSS('/slider/src/personalRecommendations.css', 'jms-css-recs', recommendationCssEnabled);
     syncCSS('/slider/src/studioHubs.css', 'jms-css-studiohubs', studioHubsCssEnabled);
     syncCSS('/slider/src/detailsModal.css', 'jms-css-detailsModal', detailsModalCssEnabled);
@@ -2023,7 +2192,7 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
       removeCssByHref(['slider/src/profileChooser.css']);
     }
     if (!pauseFeatureCssEnabled) {
-      removeCssByHref(['slider/src/pauseModul.css']);
+      removeCssByHref(['slider/src/pauseModul.css', 'slider/src/pauseModul2.css']);
     }
     if (!subtitleCustomizerCssEnabled) {
       removeCssByHref(['slider/src/subtitleCustomizer.css']);
@@ -3743,6 +3912,7 @@ export async function slidesInit() {
     window.myUserId = userId;
 
     let items = [];
+    let backgroundWarmIds = [];
 
     try {
       let listItems = null;
@@ -3887,6 +4057,12 @@ export async function slidesInit() {
           "after:",
           allItems.length
         );
+
+        backgroundWarmIds = Array.from(new Set(
+          [...playingItems, ...allItems]
+            .map((item) => item?.Id)
+            .filter(Boolean)
+        ));
 
         let selectedItems = [];
         selectedItems = [...playingItems.slice(0, playingLimit)];
@@ -4036,6 +4212,27 @@ export async function slidesInit() {
     }
 
     if (!isBootActive()) return;
+    if (backgroundWarmIds.length && typeof fetchItemDetailsCached?.startWarmup === "function") {
+      const warmBatchSize = Math.max(
+        10,
+        Math.min(
+          200,
+          Number(config?.detailsWarmBatchSize) ||
+          Number(config?.detailsBulkBatchSize) ||
+          60
+        )
+      );
+      const warmDelayMs = Math.max(80, Number(config?.detailsWarmDelayMs) || 180);
+
+      void fetchItemDetailsCached.startWarmup({
+        scopeKey: `home:${userId}`,
+        ids: backgroundWarmIds,
+        batchSize: warmBatchSize,
+        delayMs: warmDelayMs,
+      }).catch((error) => {
+        console.debug("[JMS][cache] background warmup skipped:", error);
+      });
+    }
     try { primeQualityFromItems(items); } catch {}
     if (!items.length) {
     console.warn("Hiçbir slayt verisi elde edilemedi.");
@@ -4450,6 +4647,7 @@ function setupNavigationObserver() {
         homeSectionLog("navigation:left-home", {
           currentUrl,
         });
+        dismissCustomSplashImmediately("route-not-home");
         cleanupSlider();
         window.__initOnHomeOnce = false;
       }

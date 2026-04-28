@@ -11,6 +11,7 @@ import { getRandomAvatarUrl } from "./avatarPicker.js";
 import { createConfiguredUserAvatar } from "./userAvatar.js";
 import { saveCredentials, saveApiKey, clearCredentials } from "/Plugins/JMSFusion/runtime/auth.js";
 import { enhanceFormAccessibility } from "./accessibility.js";
+import { findHeaderMountTarget, getHeaderMountWaitSelector } from "./headerCompat.js";
 
 const OVERLAY_ID = "jfProfileChooserOverlay";
 const HEADER_BTN_ID = "jfProfileChooserBtn";
@@ -53,8 +54,9 @@ function timeoutThrottle(fn, wait = 250) {
 }
 
 const LEGACY_HIDE_STYLE_ID = "jfProfileChooserLegacyHideStyle";
-const NATIVE_HEADER_USER_SELECTOR = ".headerUserButtonRound, .headerUserButton";
+const NATIVE_HEADER_USER_SELECTOR = ".headerUserButtonRound, .headerUserButton, [aria-controls=\"app-user-menu\"]";
 const NATIVE_HEADER_USER_MARKER = "data-jfpc-hidden-native-user-btn";
+const MUI_USER_MENU_TRIGGER_SELECTOR = '[aria-controls="app-user-menu"]';
 
 function hideLegacyHeaderUserButtons(root = document) {
   const nodes = [];
@@ -770,6 +772,7 @@ function installHeaderButton(open, L, { isOverlayOpen } = {}) {
   let bodyObserver = null;
   let rootObserver = null;
   let cancelled = false;
+  let warmupRefreshIds = [];
 
   let __siCache = null, __siCacheTs = 0;
   const getSessionInfoCached = (ttl = 1500) => {
@@ -793,12 +796,35 @@ function installHeaderButton(open, L, { isOverlayOpen } = {}) {
   };
 
   function findHeaderRight() {
-    return (
-      document.querySelector(".skinHeader .headerRight") ||
-      document.querySelector(".skinHeader .headerButtons") ||
-      document.querySelector(".headerRight") ||
-      null
-    );
+    return findHeaderMountTarget({ variant: "profile" }).element;
+  }
+
+  function clearWarmupRefreshes() {
+    for (const timerId of warmupRefreshIds) {
+      try { clearTimeout(timerId); } catch {}
+    }
+    warmupRefreshIds = [];
+  }
+
+  function scheduleWarmupRefreshes() {
+    clearWarmupRefreshes();
+    const placeholder = String(L("profil", "Profil") || "Profil").trim();
+    const delays = [120, 420, 900, 1800, 3600, 7200];
+
+    warmupRefreshIds = delays.map((delay) => window.setTimeout(() => {
+      if (cancelled) return;
+      const btn = document.getElementById(HEADER_BTN_ID);
+      if (!btn) return;
+
+      const nameText = String(btn.querySelector(".jf-profile-header-name")?.textContent || "").trim();
+      const avatarSlot = btn.querySelector(".jf-profile-header-avatar");
+      const needsRefresh =
+        !nameText ||
+        nameText === placeholder ||
+        !hasRenderableAvatarContent(avatarSlot);
+
+      if (needsRefresh) refreshHeaderButton();
+    }, delay));
   }
 
   function waitForElement(selector, timeout = 8000) {
@@ -827,11 +853,16 @@ function installHeaderButton(open, L, { isOverlayOpen } = {}) {
 
   const mountOnce = (headerRightEl = null) => {
     if (cancelled) return false;
-    const headerRight = headerRightEl || findHeaderRight();
+    const headerTarget = findHeaderMountTarget({ variant: "profile" });
+    const headerRight = headerTarget?.element || headerRightEl;
+    const headerMode = String(headerTarget?.mode || "unknown").trim() || "unknown";
     if (!headerRight) return false;
 
     let btn = document.getElementById(HEADER_BTN_ID);
-    if (installed && btn && btn.parentElement === headerRight) return true;
+    if (installed && btn && btn.parentElement === headerRight) {
+      btn.setAttribute("data-jfpc-header-mode", headerMode);
+      return true;
+    }
     if (!btn) {
       btn = document.createElement("button");
       btn.id = HEADER_BTN_ID;
@@ -856,14 +887,19 @@ function installHeaderButton(open, L, { isOverlayOpen } = {}) {
         e.stopPropagation();
         open?.({ source: "header" });
       });
+      btn.setAttribute("data-jfpc-header-mode", headerMode);
       headerRight.appendChild(btn);
     } else if (btn.parentElement !== headerRight) {
+      btn.setAttribute("data-jfpc-header-mode", headerMode);
       try { headerRight.appendChild(btn); } catch {}
+    } else {
+      btn.setAttribute("data-jfpc-header-mode", headerMode);
     }
 
     try { window.__jmsQueueFeatureCssSync?.({ force: true }); } catch {}
 
     installed = true;
+    scheduleWarmupRefreshes();
     return true;
   };
 
@@ -924,7 +960,7 @@ function installHeaderButton(open, L, { isOverlayOpen } = {}) {
     try {
       const headerRight =
         findHeaderRight() ||
-        await waitForElement(".skinHeader .headerRight, .skinHeader .headerButtons, .headerRight", 10000);
+        await waitForElement(getHeaderMountWaitSelector("profile"), 10000);
       if (cancelled) return;
       mountOnce(headerRight);
       refreshHeaderButton();
@@ -983,6 +1019,7 @@ function installHeaderButton(open, L, { isOverlayOpen } = {}) {
 
   return () => {
     cancelled = true;
+    clearWarmupRefreshes();
     try { window.removeEventListener("hashchange", onHash); } catch {}
     try { headerObserver?.disconnect?.(); } catch {}
     try { bodyObserver?.disconnect?.(); } catch {}
@@ -1204,7 +1241,40 @@ export function initProfileChooser(options = {}) {
     if (e.target === overlay) close();
   }
 
+  function getInstalledHeaderMode() {
+    const mountedMode = String(
+      document.getElementById(HEADER_BTN_ID)?.getAttribute("data-jfpc-header-mode") || ""
+    ).trim();
+    if (mountedMode) return mountedMode;
+    try {
+      return String(findHeaderMountTarget({ variant: "profile" })?.mode || "").trim() || "unknown";
+    } catch {
+      return "unknown";
+    }
+  }
+
+  function openMuiUserMenuFromHeader() {
+    if (getInstalledHeaderMode() !== "mui-user") return false;
+
+    let trigger = null;
+    try {
+      const mountTarget = findHeaderMountTarget({ variant: "profile" })?.element || null;
+      trigger =
+        mountTarget?.querySelector?.(MUI_USER_MENU_TRIGGER_SELECTOR) ||
+        document.querySelector(MUI_USER_MENU_TRIGGER_SELECTOR);
+    } catch {}
+
+    if (!trigger) return false;
+
+    close();
+    requestAnimationFrame(() => {
+      try { trigger.click(); } catch {}
+    });
+    return true;
+  }
+
   function goSettings() {
+    if (openMuiUserMenuFromHeader()) return;
     goToMyPreferencesMenu();
     close();
   }

@@ -29,11 +29,44 @@ async function getAuthHeaders() {
   return h;
 }
 
+function readAdminValue(value) {
+  if (value === true || value === "true" || value === 1 || value === "1") return true;
+  if (value === false || value === "false" || value === 0 || value === "0") return false;
+  return null;
+}
+
+function readAdminFromUser(user) {
+  if (!user || typeof user !== "object") return null;
+
+  const policy = user.Policy || user.UserPolicy || null;
+  const candidates = [
+    policy?.IsAdministrator,
+    policy?.IsAdmin,
+    policy?.IsAdminUser,
+    user?.IsAdministrator,
+    user?.isAdministrator,
+    user?.IsAdmin,
+    user?.isAdmin,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = readAdminValue(candidate);
+    if (normalized !== null) return normalized;
+  }
+
+  return null;
+}
+
 async function checkUserIsAdmin() {
   try {
     if (!window.ApiClient) return false;
+
+    const liveAdmin = readAdminFromUser(window.ApiClient?._currentUser);
+    if (liveAdmin !== null) return liveAdmin;
+
     const user = await window.ApiClient.getCurrentUser();
-    return !!(user && user.Policy && user.Policy.IsAdministrator);
+    const currentAdmin = readAdminFromUser(user);
+    return currentAdmin === true;
   } catch (error) {
     console.error('Kullanıcı yetki kontrolü hatası:', error);
     return false;

@@ -1,5 +1,5 @@
 import { getConfig } from "../../config.js";
-import { getLanguageLabels, getDefaultLanguage } from '../../.././language/index.js';
+import { getLanguageLabels, getDefaultLanguage, getStoredLanguagePreference } from '../../.././language/index.js';
 import { enhanceFormAccessibility } from "../../accessibility.js";
 
 export function createSettingsModal() {
@@ -24,9 +24,13 @@ export function createSettingsModal() {
     languageLabel.textContent = labels.defaultLanguage || 'Dil:';
     const languageSelect = document.createElement('select');
     languageSelect.name = 'defaultLanguage';
+    const uiPref = getStoredLanguagePreference() || 'auto';
+    const effective = getDefaultLanguage();
     const languages = [
+        { value: 'auto', label: labels.optionAuto || '🌐 Otomatik (Tarayıcı dili)' },
         { value: 'tur', label: '🇹🇷 Türkçe' },
         { value: 'eng', label: '🇬🇧 English' },
+        { value: 'spa', label: labels.optionEspanol || '🇪🇸 Español' },
         { value: 'deu', label: '🇩🇪 Deutsch' },
         { value: 'fre', label: '🇫🇷 Français' },
         { value: 'rus', label: '🇷🇺 Русский' },
@@ -36,11 +40,13 @@ export function createSettingsModal() {
         const option = document.createElement('option');
         option.value = lang.value;
         option.textContent = lang.label;
-        if (lang.value === config.defaultLanguage) {
-            option.selected = true;
-        }
         languageSelect.appendChild(option);
     });
+
+    const selectedLanguage = languages.some(lang => lang.value === uiPref)
+        ? uiPref
+        : (languages.some(lang => lang.value === effective) ? effective : 'auto');
+    languageSelect.value = selectedLanguage;
 
     languageDiv.append(languageLabel, languageSelect);
 

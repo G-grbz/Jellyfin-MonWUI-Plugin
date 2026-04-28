@@ -16,7 +16,8 @@ const STYLE_ID = "jms-parental-pin-style";
 const NATIVE_PLAY_CONTEXT_TTL_MS = 20_000;
 const NATIVE_PLAY_ACTIONS = new Set([
   "play",
-  "resume"
+  "resume",
+  "playallfromhere"
 ]);
 const NATIVE_PLAY_ICON_TEXTS = new Set([
   "play_arrow",
@@ -1028,6 +1029,7 @@ function resolveNativePlayButton(target) {
       ".itemAction",
       "[data-action=\"play\"]",
       "[data-action=\"resume\"]",
+      "[data-action=\"playallfromhere\"]",
       ".btnPlay",
       ".btnResume",
       ".actionSheetMenuItem",

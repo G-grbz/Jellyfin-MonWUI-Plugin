@@ -11,12 +11,13 @@ import { faIconHtml } from "../faIcons.js";
 import { loadCSS } from "../playerStyles.js";
 import { apiUrl } from "./core/auth.js";
 import { getEmbyHeaders, getSessionInfo } from "/Plugins/JMSFusion/runtime/api.js";
+import { applyHeaderIconButtonMode, findHeaderMountTarget, getHeaderMountWaitSelector } from "../headerCompat.js";
 
 export { isMobileDevice } from "../playerStyles.js";
 
 const config = getConfig();
 const GMMP_REMOTE_STATE_INTERVAL_MS = 4000;
-const GMMP_REMOTE_COMMAND_INTERVAL_MS = 1200;
+const GMMP_REMOTE_COMMAND_INTERVAL_MS = 2500;
 
 let gmmpRemoteStateTimer = 0;
 let gmmpRemoteCommandTimer = 0;
@@ -25,6 +26,8 @@ let gmmpRemoteCommandBusy = false;
 let gmmpRemoteLastCommandSequence = 0;
 let gmmpRemoteLastStateSignature = "";
 let gmmpRemoteLifecycleHooksInstalled = false;
+let playerHeaderObserver = null;
+const PLAYER_HEADER_LEGACY_CLASS = "headerSyncButton syncButton headerButton headerButtonRight paper-icon-button-light";
 
 function logGmmpRemote(message, detail = undefined, level = "info") {
   try {
@@ -118,6 +121,24 @@ function buildGmmpStatePayload() {
   };
 }
 
+function isGmmpEnabled() {
+  const liveConfig = (typeof getConfig === "function" ? getConfig() : null) || config || {};
+  return liveConfig.enabledGmmp !== false;
+}
+
+function isRemoteGmmpSyncEnabled() {
+  const liveConfig = (typeof getConfig === "function" ? getConfig() : null) || config || {};
+  return isGmmpEnabled() && liveConfig.enableCastModule !== false;
+}
+
+function hasActiveRemoteGmmpTrack() {
+  try {
+    return buildGmmpStatePayload().hasCurrentTrack === true;
+  } catch {
+    return false;
+  }
+}
+
 function getGmmpStateSignature(payload) {
   if (!payload?.hasCurrentTrack) {
     return "";
@@ -156,6 +177,10 @@ function buildInactiveGmmpStatePayload() {
 }
 
 async function postRemoteGmmpState(payload, { keepalive = false } = {}) {
+  if (!isRemoteGmmpSyncEnabled()) {
+    return false;
+  }
+
   try {
     const response = await fetch(apiUrl("/Plugins/JMSFusion/gmmp/state"), {
       method: "POST",
@@ -186,6 +211,7 @@ async function postRemoteGmmpState(payload, { keepalive = false } = {}) {
 }
 
 async function syncRemoteGmmpState(force = false) {
+  if (!isRemoteGmmpSyncEnabled()) return false;
   if (gmmpRemoteStateBusy) return false;
 
   const payload = buildGmmpStatePayload();
@@ -211,6 +237,7 @@ async function syncRemoteGmmpState(force = false) {
 }
 
 async function clearRemoteGmmpState({ reason = "manual", keepalive = false } = {}) {
+  if (!isRemoteGmmpSyncEnabled()) return false;
   const payload = buildInactiveGmmpStatePayload();
   if (!payload.sessionId && !payload.deviceId) {
     return false;
@@ -289,7 +316,9 @@ async function applyRemoteGmmpCommand(command) {
 }
 
 async function pollRemoteGmmpCommands() {
+  if (!isRemoteGmmpSyncEnabled()) return false;
   if (gmmpRemoteCommandBusy) return false;
+  if (!hasActiveRemoteGmmpTrack()) return false;
 
   const { sessionId, deviceId } = getGmmpSyncContext();
   if (!sessionId && !deviceId) {
@@ -364,6 +393,14 @@ async function pollRemoteGmmpCommands() {
 }
 
 function ensureRemoteGmmpSync() {
+  if (!isRemoteGmmpSyncEnabled()) {
+    stopRemoteGmmpSync();
+    return false;
+  }
+
+  const startedStateTimer = !gmmpRemoteStateTimer;
+  const startedCommandTimer = !gmmpRemoteCommandTimer;
+
   if (!gmmpRemoteStateTimer) {
     gmmpRemoteStateTimer = window.setInterval(() => {
       void syncRemoteGmmpState(false);
@@ -375,6 +412,30 @@ function ensureRemoteGmmpSync() {
       void pollRemoteGmmpCommands();
     }, GMMP_REMOTE_COMMAND_INTERVAL_MS);
   }
+
+  if (startedStateTimer || startedCommandTimer) {
+    queueMicrotask(() => {
+      void syncRemoteGmmpState(true);
+      void pollRemoteGmmpCommands();
+    });
+  }
+
+  return true;
+}
+
+function stopRemoteGmmpSync() {
+  if (gmmpRemoteStateTimer) {
+    clearInterval(gmmpRemoteStateTimer);
+    gmmpRemoteStateTimer = 0;
+  }
+
+  if (gmmpRemoteCommandTimer) {
+    clearInterval(gmmpRemoteCommandTimer);
+    gmmpRemoteCommandTimer = 0;
+  }
+
+  gmmpRemoteStateBusy = false;
+  gmmpRemoteCommandBusy = false;
 }
 
 function installRemoteGmmpLifecycleHooks() {
@@ -512,6 +573,11 @@ async function setGmmpVolume(volumeLevel) {
 
 export async function ensureGmmpInit({ show = true } = {}) {
   try {
+    if (!isGmmpEnabled()) {
+      return false;
+    }
+
+    ensureRemoteGmmpSync();
     initializeControlStates?.();
     if (!isPlayerInitialized()) {
       await loadJSMediaTags?.();
@@ -591,6 +657,7 @@ export async function destroyGmmp({ reason = "manual" } = {}) {
     try { musicPlayerState.selectedTracks?.clear?.(); } catch {}
     musicPlayerState.selectedTracks = new Set();
 
+    stopRemoteGmmpSync();
     await clearRemoteGmmpState({ reason: `destroy:${reason}` }).catch(() => false);
     return true;
   } catch (err) {
@@ -609,14 +676,88 @@ function ensurePointerStylesInjected() {
   style.textContent = `
     html .skinHeader { pointer-events: all !important; }
     button#jellyfinPlayerToggle {
-      display: block !important;
+      align-items: center;
+      background: none !important;
+      border: none !important;
+      cursor: pointer !important;
+      display: inline-flex !important;
+      justify-content: center;
       opacity: 1 !important;
       pointer-events: all !important;
-      background: none !important;
-      text-shadow: rgb(255 255 255) 0 0 2px !important;
-      cursor: pointer !important;
-      border: none !important;
+      text-shadow: none !important;
     }
+    button#jellyfinPlayerToggle[data-jms-header-mode="legacy"] {
+      text-shadow: rgb(255 255 255) 0 0 2px !important;
+    }
+    .jms-mui-header-icon-button,.jms-mui-header-icon-button.MuiButtonBase-root MuiIconButton-root.MuiIconButton-colorInherit.MuiIconButton-sizeLarge {
+      display: inline-flex;
+      -webkit-box-align: center;
+      align-items: center;
+      -webkit-box-pack: center;
+      justify-content: center;
+      position: relative;
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+      background-color: transparent;
+      cursor: pointer;
+      user-select: none;
+      vertical-align: middle;
+      appearance: none;
+      text-align: center;
+      --IconButton-hoverBg: rgba(var(--jf-palette-action-activeChannel) / var(--jf-palette-action-hoverOpacity));
+      color: inherit;
+      font-size: 1rem;
+      outline: 0px;
+      border-width: 0px;
+      border-style: none;
+      border-color: currentcolor;
+      color: currentcolor;
+      border-image: initial;
+      margin: 0px;
+      text-decoration: none;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      transition: background-color 150ms cubic-bezier(0.4, 0, 0.2, 1);
+      padding: 12px;
+  }
+
+  a.monwui-watchlist-nav-button.monwui-watchlist-nav-link.MuiButtonBase-root.MuiButton-root.MuiButton-text.MuiButton-textInherit.MuiButton-sizeMedium.MuiButton-textSizeMedium.MuiButton-colorInherit {
+      display: inline-flex;
+      -webkit-box-align: center;
+      align-items: center;
+      -webkit-box-pack: center;
+      justify-content: center;
+      position: relative;
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+      cursor: pointer;
+      user-select: none;
+      vertical-align: middle;
+      color: currentcolor;
+      appearance: none;
+      font-family: "Noto Sans", sans-serif;
+      font-weight: 500;
+      font-size: 0.875rem;
+      line-height: 1.75;
+      text-transform: none;
+      min-width: 64px;
+      background-color: var(--variant-textBg);
+      color: inherit;
+      --variant-containedBg: var(--jf-palette-Button-inheritContainedBg);
+      outline: 0px;
+      margin: 0px;
+      text-decoration: none;
+      border-width: 0px;
+      border-style: none;
+      border-image: initial;
+      border-radius: var(--jf-shape-borderRadius);
+      padding: 6px 8px;
+      border-color: currentcolor;
+      transition: background-color 250ms cubic-bezier(0.4, 0, 0.2, 1), box-shadow 250ms cubic-bezier(0.4, 0, 0.2, 1), border-color 250ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  span.MuiButton-icon.MuiButton-startIcon.MuiButton-iconSizeMedium.monwui-watchlist-nav-icon {
+      font-size: 18px;
+  }
   `;
   document.head.appendChild(style);
 }
@@ -658,8 +799,6 @@ function createPlayerButton() {
     const btn = document.createElement("button");
     btn.id = "jellyfinPlayerToggle";
     btn.type = "button";
-    btn.className = "headerSyncButton syncButton headerButton headerButtonRight paper-icon-button-light";
-    btn.setAttribute("is", "paper-icon-button-light");
     btn.setAttribute("aria-label", "GMMP Aç/Kapa");
     btn.title = "GMMP";
     btn.innerHTML = faIconHtml("play", "gmmp");
@@ -668,10 +807,66 @@ function createPlayerButton() {
   return null;
 }
 
+function ensurePlayerButtonMounted() {
+  const cfg = getConfig();
+  if (cfg?.enabledGmmp === false) {
+    stopRemoteGmmpSync();
+    document.getElementById("jellyfinPlayerToggle")?.remove?.();
+    return true;
+  }
+
+  const { element: header, mode } = findHeaderMountTarget({ variant: "actions" });
+  if (!header) return false;
+
+  let btn = document.getElementById("jellyfinPlayerToggle");
+  if (!btn) {
+    btn = createPlayerButton();
+    if (!btn) return false;
+    btn.addEventListener("click", onToggleClick, { passive: true });
+  }
+
+  applyHeaderIconButtonMode(btn, mode, {
+    legacyClassName: PLAYER_HEADER_LEGACY_CLASS,
+  });
+
+  if (btn.parentElement === header) return true;
+
+  try {
+    header.insertBefore(btn, header.firstChild);
+  } catch {
+    header.appendChild(btn);
+  }
+
+  return true;
+}
+
+function startPlayerButtonSentinel() {
+  if (playerHeaderObserver) return;
+  const root = document.body || document.documentElement;
+  if (!root) return;
+
+  playerHeaderObserver = new MutationObserver(() => {
+    ensurePlayerButtonMounted();
+  });
+
+  try {
+    playerHeaderObserver.observe(root, { childList: true, subtree: true });
+  } catch {
+    try { playerHeaderObserver.disconnect(); } catch {}
+    playerHeaderObserver = null;
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      ensurePlayerButtonMounted();
+    }
+  });
+}
+
 let initInProgress = false;
 
-ensureRemoteGmmpSync();
 installRemoteGmmpLifecycleHooks();
+ensureRemoteGmmpSync();
 
 async function onToggleClick() {
   if (initInProgress) return;
@@ -735,14 +930,11 @@ export async function addPlayerButton() {
     forceSkinHeaderPointerEvents();
     loadCSS();
 
-    const header = await waitForElement(".headerRight");
-    if (document.getElementById("jellyfinPlayerToggle")) return;
-
-    const btn = createPlayerButton();
-    if (!btn) return;
-    header.insertBefore(btn, header.firstChild);
-
-    btn.addEventListener("click", onToggleClick, { passive: true });
+    if (!ensurePlayerButtonMounted()) {
+      await waitForElement(getHeaderMountWaitSelector("actions"));
+      ensurePlayerButtonMounted();
+    }
+    startPlayerButtonSentinel();
   } catch (err) {
   }
 }

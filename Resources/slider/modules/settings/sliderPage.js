@@ -62,7 +62,7 @@ export function createSliderPanel(config, labels) {
     { value: 'auto', label: labels.optionAuto || '🌐 Otomatik (Tarayıcı dili)' },
     { value: 'tur',  label: labels.optionTurkish || '🇹🇷 Türkçe' },
     { value: 'eng',  label: labels.optionEnglish || '🇬🇧 English' },
-     { value: 'spa',  label: labels.optionEspanol || '🇪🇸 Español' },
+    { value: 'spa',  label: labels.optionEspanol || '🇪🇸 Español' },
     { value: 'deu',  label: labels.optionGerman  || '🇩🇪 Deutsch' },
     { value: 'fre',  label: labels.optionFrench  || '🇫🇷 Français' },
     { value: 'rus',  label: labels.optionRussian || '🇷🇺 Русский' },
@@ -72,11 +72,13 @@ export function createSliderPanel(config, labels) {
     const option = document.createElement('option');
     option.value = lang.value;
     option.textContent = lang.label;
-    if (lang.value === uiPref || (uiPref === 'auto' && lang.value === effective)) {
-      option.selected = true;
-    }
     languageSelect.appendChild(option);
   });
+
+  const selectedLanguage = languages.some(lang => lang.value === uiPref)
+    ? uiPref
+    : (languages.some(lang => lang.value === effective) ? effective : 'auto');
+  languageSelect.value = selectedLanguage;
 
   languageDiv.append(languageLabel, languageSelect);
 

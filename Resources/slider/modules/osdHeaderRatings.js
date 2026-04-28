@@ -1,10 +1,20 @@
 import { getSessionInfo, getAuthHeader } from "/Plugins/JMSFusion/runtime/api.js";
 import { getConfig, getPauseFeaturesRuntimeConfig } from "./config.js";
 import { getTomatoIconHtml } from "./customIcons.js";
+import { withServer } from "./jfUrl.js";
 
 const HOST_ID = "jms-osd-header-ratings-v4";
 const SESSION_POLL_INTERVAL_MS = 10_000;
 const ITEM_DETAILS_CACHE_TTL_MS = 2_500;
+const HOST_BRAND_SELECTOR = '[data-jms-osd-header-brand="1"]';
+const HOST_RATINGS_SELECTOR = '[data-jms-osd-header-ratings="1"]';
+const MUI_PLAYBACK_HEADER_SELECTOR = ".MuiToolbar-root";
+const MUI_PLAYBACK_ACTION_STRONG_SELECTOR = [
+  '[aria-controls="app-sync-play-menu"]',
+  '[aria-controls="app-remote-play-menu"]',
+].join(", ");
+const MUI_PLAYBACK_ACTION_WEAK_SELECTOR = "#jellyfinPlayerToggle";
+const MUI_BACK_LABEL_TOKENS = ["geri", "back", "zuruck", "zurück", "retour", "volver", "назад"];
 
 function buildAuthHeaders() {
   const s =
@@ -119,16 +129,115 @@ function isPlaybackScreenActive() {
   return true;
 }
 
-function pickOsdHeaderAndTitleEl() {
+function isArrowBackButton(button) {
+  if (!(button instanceof HTMLElement)) return false;
+  if (!isRenderableNode(button)) return false;
+
+  try {
+    if (button.querySelector('svg[data-testid="ArrowBackIcon"]')) return true;
+  } catch {}
+
+  const rawLabel = String(
+    button.getAttribute("aria-label") ||
+    button.getAttribute("title") ||
+    button.textContent ||
+    ""
+  ).trim();
+  if (!rawLabel) return false;
+
+  const normalized = rawLabel
+    .toLocaleLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  return MUI_BACK_LABEL_TOKENS.some((token) => normalized.includes(token));
+}
+
+function findMuiPlaybackHeaderMount() {
+  const toolbars = Array.from(
+    document.querySelectorAll(MUI_PLAYBACK_HEADER_SELECTOR)
+  ).filter(isVisibleBox);
+  if (!toolbars.length) return null;
+
+  let best = null;
+  let bestScore = -Infinity;
+
+  toolbars.forEach((toolbar, index) => {
+    const buttons = Array.from(toolbar.querySelectorAll("button"));
+    const backButton = buttons.find(isArrowBackButton) || null;
+    if (!backButton) return;
+
+    const hasStrongPlaybackActions = !!toolbar.querySelector(MUI_PLAYBACK_ACTION_STRONG_SELECTOR);
+    const hasWeakPlaybackActions = !!toolbar.querySelector(MUI_PLAYBACK_ACTION_WEAK_SELECTOR);
+    const hasNotificationButton = !!toolbar.querySelector("#jfNotifBtn");
+    const rect = toolbar.getBoundingClientRect?.() || null;
+
+    let score = index / 1000;
+    if (hasStrongPlaybackActions) score += 50;
+    if (hasWeakPlaybackActions) score += 16;
+    if (hasNotificationButton) score += 2;
+    if (backButton.classList.contains("MuiIconButton-edgeStart")) score += 8;
+    if (rect) {
+      if (rect.top >= -4 && rect.top <= Math.max(220, (window.innerHeight || 0) * 0.28)) score += 20;
+      if (rect.width > 120) score += 5;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = {
+        header: toolbar,
+        anchorEl: backButton,
+        containerEl: backButton.parentElement || toolbar,
+        kind: "mui",
+        playbackStrength: hasStrongPlaybackActions ? 2 : (hasWeakPlaybackActions ? 1 : 0),
+      };
+    }
+  });
+
+  return best;
+}
+
+function findLastRenderableChild(container) {
+  if (!(container instanceof HTMLElement)) return null;
+  for (let i = container.children.length - 1; i >= 0; i -= 1) {
+    const child = container.children[i];
+    if (child?.id === HOST_ID) continue;
+    if (isRenderableNode(child)) return child;
+  }
+  return null;
+}
+
+function pickLegacyOsdHeaderMount() {
   const activeContainer = getActiveVideoContainer();
-  if (!activeContainer) return { header: null, titleEl: null };
+  if (!activeContainer) {
+    return {
+      header: null,
+      anchorEl: null,
+      containerEl: null,
+      kind: "legacy",
+      playbackStrength: 2,
+    };
+  }
 
   const headers = Array.from(document.querySelectorAll(
     ".skinHeader.osdHeader, .skinHeader.focuscontainer-x.osdHeader, .osdHeader"
-  )).filter(isRenderableNode);
+  )).filter(isVisibleBox);
   const header = headers.length ? headers[headers.length - 1] : null;
 
-  if (!header) return { header: null, titleEl: null };
+  if (!header) {
+    return {
+      header: null,
+      anchorEl: null,
+      containerEl: null,
+      kind: "legacy",
+      playbackStrength: 2,
+    };
+  }
+
+  const headerLeft =
+    header.querySelector(".headerLeft") ||
+    header.querySelector(".skinHeader .headerLeft") ||
+    null;
 
   const titleEl =
     header.querySelector(".pageTitle") ||
@@ -137,48 +246,362 @@ function pickOsdHeaderAndTitleEl() {
     header.querySelector("h1,h2,.sectionTitle,.headerName") ||
     null;
 
-  return { header, titleEl };
+  const containerEl =
+    headerLeft instanceof HTMLElement && isRenderableNode(headerLeft)
+      ? headerLeft
+      : titleEl instanceof HTMLElement && titleEl.parentElement instanceof HTMLElement
+        ? titleEl.parentElement
+        : null;
+
+  if (!(containerEl instanceof HTMLElement) || !isRenderableNode(containerEl)) {
+    return {
+      header: null,
+      anchorEl: null,
+      containerEl: null,
+      kind: "legacy",
+      playbackStrength: 2,
+    };
+  }
+
+  const anchorEl =
+    titleEl instanceof HTMLElement && titleEl.parentElement === containerEl
+      ? titleEl
+      : findLastRenderableChild(containerEl);
+
+  return {
+    header,
+    anchorEl,
+    containerEl,
+    kind: "legacy",
+    playbackStrength: 2,
+  };
 }
 
-function syncHostPlacement(titleEl, host) {
-  if (!(titleEl instanceof HTMLElement) || !(host instanceof HTMLElement)) return;
-  if (
-    host.parentElement !== titleEl.parentElement ||
-    host.previousElementSibling !== titleEl
-  ) {
-    titleEl.insertAdjacentElement("afterend", host);
+function pickOsdHeaderMount() {
+  const mui = findMuiPlaybackHeaderMount();
+  const legacy = pickLegacyOsdHeaderMount();
+  if (legacy?.header && legacy?.containerEl && (!mui?.header || (mui?.playbackStrength || 0) < 2)) {
+    return legacy;
   }
+  if (mui?.header && mui?.anchorEl) return mui;
+  if (legacy?.header && legacy?.containerEl) return legacy;
+  return { header: null, anchorEl: null, containerEl: null, kind: "unknown" };
+}
+
+function syncHostPlacement(anchorEl, host, containerEl = null) {
+  if (!(host instanceof HTMLElement)) return;
+
+  const parent =
+    containerEl instanceof HTMLElement
+      ? containerEl
+      : anchorEl instanceof HTMLElement
+        ? anchorEl.parentElement
+        : null;
+  if (!(parent instanceof HTMLElement)) return;
+
+  if (anchorEl instanceof HTMLElement && anchorEl.parentElement === parent) {
+    if (
+      host.parentElement !== parent ||
+      host.previousElementSibling !== anchorEl
+    ) {
+      anchorEl.insertAdjacentElement("afterend", host);
+    }
+    return;
+  }
+
+  if (host.parentElement !== parent || host !== parent.lastElementChild) {
+    parent.appendChild(host);
+  }
+}
+
+function getHostMode(host) {
+  return String(host?.getAttribute?.("data-jms-osd-header-kind") || "legacy").trim() || "legacy";
+}
+
+function getHostVisibleDisplay(mode) {
+  return mode === "mui" ? "flex" : "inline-flex";
+}
+
+function getHostBrandEl(host) {
+  return host?.querySelector?.(HOST_BRAND_SELECTOR) || null;
+}
+
+function getHostRatingsEl(host) {
+  return host?.querySelector?.(HOST_RATINGS_SELECTOR) || null;
+}
+
+function ensureHostStructure(host) {
+  if (!(host instanceof HTMLElement)) return { brandEl: null, ratingsEl: null };
+
+  let brandEl = getHostBrandEl(host);
+  if (!brandEl) {
+    brandEl = document.createElement("div");
+    brandEl.setAttribute("data-jms-osd-header-brand", "1");
+    host.appendChild(brandEl);
+  }
+
+  let ratingsEl = getHostRatingsEl(host);
+  if (!ratingsEl) {
+    ratingsEl = document.createElement("div");
+    ratingsEl.setAttribute("data-jms-osd-header-ratings", "1");
+    host.appendChild(ratingsEl);
+  }
+
+  return { brandEl, ratingsEl };
+}
+
+function applyHostModeStyles(host, mode) {
+  if (!(host instanceof HTMLElement)) return;
+  const { brandEl, ratingsEl } = ensureHostStructure(host);
+  const display = host.style.display === "none" ? "none" : getHostVisibleDisplay(mode);
+
+  host.setAttribute("data-jms-osd-header-kind", mode || "legacy");
+  Object.assign(host.style, {
+    display,
+    alignItems: "center",
+    gap: mode === "mui" ? "12px" : "10px",
+    whiteSpace: "nowrap",
+    pointerEvents: "none",
+    userSelect: "none",
+    color: "rgb(255, 255, 255)",
+    fontWeight: "600",
+    alignSelf: "center",
+    lineHeight: "1",
+    opacity: "1",
+    transform: "translate3d(0px, 0px, 0px)",
+    transition: "opacity 0.25s ease-in-out, transform 0.25s ease-in-out",
+    willChange: "opacity, transform",
+    padding: mode === "mui" ? "2px 8px" : "4px 6px",
+    margin: mode === "mui" ? "6px" : "0 0 0 .3em",
+    minWidth: mode === "mui" ? "0" : "",
+    overflow: mode === "mui" ? "hidden" : "visible",
+  });
+
+  if (brandEl) {
+    Object.assign(brandEl.style, {
+      display: mode === "mui" ? "inline-flex" : "none",
+      alignItems: "center",
+      flex: mode === "mui" ? "1 1 auto" : "0 0 auto",
+      minWidth: "0",
+      overflow: "hidden",
+    });
+  }
+
+  if (ratingsEl) {
+    Object.assign(ratingsEl.style, {
+      display: "inline-flex",
+      alignItems: "center",
+      gap: "10px",
+      lineHeight: "1",
+      color: "#fff",
+      marginLeft: "0",
+      flex: "0 0 auto",
+    });
+  }
+}
+
+function clearBrand(host) {
+  const brandEl = getHostBrandEl(host);
+  if (!brandEl) return;
+  brandEl.replaceChildren();
+  brandEl.removeAttribute("data-brand-key");
+  brandEl.style.display = "none";
+}
+
+function createTitleFallbackNode(title) {
+  const text = document.createElement("span");
+  text.className = "jms-osd-header-title";
+  text.textContent = title;
+  Object.assign(text.style, {
+    display: "block",
+    minWidth: "0",
+    maxWidth: "100%",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    color: "#ffffff",
+    fontWeight: "800",
+    fontSize: "clamp(14px, 1.45vw, 18px)",
+    letterSpacing: "0.01em",
+    textShadow: "0 1px 2px rgba(0,0,0,0.8)",
+  });
+  return text;
+}
+
+function buildBrandTitle(item) {
+  if (!item) return "";
+  const type = String(item?.Type || "").trim().toLowerCase();
+  if (type === "episode") {
+    return String(item?.SeriesName || item?.Name || item?.OriginalTitle || "").trim();
+  }
+  return String(item?.Name || item?.OriginalTitle || item?.SeriesName || "").trim();
+}
+
+function getLogoCandidate(item) {
+  if (!item) return null;
+
+  const directTag =
+    item?.ImageTags?.Logo ||
+    item?.ImageTags?.logo ||
+    item?.ImageTags?.LogoImageTag ||
+    item?.LogoImageTag ||
+    "";
+  const parentLogoItemId = String(item?.ParentLogoItemId || item?.ParentId || "").trim();
+  const parentLogoTag = String(item?.ParentLogoImageTag || "").trim();
+  const seriesId = String(item?.SeriesId || "").trim();
+  const seriesLogoTag = String(item?.SeriesLogoImageTag || "").trim();
+  const itemId = String(item?.Id || "").trim();
+  const type = String(item?.Type || "").trim().toLowerCase();
+
+  if (type === "episode" && seriesId && seriesLogoTag) {
+    return { itemId: seriesId, tag: seriesLogoTag };
+  }
+  if (itemId && directTag) {
+    return { itemId, tag: String(directTag).trim() };
+  }
+  if (parentLogoItemId && parentLogoTag) {
+    return { itemId: parentLogoItemId, tag: parentLogoTag };
+  }
+  if (seriesId && seriesLogoTag) {
+    return { itemId: seriesId, tag: seriesLogoTag };
+  }
+  return null;
+}
+
+function buildItemLogoUrl(item, width = 260, quality = 80) {
+  const candidate = getLogoCandidate(item);
+  if (!candidate?.itemId || !candidate?.tag) return "";
+
+  const qs = new URLSearchParams();
+  qs.set("maxWidth", String(width));
+  qs.set("quality", String(quality));
+  qs.set("EnableImageEnhancers", "false");
+  qs.set("tag", String(candidate.tag));
+
+  try {
+    const token = String(getSessionInfo?.()?.accessToken || "").trim();
+    if (token) qs.set("api_key", token);
+  } catch {}
+
+  return withServer(`/Items/${encodeURIComponent(String(candidate.itemId))}/Images/Logo?${qs.toString()}`);
+}
+
+function buildItemRenderKey(host, item) {
+  if (!item) return "";
+
+  const mode = getHostMode(host);
+  const logo = getLogoCandidate(item);
+  const logoKey = logo ? `${logo.itemId}:${logo.tag}` : "";
+  const title = buildBrandTitle(item);
+
+  return [
+    mode,
+    String(item?.Id || ""),
+    String(item?.CriticRating || ""),
+    String(item?.CommunityRating || ""),
+    String(item?.OfficialRating || ""),
+    logoKey,
+    title,
+  ].join("|");
+}
+
+function hasHostVisibleContent(host) {
+  if (!(host instanceof HTMLElement)) return false;
+  const brandEl = getHostBrandEl(host);
+  const ratingsEl = getHostRatingsEl(host);
+  const brandVisible = !!(
+    brandEl &&
+    brandEl.style.display !== "none" &&
+    (brandEl.querySelector("img") || String(brandEl.textContent || "").trim())
+  );
+  const ratingsVisible = !!String(ratingsEl?.innerHTML || "").trim();
+  return brandVisible || ratingsVisible;
+}
+
+function renderBrand(host, item) {
+  const brandEl = getHostBrandEl(host);
+  if (!brandEl) return false;
+
+  const mode = getHostMode(host);
+  if (mode !== "mui" || !item) {
+    clearBrand(host);
+    return false;
+  }
+
+  const title = buildBrandTitle(item);
+  const logoUrl = buildItemLogoUrl(item);
+  const brandKey = `${logoUrl}|${title}`;
+
+  if (brandEl.getAttribute("data-brand-key") === brandKey && hasHostVisibleContent(host)) {
+    brandEl.style.display = brandEl.childNodes.length ? "inline-flex" : "none";
+    return brandEl.childNodes.length > 0;
+  }
+
+  brandEl.setAttribute("data-brand-key", brandKey);
+  brandEl.replaceChildren();
+
+  Object.assign(brandEl.style, {
+    display: "none",
+    alignItems: "center",
+    flex: "1 1 auto",
+    minWidth: "0",
+    overflow: "hidden",
+  });
+
+  if (logoUrl) {
+    const img = document.createElement("img");
+    img.alt = title || "";
+    img.decoding = "async";
+    img.loading = "eager";
+    img.src = logoUrl;
+    Object.assign(img.style, {
+      display: "block",
+      width: "auto",
+      height: "auto",
+      maxWidth: "min(42vw, 260px)",
+      maxHeight: "clamp(24px, 4.3vh, 40px)",
+      objectFit: "contain",
+      filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.78))",
+    });
+    img.addEventListener("error", () => {
+      if (brandEl.getAttribute("data-brand-key") !== brandKey) return;
+      brandEl.replaceChildren();
+      if (!title) {
+        brandEl.style.display = "none";
+        return;
+      }
+      brandEl.appendChild(createTitleFallbackNode(title));
+      brandEl.style.display = "inline-flex";
+    }, { once: true });
+
+    brandEl.appendChild(img);
+    brandEl.style.display = "inline-flex";
+    return true;
+  }
+
+  if (!title) {
+    brandEl.style.display = "none";
+    return false;
+  }
+
+  brandEl.appendChild(createTitleFallbackNode(title));
+  brandEl.style.display = "inline-flex";
+  return true;
 }
 
 function ensureHost() {
-  const { header, titleEl } = pickOsdHeaderAndTitleEl();
-  if (!header || !titleEl) return null;
+  const { header, anchorEl, containerEl, kind } = pickOsdHeaderMount();
+  if (!header || !(containerEl instanceof HTMLElement || anchorEl instanceof HTMLElement)) return null;
 
-  let host = header.querySelector(`#${HOST_ID}`);
+  let host = document.getElementById(HOST_ID);
   if (!host) {
     host = document.createElement("div");
     host.id = HOST_ID;
-
-    Object.assign(host.style, {
-      display: 'flex',
-      alignItems: 'center',
-      gap: '10px',
-      whiteSpace: 'nowrap',
-      pointerEvents: 'none',
-      userSelect: 'none',
-      color: 'rgb(255, 255, 255)',
-      fontWeight: '600',
-      alignSelf: 'center',
-      lineHeight: '1',
-      opacity: '1',
-      transform: 'translate3d(0px, 0px, 0px)',
-      transition: 'opacity 0.25s ease-in-out, transform 0.25s ease-in-out',
-      willChange: 'opacity, transform',
-      padding: '4px 6px',
-      margin: '0 0 0 .3em'
-    });
+    host.style.display = "none";
   }
-  syncHostPlacement(titleEl, host);
+  ensureHostStructure(host);
+  applyHostModeStyles(host, kind);
+  syncHostPlacement(anchorEl, host, containerEl);
   return host;
 }
 
@@ -239,9 +662,9 @@ function parsePlayableIdFromVideo(videoEl) {
 }
 
 function getPlaybackItemIdFromDom() {
-  const domId = getItemIdFromDom();
-  if (domId) return domId;
-  return parsePlayableIdFromVideo(getActiveVideoEl());
+  const videoId = parsePlayableIdFromVideo(getActiveVideoEl());
+  if (videoId) return videoId;
+  return getItemIdFromDom();
 }
 
 const __itemDetailsCache = {
@@ -265,7 +688,24 @@ async function fetchItemDetails(itemId, userId) {
   const path = userId
     ? `/Users/${encodeURIComponent(String(userId))}/Items/${encodeURIComponent(id)}`
     : `/Items/${encodeURIComponent(id)}`;
-  const fields = encodeURIComponent("CommunityRating,CriticRating,OfficialRating");
+  const fields = encodeURIComponent([
+    "CommunityRating",
+    "CriticRating",
+    "OfficialRating",
+    "Name",
+    "OriginalTitle",
+    "Type",
+    "SeriesId",
+    "SeriesName",
+    "SeriesLogoImageTag",
+    "LogoImageTag",
+    "ParentLogoItemId",
+    "ParentLogoImageTag",
+    "ParentId",
+    "ImageTags",
+    "IndexNumber",
+    "ParentIndexNumber",
+  ].join(","));
   const url = `${path}?Fields=${fields}`;
 
   const res = await fetch(url, { headers: buildAuthHeaders() });
@@ -289,11 +729,17 @@ async function resolveCurrentPlaybackItem(userId, {
     return !!(suppressedId && id && id === suppressedId);
   };
 
-  const domItemId = getPlaybackItemIdFromDom();
+  const videoItemId = parsePlayableIdFromVideo(getActiveVideoEl());
+  const domItemId = getItemIdFromDom();
+  const directItemIds = [videoItemId, domItemId]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .filter((value, index, list) => list.indexOf(value) === index);
 
-  if (domItemId && !isSuppressed(domItemId)) {
+  for (const itemId of directItemIds) {
+    if (isSuppressed(itemId)) continue;
     try {
-      const item = await fetchItemDetails(domItemId, userId);
+      const item = await fetchItemDetails(itemId, userId);
       if (item?.Id) return item;
     } catch {}
   }
@@ -304,7 +750,13 @@ async function resolveCurrentPlaybackItem(userId, {
   const sess = pickBestNowPlayingSession(sessions, userId);
   const item = sess?.NowPlayingItem || null;
   if (isSuppressed(item?.Id)) return null;
-  return item;
+  if (!item?.Id) return item;
+
+  try {
+    return await fetchItemDetails(item.Id, userId);
+  } catch {
+    return item;
+  }
 }
 
 function pickBestNowPlayingSession(sessions, userId) {
@@ -374,14 +826,16 @@ function buildOfficialHtml(officialRating) {
 
 function applyModernStyles(host) {
   if (!host) return;
+  const ratingsEl = getHostRatingsEl(host) || host;
+  const mode = getHostMode(host);
 
-  Object.assign(host.style, {
+  Object.assign(ratingsEl.style, {
     display: "inline-flex",
     alignItems: "center",
     gap: "10px",
-    alignSelf: "center",
     lineHeight: "1",
     color: "#fff",
+    marginLeft: "0",
   });
 
   host.querySelectorAll(".jms-rating-container, .jms-tomato-container, .jms-official-container").forEach((container) => {
@@ -525,7 +979,7 @@ function animateHost(host, show) {
   if (!host) return;
 
   if (show) {
-    host.style.display = "inline-flex";
+    host.style.display = getHostVisibleDisplay(getHostMode(host));
     requestAnimationFrame(() => {
       Object.assign(host.style, {
         opacity: "1",
@@ -548,16 +1002,19 @@ function animateHost(host, show) {
 
 function render(host, item, cfg) {
   if (!host) return;
+  const ratingsEl = getHostRatingsEl(host) || host;
 
   if (!item) {
-    host.innerHTML = "";
+    clearBrand(host);
+    ratingsEl.innerHTML = "";
     animateHost(host, false);
     return;
   }
 
   const ratingsState = getOsdHeaderRatingsState(cfg);
   if (!ratingsState.enabled) {
-    host.innerHTML = "";
+    clearBrand(host);
+    ratingsEl.innerHTML = "";
     animateHost(host, false);
     return;
   }
@@ -567,16 +1024,18 @@ function render(host, item, cfg) {
   const officialHtml = ratingsState.showOfficial ? buildOfficialHtml(item.OfficialRating) : "";
 
   const html = [communityHtml, tomatoHtml, officialHtml].filter(Boolean).join("");
+  const hasBrand = renderBrand(host, item);
 
-  if (host.innerHTML !== html) {
-    if (html) {
-      host.innerHTML = html;
-      applyModernStyles(host);
-      animateHost(host, true);
-    } else {
-      host.innerHTML = "";
-      animateHost(host, false);
-    }
+  if (ratingsEl.innerHTML !== html) {
+    ratingsEl.innerHTML = html;
+  }
+
+  applyModernStyles(host);
+
+  if (html || hasBrand) {
+    animateHost(host, true);
+  } else {
+    animateHost(host, false);
   }
 }
 
@@ -702,9 +1161,8 @@ export function initOsdHeaderRatings() {
         return;
       }
 
-      const key = `${item.Id || ""}:${item.CriticRating || ""}:${item.CommunityRating || ""}:${item.OfficialRating || ""}`;
-
-      const hostHasContent = !!String(host.innerHTML || "").trim();
+      const key = buildItemRenderKey(host, item);
+      const hostHasContent = hasHostVisibleContent(host);
       if (key && key === lastKey && hostHasContent) return;
       lastKey = key;
 

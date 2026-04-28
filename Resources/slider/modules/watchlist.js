@@ -10,6 +10,8 @@ const WATCHLIST_ENDPOINT = "/Plugins/jmsFusion/watchlist";
 export const WATCHLIST_MODAL_ID = "monwui-watchlist-modal-root";
 const WATCHLIST_STYLE_ID = "monwui-watchlist-modal-style";
 const WATCHLIST_NAV_BUTTON_CLASS = "monwui-watchlist-nav-button";
+const WATCHLIST_MUI_NAV_LINK_CLASS = "monwui-watchlist-nav-link";
+const WATCHLIST_NAV_KIND_ATTR = "data-monwui-watchlist-nav-kind";
 const DASHBOARD_TTL_MS = 30_000;
 
 let dashboardCache = null;
@@ -86,6 +88,7 @@ const nextWatchlistFrame = typeof requestAnimationFrame === "function"
 let watchlistViewModelCacheKey = "";
 let watchlistViewModelCacheValue = null;
 let watchlistViewModelCachePromise = null;
+const WATCHLIST_HOME_TAB_ROUTE_RE = /^#\/(?:home|index)\?tab=/i;
 
 function cfg() {
   return getConfig?.() || {};
@@ -455,12 +458,73 @@ function getWatchlistTabsButtonMarkup(label) {
   const safeLabel = escapeHtml(label);
   return `
     <span class="monwui-watchlist-nav-icon" aria-hidden="true">
-      <svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 20 20" focusable="false">
+      <svg class="monwui-watchlist-nav-svg" xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 20 20" focusable="false">
         <path fill="currentColor" d="M1 3h16v2H1Zm0 6h6v2H1Zm0 6h8v2H1Zm8-4.24h3.85L14.5 7l1.65 3.76H20l-3 3.17l.9 4.05l-3.4-2.14L11.1 18l.9-4.05Z" />
       </svg>
     </span>
     <span class="monwui-watchlist-nav-label">${safeLabel}</span>
   `;
+}
+
+function getWatchlistMuiTabsButtonMarkup(label) {
+  const safeLabel = escapeHtml(label);
+  return `
+    <span class="MuiButton-icon MuiButton-startIcon MuiButton-iconSizeMedium monwui-watchlist-nav-icon" aria-hidden="true">
+      <svg class="MuiSvgIcon-root MuiSvgIcon-fontSizeMedium monwui-watchlist-nav-svg" xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" focusable="false" aria-hidden="true" viewBox="0 0 20 20">
+        <path fill="currentColor" d="M1 3h16v2H1Zm0 6h6v2H1Zm0 6h8v2H1Zm8-4.24h3.85L14.5 7l1.65 3.76H20l-3 3.17l.9 4.05l-3.4-2.14L11.1 18l.9-4.05Z" />
+      </svg>
+    </span>
+    <span class="monwui-watchlist-nav-label">${safeLabel}</span>
+  `;
+}
+
+function getWatchlistNavHref() {
+  return text(window.location.hash).startsWith("#/index")
+    ? "#/index?tab=watchlist"
+    : "#/home?tab=watchlist";
+}
+
+function isMuiHomeTabLink(link) {
+  const href = text(link?.getAttribute?.("href"));
+  return WATCHLIST_HOME_TAB_ROUTE_RE.test(href);
+}
+
+function findMuiHomeTabsTargets() {
+  const targets = [];
+  const seen = new Set();
+  const favoritesLinks = Array.from(
+    document.querySelectorAll('a[href="#/home?tab=1"], a[href="#/index?tab=1"]')
+  );
+
+  for (const link of favoritesLinks) {
+    const container = link.parentElement;
+    if (!container || seen.has(container)) continue;
+    seen.add(container);
+    targets.push({ container, anchor: link });
+  }
+
+  if (targets.length) return targets;
+
+  const homeTabLinks = Array.from(
+    document.querySelectorAll('a[href^="#/home?tab="], a[href^="#/index?tab="]')
+  ).filter(isMuiHomeTabLink);
+
+  const grouped = new Map();
+  for (const link of homeTabLinks) {
+    const container = link.parentElement;
+    if (!container) continue;
+    const list = grouped.get(container) || [];
+    list.push(link);
+    grouped.set(container, list);
+  }
+
+  for (const [container, links] of grouped.entries()) {
+    if (!links.length || seen.has(container)) continue;
+    if (links.length < 2) continue;
+    targets.push({ container, anchor: links[links.length - 1] });
+  }
+
+  return targets;
 }
 
 function getCurrentUserContext() {
@@ -1565,7 +1629,8 @@ function ensureStyles() {
     #${WATCHLIST_MODAL_ID} .monwuiwl-share-cancel:hover {
       transform: translateY(-1px);
     }
-    .emby-tabs-slider .${WATCHLIST_NAV_BUTTON_CLASS} {
+    .emby-tabs-slider .${WATCHLIST_NAV_BUTTON_CLASS},
+    .${WATCHLIST_MUI_NAV_LINK_CLASS}.${WATCHLIST_NAV_BUTTON_CLASS} {
       align-items: center;
       display: inline-flex !important;
       gap: 8px;
@@ -1573,23 +1638,43 @@ function ensureStyles() {
       border:none;
       color: inherit;
     }
-    .emby-tabs-slider .${WATCHLIST_NAV_BUTTON_CLASS}:hover {
-      opacity: 1;
+    .${WATCHLIST_MUI_NAV_LINK_CLASS}.${WATCHLIST_NAV_BUTTON_CLASS} {
+      text-decoration: none;
     }
-    .emby-tabs-slider .${WATCHLIST_NAV_BUTTON_CLASS} .monwui-watchlist-nav-icon {
+    .emby-tabs-slider .${WATCHLIST_NAV_BUTTON_CLASS}:hover,
+    .${WATCHLIST_MUI_NAV_LINK_CLASS}.${WATCHLIST_NAV_BUTTON_CLASS}:hover {
+      opacity: 1;
+      text-decoration: none;
+    }
+    .emby-tabs-slider .${WATCHLIST_NAV_BUTTON_CLASS} .monwui-watchlist-nav-icon,
+    .${WATCHLIST_MUI_NAV_LINK_CLASS}.${WATCHLIST_NAV_BUTTON_CLASS} .monwui-watchlist-nav-icon {
       display: inline-flex;
       align-items: center;
       justify-content: center;
       line-height: 1;
       flex-shrink: 0;
+      min-width: 1em;
       pointer-events: none;
     }
-    .emby-tabs-slider .${WATCHLIST_NAV_BUTTON_CLASS} .monwui-watchlist-nav-label {
+    .emby-tabs-slider .${WATCHLIST_NAV_BUTTON_CLASS} .monwui-watchlist-nav-svg,
+    .${WATCHLIST_MUI_NAV_LINK_CLASS}.${WATCHLIST_NAV_BUTTON_CLASS} .monwui-watchlist-nav-svg {
+      display: block;
+      width: 1em;
+      height: 1em;
+      min-width: 1em;
+      min-height: 1em;
+      fill: currentColor;
+      overflow: visible;
+    }
+    .emby-tabs-slider .${WATCHLIST_NAV_BUTTON_CLASS} .monwui-watchlist-nav-label,
+    .${WATCHLIST_MUI_NAV_LINK_CLASS}.${WATCHLIST_NAV_BUTTON_CLASS} .monwui-watchlist-nav-label {
       display: inline-block;
       pointer-events: none;
     }
     .emby-tabs-slider .${WATCHLIST_NAV_BUTTON_CLASS} .monwui-watchlist-nav-icon svg,
-    .emby-tabs-slider .${WATCHLIST_NAV_BUTTON_CLASS} .monwui-watchlist-nav-icon path {
+    .emby-tabs-slider .${WATCHLIST_NAV_BUTTON_CLASS} .monwui-watchlist-nav-icon path,
+    .${WATCHLIST_MUI_NAV_LINK_CLASS}.${WATCHLIST_NAV_BUTTON_CLASS} .monwui-watchlist-nav-icon svg,
+    .${WATCHLIST_MUI_NAV_LINK_CLASS}.${WATCHLIST_NAV_BUTTON_CLASS} .monwui-watchlist-nav-icon path {
       pointer-events: none;
     }
     #${WATCHLIST_MODAL_ID} .monwuiwl-tabs {
@@ -5427,6 +5512,7 @@ function createTabsSliderButton() {
   const button = document.createElement("button");
   button.type = "button";
   button.className = `emby-tab-button ${WATCHLIST_NAV_BUTTON_CLASS}`;
+  button.setAttribute(WATCHLIST_NAV_KIND_ATTR, "legacy");
   button.setAttribute("aria-haspopup", "dialog");
   button.addEventListener("click", async (event) => {
     event.preventDefault();
@@ -5437,39 +5523,91 @@ function createTabsSliderButton() {
   return button;
 }
 
+function createMuiTabsSliderButton() {
+  const link = document.createElement("a");
+  link.className = [
+    WATCHLIST_NAV_BUTTON_CLASS,
+    WATCHLIST_MUI_NAV_LINK_CLASS,
+    "MuiButtonBase-root",
+    "MuiButton-root",
+    "MuiButton-text",
+    "MuiButton-textInherit",
+    "MuiButton-sizeMedium",
+    "MuiButton-textSizeMedium",
+    "MuiButton-colorInherit",
+  ].join(" ");
+  link.href = getWatchlistNavHref();
+  link.setAttribute(WATCHLIST_NAV_KIND_ATTR, "mui");
+  link.setAttribute("aria-haspopup", "dialog");
+  link.setAttribute("role", "button");
+  link.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    try { link.blur(); } catch {}
+    await openWatchlistModal({ initialTab: DEFAULT_WATCHLIST_TAB });
+  });
+  return link;
+}
+
 function refreshTabsSliderButton() {
   tabsSliderRefreshQueued = false;
   ensureStyles();
-  const sliders = document.querySelectorAll(".emby-tabs-slider");
-  if (!sliders.length) return false;
+  const sliders = Array.from(document.querySelectorAll(".emby-tabs-slider"));
+  const muiTargets = findMuiHomeTabsTargets();
+  if (!sliders.length && !muiTargets.length) return false;
 
   if (!shouldShowWatchlistTabsSliderButton()) {
-    sliders.forEach((slider) => {
-      if (!(slider instanceof HTMLElement)) return;
-      slider.querySelector(`.${WATCHLIST_NAV_BUTTON_CLASS}`)?.remove();
-    });
+    document.querySelectorAll(`.${WATCHLIST_NAV_BUTTON_CLASS}`).forEach((node) => node.remove());
     return true;
   }
+
+  const label = L("watchlistOpen", "İzleme Listesi");
+  const legacyMarkup = getWatchlistTabsButtonMarkup(label);
+  const muiMarkup = getWatchlistMuiTabsButtonMarkup(label);
 
   sliders.forEach((slider) => {
     if (!(slider instanceof HTMLElement)) return;
 
-    let button = slider.querySelector(`.${WATCHLIST_NAV_BUTTON_CLASS}`);
+    let button = slider.querySelector(`.${WATCHLIST_NAV_BUTTON_CLASS}[${WATCHLIST_NAV_KIND_ATTR}="legacy"]`);
     if (!button) {
       button = createTabsSliderButton();
       slider.appendChild(button);
     }
 
-    const label = L("watchlistOpen", "İzleme Listesi");
-    const nextMarkup = getWatchlistTabsButtonMarkup(label);
-    if (button.innerHTML !== nextMarkup) {
-      button.innerHTML = nextMarkup;
+    if (button.innerHTML !== legacyMarkup) {
+      button.innerHTML = legacyMarkup;
     }
     if (button.getAttribute("title") !== label) {
       button.setAttribute("title", label);
     }
     if (button.getAttribute("aria-label") !== label) {
       button.setAttribute("aria-label", label);
+    }
+  });
+
+  muiTargets.forEach(({ container, anchor }) => {
+    if (!(container instanceof HTMLElement)) return;
+    let link = container.querySelector(`.${WATCHLIST_NAV_BUTTON_CLASS}[${WATCHLIST_NAV_KIND_ATTR}="mui"]`);
+    if (!link) {
+      link = createMuiTabsSliderButton();
+      if (anchor?.parentElement === container && anchor.nextSibling) {
+        container.insertBefore(link, anchor.nextSibling);
+      } else if (anchor?.parentElement === container) {
+        container.appendChild(link);
+      } else {
+        container.appendChild(link);
+      }
+    }
+
+    link.setAttribute("href", getWatchlistNavHref());
+    if (link.innerHTML !== muiMarkup) {
+      link.innerHTML = muiMarkup;
+    }
+    if (link.getAttribute("title") !== label) {
+      link.setAttribute("title", label);
+    }
+    if (link.getAttribute("aria-label") !== label) {
+      link.setAttribute("aria-label", label);
     }
   });
 
@@ -5519,6 +5657,9 @@ function isTabsSliderMutationRelevant(mutations) {
       if (target.matches?.(".emby-tabs-slider") || target.closest?.(".emby-tabs-slider")) {
         return true;
       }
+      if (target.matches?.('a[href^="#/home?tab="], a[href^="#/index?tab="]') || target.querySelector?.('a[href^="#/home?tab="], a[href^="#/index?tab="]')) {
+        return true;
+      }
     }
 
     const nodes = [...mutation.addedNodes, ...mutation.removedNodes];
@@ -5528,6 +5669,9 @@ function isTabsSliderMutationRelevant(mutations) {
         node.matches?.(".emby-tabs-slider") ||
         node.querySelector?.(".emby-tabs-slider")
       ) {
+        return true;
+      }
+      if (node.matches?.('a[href^="#/home?tab="], a[href^="#/index?tab="]') || node.querySelector?.('a[href^="#/home?tab="], a[href^="#/index?tab="]')) {
         return true;
       }
     }

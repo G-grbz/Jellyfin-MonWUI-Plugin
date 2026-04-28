@@ -56,6 +56,7 @@ const DESKTOP_INITIAL_GENRE_LOADS = 2;
 const GENRE_BATCH_SIZE = Number(getConfig()?.genreRowsBatchSize) || (IS_MOBILE ? MOBILE_ROW_BATCH_SIZE : 1);
 const GENRE_ROOT_MARGIN = '500px 0px';
 const GENRE_FIRST_SCROLL_PX = Number(getConfig()?.genreRowsFirstBatchScrollPx) || 200;
+const MIN_GENRE_VISIBLE_CARD_COUNT = 3;
 const PRC_LOCK_DOWN_SCROLL = (getConfig()?.prcLockDownScrollDuringLoad === true);
 
 function clampConfiguredCount(value, fallback, max = UNIFIED_ROW_ITEM_LIMIT) {
@@ -1265,6 +1266,19 @@ function primeItemIdentity(item) {
   return { item, itemId, itemName };
 }
 
+function isRenderableGenreCardItem(item) {
+  if (!item || typeof item !== "object") return false;
+  const { itemId, itemName } = primeItemIdentity(item);
+  if (!itemId || !itemName) return false;
+
+  const mediaType = String(item?.Type || "").trim();
+  if (mediaType && !["Movie", "Series", "BoxSet"].includes(mediaType)) {
+    return false;
+  }
+
+  return true;
+}
+
 function getPrimaryImageCandidate(item) {
   const itemId = item?.Id || item?.AlbumId || null;
   const tag =
@@ -2251,10 +2265,11 @@ function getEffectiveLang3() {
     de: 'deu',
     fr: 'fre',
     ru: 'rus',
+    es: 'spa',
   };
-  if (['tur','eng','deu','fre','rus'].includes(base)) return base;
+  if (['tur','eng','deu','fre','rus','spa'].includes(base)) return base;
   if (map2to3[base]) return map2to3[base];
-  return 'tur';
+  return 'eng';
 }
 
 function getLangKeyCandidates() {
@@ -2263,13 +2278,13 @@ function getLangKeyCandidates() {
 
   const lower = raw.toLowerCase();
   const base = lower.split('-')[0];
-  const map2to3 = { tr:'tur', en:'eng', de:'deu', fr:'fre', ru:'rus' };
+  const map2to3 = { tr:'tur', en:'eng', de:'deu', fr:'fre', ru:'rus', es:'spa' };
   const three = map2to3[base] || base;
   const out = [];
   if (lower) out.push(lower);
   if (base)  out.push(base);
   if (three) out.push(three);
-  out.push('tur', 'eng');
+  out.push('eng', 'tur');
 
   return Array.from(new Set(out.filter(Boolean)));
 }
@@ -3812,6 +3827,26 @@ function ensureGenreSectionElement(idx) {
   return rec;
 }
 
+function skipGenreSection(rec) {
+  if (!rec) return;
+  try {
+    rec.section?.querySelectorAll?.('.personal-recs-card, .dir-row-hero')?.forEach((el) => {
+      try { el.dispatchEvent(new Event('jms:cleanup')); } catch {}
+    });
+  } catch {}
+  try {
+    if (rec.heroHost) clearHeroHost(rec.heroHost);
+  } catch {}
+  try { rec.section?.remove?.(); } catch {}
+
+  rec.section = null;
+  rec.row = null;
+  rec.heroHost = null;
+  rec.loaded = true;
+  rec.loading = false;
+  rec.loadingPromise = null;
+}
+
 async function ensureGenreLoaded(idx) {
   let rec = GENRE_STATE.sections[idx];
   if (!rec) rec = ensureGenreSectionElement(idx);
@@ -3871,39 +3906,41 @@ async function ensureGenreLoaded(idx) {
       setupScroller(row);
 
       if (!items || !items.length) {
-        row.innerHTML = `<div class="no-recommendations">${labels.noRecommendations || "Uygun içerik yok"}</div>`;
-        if (heroHost) clearHeroHost(heroHost);
-        triggerScrollerUpdate(row);
+        skipGenreSection(rec);
         return;
       }
 
-      const pool = dedupeStrong(items).slice();
+      const pool = dedupeStrong(items).filter(isRenderableGenreCardItem).slice();
       shuffle(pool);
+      const showHero = isGenreHubsHeroEnabled();
 
       let best = null;
       let bestIndex = -1;
-      for (let i = 0; i < pool.length; i++) {
-        const it = pool[i];
-        const kLoose  = makePRCLooseKey(it);
-        const kStrict = makePRCKey(it);
-        if ((kLoose && __globalGenreHeroLoose.has(kLoose)) || (kStrict && __globalGenreHeroStrict.has(kStrict))) continue;
-        best = it; bestIndex = i;
-        if (kLoose)  __globalGenreHeroLoose.add(kLoose);
-        if (kStrict) __globalGenreHeroStrict.add(kStrict);
-        break;
-      }
-      if (!best && pool.length) {
-        best = pool[0]; bestIndex = 0;
-        const kLoose  = makePRCLooseKey(best);
-        const kStrict = makePRCKey(best);
-        if (kLoose)  __globalGenreHeroLoose.add(kLoose);
-        if (kStrict) __globalGenreHeroStrict.add(kStrict);
+      if (showHero) {
+        for (let i = 0; i < pool.length; i++) {
+          const it = pool[i];
+          const kLoose  = makePRCLooseKey(it);
+          const kStrict = makePRCKey(it);
+          if ((kLoose && __globalGenreHeroLoose.has(kLoose)) || (kStrict && __globalGenreHeroStrict.has(kStrict))) continue;
+          best = it; bestIndex = i;
+          if (kLoose)  __globalGenreHeroLoose.add(kLoose);
+          if (kStrict) __globalGenreHeroStrict.add(kStrict);
+          break;
+        }
+        if (!best && pool.length) {
+          best = pool[0]; bestIndex = 0;
+          const kLoose  = makePRCLooseKey(best);
+          const kStrict = makePRCKey(best);
+          if (kLoose)  __globalGenreHeroLoose.add(kLoose);
+          if (kStrict) __globalGenreHeroStrict.add(kStrict);
+        }
       }
 
-      const remaining = (bestIndex >= 0) ? pool.filter((_, i) => i !== bestIndex) : pool.slice();
+      const remaining = (showHero && bestIndex >= 0)
+        ? pool.filter((_, i) => i !== bestIndex)
+        : pool.slice();
 
       if (heroHost) {
-        const showHero = isGenreHubsHeroEnabled();
         heroHost.style.display = showHero ? '' : 'none';
         if (!showHero || !best) {
           clearHeroHost(heroHost);
@@ -3929,9 +3966,8 @@ async function ensureGenreLoaded(idx) {
         }
       }
 
-      if (!remaining.length) {
-        row.innerHTML = `<div class="no-recommendations">${labels.noRecommendations || "Uygun içerik yok"}</div>`;
-        triggerScrollerUpdate(row);
+      if (remaining.length < MIN_GENRE_VISIBLE_CARD_COUNT) {
+        skipGenreSection(rec);
         return;
       }
 
@@ -3979,12 +4015,7 @@ async function ensureGenreLoaded(idx) {
     } catch (err) {
       if (rec.seq !== mySeq) return;
       console.warn('Genre hub load failed:', rec?.genre, err);
-      try {
-        row.innerHTML = `<div class="no-recommendations">${labels.noRecommendations || "Uygun içerik yok"}</div>`;
-        if (heroHost) clearHeroHost(heroHost);
-        setupScroller(row);
-        triggerScrollerUpdate(row);
-      } catch {}
+      skipGenreSection(rec);
     } finally {
       if (rec.seq === mySeq) {
         rec.loading = false;
