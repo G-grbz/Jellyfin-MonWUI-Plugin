@@ -4,7 +4,7 @@ import { getConfig, getDeviceProfileAuto } from './config.js';
 import { getLanguageLabels, getDefaultLanguage } from '../language/index.js';
 import { getCurrentIndex, setCurrentIndex, setRemainingTime } from "./sliderState.js";
 import { applyContainerStyles } from "./positionUtils.js";
-import { playNow, fetchItemDetails, getCachedUserTopGenres, getGenresForDot, goToDetailsPage } from "/Plugins/JMSFusion/runtime/api.js";
+import { playNow, fetchItemDetails, getCachedUserTopGenres, getGenresForDot, goToDetailsPage } from "../../Plugins/JMSFusion/runtime/api.js";
 import { applySlideAnimation, applyDotPosterAnimation, teardownAnimations, forceReflow, nextAnimToken, hardCleanupSlide } from "./animations.js";
 import { getVideoQualityText } from "./containerUtils.js";
 import { previewPreloadCache } from "./hoverTrailerModal.js";

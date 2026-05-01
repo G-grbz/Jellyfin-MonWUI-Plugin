@@ -1,5 +1,5 @@
 import { getConfig } from "./config.js";
-import { getSessionInfo, makeApiRequest, getAuthHeader, playNow, fetchItemDetails, getEmbyHeaders, jms } from "/Plugins/JMSFusion/runtime/api.js";
+import { getSessionInfo, makeApiRequest, getAuthHeader, playNow, fetchItemDetails, getEmbyHeaders, jms } from "../../Plugins/JMSFusion/runtime/api.js";
 import { openSettings } from "./settingsLoader.js";
 import { getProviderUrl } from './utils.js';
 import { applyContainerStyles } from './positionUtils.js';

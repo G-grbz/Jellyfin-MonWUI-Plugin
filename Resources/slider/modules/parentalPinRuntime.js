@@ -1227,7 +1227,7 @@ function installNativePlayInterceptor() {
 
     queueMicrotask(async () => {
       try {
-        const apiModule = await import("/Plugins/JMSFusion/runtime/api.js");
+        const apiModule = await import("../../Plugins/JMSFusion/runtime/api.js");
         await apiModule?.playNow?.(itemId);
       } catch (error) {
         console.error("Native Jellyfin play interception failed:", error);

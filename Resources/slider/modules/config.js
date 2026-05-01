@@ -14,6 +14,7 @@ export const DEFAULT_MANAGED_HOME_SECTION_ORDER = Object.freeze([
   "tmdbTopMoviesRows",
   "recentRows",
   "continueRows",
+  "nextUpRows",
   "becauseYouWatched",
   "genreHubs",
   "directorRows"
@@ -68,6 +69,30 @@ const SETTINGS_HOTKEY_MODIFIER_KEYS = new Set([
 
 export function isNativeHomeSectionOrderKey(value) {
   return String(value || "").trim().startsWith(NATIVE_HOME_SECTION_ORDER_PREFIX);
+}
+
+export function normalizeManagedCardTitleDisplayMode(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  switch (raw) {
+    case "logo":
+    case "logoonly":
+    case "logo-only":
+      return "logo";
+    case "title":
+    case "titleonly":
+    case "title-only":
+      return "title";
+    case "logotitle":
+    case "logo-title":
+    case "logoandtitle":
+    case "logo-and-title":
+    case "both":
+      return "logoTitle";
+    case "none":
+      return "none";
+    default:
+      return "logoTitle";
+  }
 }
 
 function isRecognizedManagedHomeSectionOrderKey(value) {
@@ -137,14 +162,8 @@ export function normalizeManagedHomeSectionOrder(value = null, { nativeEntries }
 
   DEFAULT_MANAGED_HOME_SECTION_ORDER.forEach(push);
 
-  if (!explicit.has("continueRows") && explicit.has("recentRows")) {
-    const continueIndex = out.indexOf("continueRows");
-    const recentIndex = out.indexOf("recentRows");
-    if (continueIndex >= 0 && recentIndex >= 0 && continueIndex !== (recentIndex + 1)) {
-      out.splice(continueIndex, 1);
-      out.splice(recentIndex + 1, 0, "continueRows");
-    }
-  }
+  ensureImplicitManagedFollowerOrder(out, explicit, "recentRows", "continueRows");
+  ensureImplicitManagedFollowerOrder(out, explicit, "continueRows", "nextUpRows");
 
   return out;
 }
@@ -188,6 +207,28 @@ function isContinueRowsSectionEnabled(cfg = {}, masterEnabled = cfg?.enableHomeS
   return hasRecentTracks || hasContinueContent || (masterEnabled && cfg?.enableOtherLibRows === true);
 }
 
+function isNextUpRowsSectionEnabled(cfg = {}, masterEnabled = cfg?.enableHomeSectionsMaster !== false) {
+  const recentMasterEnabled = masterEnabled && cfg?.enableRecentRows !== false;
+  return recentMasterEnabled && cfg?.enableNextUpRow !== false;
+}
+
+function ensureImplicitManagedFollowerOrder(out, explicit, anchorKey, followerKey) {
+  if (explicit.has(followerKey)) return;
+  const anchorIndex = out.indexOf(anchorKey);
+  const followerIndex = out.indexOf(followerKey);
+  if (anchorIndex < 0 || followerIndex < 0 || followerIndex === (anchorIndex + 1)) {
+    return;
+  }
+
+  out.splice(followerIndex, 1);
+  const nextAnchorIndex = out.indexOf(anchorKey);
+  if (nextAnchorIndex < 0) {
+    out.push(followerKey);
+    return;
+  }
+  out.splice(nextAnchorIndex + 1, 0, followerKey);
+}
+
 function buildManagedHomeSectionEnabledMap(cfg = {}) {
   const masterEnabled = cfg?.enableHomeSectionsMaster !== false;
   return {
@@ -198,6 +239,7 @@ function buildManagedHomeSectionEnabledMap(cfg = {}) {
     tmdbTopMoviesRows: isTmdbTopMoviesRowsSectionEnabled(cfg, masterEnabled),
     recentRows: isRecentRowsSectionEnabled(cfg, masterEnabled),
     continueRows: isContinueRowsSectionEnabled(cfg, masterEnabled),
+    nextUpRows: isNextUpRowsSectionEnabled(cfg, masterEnabled),
     becauseYouWatched: masterEnabled && cfg?.enableBecauseYouWatched !== false,
     genreHubs: masterEnabled && cfg?.enableGenreHubs !== false,
     directorRows: masterEnabled && cfg?.enableDirectorRows !== false,
@@ -649,7 +691,7 @@ export function getConfig() {
     useRandomContent: localStorage.getItem('useRandomContent') !== 'false',
     fullscreenMode: localStorage.getItem('fullscreenMode') === 'true' ? true : false,
     listLimit: 20,
-    version: "v2.6.4",
+    version: "v2.7.0",
     historySize: 20,
     updateInterval: 300000,
     nextTracksSource: localStorage.getItem('nextTracksSource') || 'playlist',
@@ -764,6 +806,7 @@ export function getConfig() {
     showRecentMusicHeroCards: (localStorage.getItem('showRecentMusicHeroCards') || 'true') !== 'false',
     showRecentTracksHeroCards: (localStorage.getItem('showRecentTracksHeroCards') || 'true') !== 'false',
     showRecentEpisodesHeroCards: (localStorage.getItem('showRecentEpisodesHeroCards') || 'true') !== 'false',
+    showNextUpHeroCards: (localStorage.getItem('showNextUpHeroCards') || 'true') !== 'false',
     enableTop10MoviesRow: (localStorage.getItem('enableTop10MoviesRow') || 'true') !== 'false',
     enableTop10SeriesRow: (localStorage.getItem('enableTop10SeriesRow') || 'true') !== 'false',
     enableTmdbTopMoviesRow: localStorage.getItem('enableTmdbTopMoviesRow') === 'true',
@@ -802,6 +845,8 @@ export function getConfig() {
 
     enableRecentEpisodesRow: (localStorage.getItem('enableRecentEpisodesRow') || 'true') !== 'false',
     recentEpisodesCardCount: parseInt(localStorage.getItem('recentEpisodesCardCount'), 10) || 10,
+    enableNextUpRow: (localStorage.getItem('enableNextUpRow') || 'true') !== 'false',
+    nextUpCardCount: parseInt(localStorage.getItem('nextUpCardCount'), 10) || 10,
 
     recentRowsSplitTvLibs: (localStorage.getItem('recentRowsSplitTvLibs') || 'true') !== 'false',
     recentRowsSplitMovieLibs: localStorage.getItem('recentRowsSplitMovieLibs') === 'true',
@@ -851,6 +896,9 @@ export function getConfig() {
 
     enablePersonalRecommendations: localStorage.getItem('enablePersonalRecommendations') !== 'false',
     showPersonalRecsHeroCards: localStorage.getItem('showPersonalRecsHeroCards') !== 'false',
+    managedCardTitleDisplayMode: normalizeManagedCardTitleDisplayMode(
+      localStorage.getItem('managedCardTitleDisplayMode')
+    ),
     personalRecsCacheTtlMs: parseInt(localStorage.getItem('personalRecsCacheTtlMs'), 10) || 3600000,
     enableStudioHubs: localStorage.getItem('enableStudioHubs') !== 'false',
     studioHubsAutoAddFromWatchlistCopy: localStorage.getItem('studioHubsAutoAddFromWatchlistCopy') === 'true',
@@ -1211,6 +1259,7 @@ export function getHomeSectionsRuntimeConfig(source = null) {
     enableRecentRows: masterEnabled && cfg.enableRecentRows !== false,
     enableRecentRowsSection: enabledMap.recentRows,
     enableContinueRowsSection: enabledMap.continueRows,
+    enableNextUpRowsSection: enabledMap.nextUpRows,
     enableContinueMovies: masterEnabled && cfg.enableContinueMovies !== false,
     enableContinueSeries: masterEnabled && cfg.enableContinueSeries !== false,
     enableOtherLibRows: masterEnabled && !!cfg.enableOtherLibRows,

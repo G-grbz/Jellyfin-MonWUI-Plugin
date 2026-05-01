@@ -1,4 +1,4 @@
-import { getAdminTargetProfile, getConfig, getDeviceProfileAuto, normalizeManagedHomeSectionOrder, normalizeSettingsHotkey, publishAdminSnapshotIfForced, SETTINGS_HOTKEY_DEFAULT } from "../config.js";
+import { getAdminTargetProfile, getConfig, getDeviceProfileAuto, normalizeManagedCardTitleDisplayMode, normalizeManagedHomeSectionOrder, normalizeSettingsHotkey, publishAdminSnapshotIfForced, SETTINGS_HOTKEY_DEFAULT } from "../config.js";
 import { updateConfig } from "../configPersistence.js";
 import { loadCSS } from "../playerStyles.js";
 import { updateSlidePosition } from '../positionUtils.js';
@@ -33,9 +33,19 @@ async function flushManagedStorageSnapshot() {
 }
 
 function getJfRootFromLocation_apply() {
-  const path = window.location.pathname || "/";
-  const split = path.split("/web/");
-  return split.length > 1 ? split[0] : "";
+  try {
+    const baseHref = document.querySelector("base[href]")?.getAttribute("href");
+    if (baseHref) {
+      const url = new URL(baseHref, window.location.href);
+      return String(url.pathname || "")
+        .replace(/\/web\/?$/i, "")
+        .replace(/\/+$/, "");
+    }
+  } catch {}
+
+  const path = String(window.location.pathname || "/");
+  const match = path.match(/^(.*?)(?:\/web(?:\/|$).*)$/i);
+  return match?.[1] ? match[1].replace(/\/+$/, "") : "";
 }
 
 function getEmbyTokenSafe_apply() {
@@ -468,6 +478,7 @@ const USER_ONLY_KEYS = [
             showRecentMusicHeroCards: formData.get('showRecentMusicHeroCards') === 'on',
             showRecentTracksHeroCards: formData.get('showRecentTracksHeroCards') === 'on',
             showRecentEpisodesHeroCards: formData.get('showRecentEpisodesHeroCards') === 'on',
+            showNextUpHeroCards: formData.get('showNextUpHeroCards') === 'on',
             enableTop10MoviesRow: (() => {
               const master = formData.get('enableRecentRows') === 'on';
               if (!master) return false;
@@ -508,6 +519,11 @@ const USER_ONLY_KEYS = [
               if (!master) return false;
               return formData.get('enableRecentEpisodesRow') === 'on';
             })(),
+            enableNextUpRow: (() => {
+              const master = formData.get('enableRecentRows') === 'on';
+              if (!master) return false;
+              return formData.get('enableNextUpRow') === 'on';
+            })(),
 
             recentMoviesCardCount: (() => {
               const v = parseInt(formData.get('recentMoviesCardCount'), 10);
@@ -529,6 +545,12 @@ const USER_ONLY_KEYS = [
               const v = parseInt(formData.get('recentEpisodesCardCount'), 10);
               if (Number.isFinite(v) && v > 0) return v;
               if (Number.isFinite(config.recentEpisodesCardCount) && config.recentEpisodesCardCount > 0) return config.recentEpisodesCardCount;
+              return 10;
+            })(),
+            nextUpCardCount: (() => {
+              const v = parseInt(formData.get('nextUpCardCount'), 10);
+              if (Number.isFinite(v) && v > 0) return v;
+              if (Number.isFinite(config.nextUpCardCount) && config.nextUpCardCount > 0) return config.nextUpCardCount;
               return 10;
             })(),
 
@@ -593,6 +615,10 @@ const USER_ONLY_KEYS = [
             enableStudioHubs: formData.get('enableStudioHubs') === 'on',
             enablePersonalRecommendations: formData.get('enablePersonalRecommendations') === 'on',
             showPersonalRecsHeroCards: formData.get('showPersonalRecsHeroCards') === 'on',
+            managedCardTitleDisplayMode: normalizeManagedCardTitleDisplayMode(
+              formData.get('managedCardTitleDisplayMode') ||
+              config.managedCardTitleDisplayMode
+            ),
             personalRecsCacheTtlMs: parseInt(formData.get('personalRecsCacheTtlMs'), 10) || 360,
             studioHubsAutoAddFromWatchlistCopy: formData.get('studioHubsAutoAddFromWatchlistCopy') === 'on',
             studioHubsHoverVideo: formData.get('studioHubsHoverVideo') === 'on',

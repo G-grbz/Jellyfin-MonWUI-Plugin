@@ -1,5 +1,5 @@
-import { getSessionInfo, makeApiRequest, getCachedUserTopGenres } from "/Plugins/JMSFusion/runtime/api.js";
-import { getConfig, getHomeSectionsRuntimeConfig } from "./config.js";
+import { getSessionInfo, makeApiRequest, getCachedUserTopGenres } from "../../Plugins/JMSFusion/runtime/api.js";
+import { getConfig, getHomeSectionsRuntimeConfig, normalizeManagedCardTitleDisplayMode } from "./config.js";
 import { getLanguageLabels, getDefaultLanguage } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";
 import { openGenreExplorer, openPersonalExplorer } from "./genreExplorer.js";
@@ -8,10 +8,7 @@ import { createTrailerIframe, formatOfficialRatingLabel } from "./utils.js";
 import { openDetailsModal } from "./detailsModalLoader.js";
 import {
   withServer,
-  withServerSrcset,
-  isKnownMissingImage,
-  markImageMissing,
-  clearMissingImage
+  isKnownMissingImage
 } from "./jfUrl.js";
 import { faIconHtml, findFaIcon } from "./faIcons.js";
 import { resolveSliderAssetHref } from "./assetLinks.js";
@@ -24,12 +21,17 @@ import {
   purgePrcDb
 } from "./prcDb.js";
 import {
+  keepManagedSectionsBelowNative,
   bindManagedSectionsBelowNative,
+  waitForNativeHomeSectionStability,
   waitForVisibleHomeSections
 } from "./homeSectionNative.js";
 import {
-  waitForManagedSectionDependencyCompletion,
-  waitForManagedSectionGate
+  enqueueManagedSectionRender,
+  invalidateManagedSectionRenderKeys,
+  registerManagedHomeRowAnchor,
+  waitForManagedHomeRowRelease,
+  waitForSectionTailAdvance
 } from "./homeSectionChain.js";
 
 const config = getConfig();
@@ -42,8 +44,8 @@ const MIN_RATING = Number.isFinite(config.studioHubsMinRating)
 const PLACEHOLDER_URL = resolveSliderAssetHref(
   config.placeholderImage || "/slider/src/images/placeholder.png"
 );
-const PRC_IMAGE_RETRY_LIMITS = { lq: 2, hi: 2 };
 const ENABLE_GENRE_HUBS = !!config.enableGenreHubs;
+const HOME_DEBUG_STORAGE_KEY = "jms:debug:home-sections";
 const __hoverIntent = new WeakMap();
 const __enterTimers = new WeakMap();
 const __enterSeq     = new WeakMap();
@@ -51,9 +53,9 @@ const __cooldownUntil= new WeakMap();
 const __openTokenMap = new WeakMap();
 const __boundPreview = new WeakMap();
 const GENRE_LAZY = true;
-const MOBILE_ROW_BATCH_SIZE = 2;
-const DESKTOP_INITIAL_GENRE_LOADS = 2;
-const GENRE_BATCH_SIZE = Number(getConfig()?.genreRowsBatchSize) || (IS_MOBILE ? MOBILE_ROW_BATCH_SIZE : 1);
+const MOBILE_ROW_BATCH_SIZE = 1;
+const DESKTOP_INITIAL_GENRE_LOADS = 1;
+const GENRE_BATCH_SIZE = 1;
 const GENRE_ROOT_MARGIN = '500px 0px';
 const GENRE_FIRST_SCROLL_PX = Number(getConfig()?.genreRowsFirstBatchScrollPx) || 200;
 const MIN_GENRE_VISIBLE_CARD_COUNT = 3;
@@ -106,9 +108,38 @@ function isGenreHubsHeroEnabled() {
   return getConfig()?.showGenreHubsHeroCards !== false;
 }
 
-function prcLog() {}
+function isPrcDebugEnabled() {
+  try {
+    if (window.__JMS_DEBUG_HOME_SECTIONS === true) return true;
+    if (window.__JMS_DEBUG_HOME_SECTIONS === false) return false;
+    const raw = localStorage.getItem(HOME_DEBUG_STORAGE_KEY);
+    return raw === "1" || raw === "true" || raw === "on";
+  } catch {
+    return window.__JMS_DEBUG_HOME_SECTIONS === true;
+  }
+}
 
-function prcWarn() {}
+function buildPrcDebugPayload(payload) {
+  const extra = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? payload
+    : { value: payload };
+  return {
+    at: new Date().toISOString(),
+    hash: String(window.location.hash || ""),
+    page: currentIndexPage?.()?.id || null,
+    ...extra,
+  };
+}
+
+function prcLog(event, payload = {}) {
+  if (!isPrcDebugEnabled()) return;
+  try { console.log("[JMS:PRC]", event, buildPrcDebugPayload(payload)); } catch {}
+}
+
+function prcWarn(event, payload = {}) {
+  if (!isPrcDebugEnabled()) return;
+  try { console.warn("[JMS:PRC]", event, buildPrcDebugPayload(payload)); } catch {}
+}
 
 const PRC_DB_STATE = {
   db: null,
@@ -410,11 +441,52 @@ const GENRE_STATE = {
   sections: [],
   nextIndex: 0,
   loading: false,
+  awaitingAdvance: false,
+  advancePromise: null,
+  renderSeq: 0,
   wrap: null,
+  hostEl: null,
   batchObserver: null,
   serverId: null,
   _loadMoreArrow: null,
 };
+
+function makeManagedGenreHubSectionId(index = 0) {
+  return `genre-hubs--${Math.max(0, index | 0)}`;
+}
+
+function getManagedGenreHubSections(root = getHomeSectionsContainer(currentIndexPage()) || document) {
+  return Array.from(root?.querySelectorAll?.('[id^="genre-hubs--"]') || [])
+    .filter((el) => el?.isConnected)
+    .sort((left, right) => {
+      const li = Number(String(left.id || "").split("--")[1]) || 0;
+      const ri = Number(String(right.id || "").split("--")[1]) || 0;
+      return li - ri;
+    });
+}
+
+function cleanupManagedGenreHubSections(root = getHomeSectionsContainer(currentIndexPage()) || document) {
+  for (const section of getManagedGenreHubSections(root)) {
+    try {
+      section.querySelectorAll('.personal-recs-card, .dir-row-hero').forEach((el) => {
+        try { el.dispatchEvent(new Event('jms:cleanup')); } catch {}
+      });
+    } catch {}
+    try { section.remove(); } catch {}
+  }
+}
+
+function placeGenreHubSection(section) {
+  const parent = GENRE_STATE.hostEl || getHomeSectionsContainer(currentIndexPage()) || document.body;
+  const siblings = getManagedGenreHubSections(parent);
+  const last = siblings[siblings.length - 1] || null;
+  if (last?.parentElement === parent) {
+    last.insertAdjacentElement("afterend", section);
+  } else {
+    appendToParent(parent, section);
+  }
+  try { keepManagedSectionsBelowNative(parent); } catch {}
+}
 
 function __resetGenreHubsDoneSignal() {
   try { window.__jmsGenreHubsDone = false; } catch {}
@@ -453,6 +525,19 @@ function setGenreArrowLoading(isLoading) {
   }
 }
 
+function placeGenreLoadMoreArrow() {
+  const parent = GENRE_STATE.hostEl || getHomeSectionsContainer(currentIndexPage()) || document.body;
+  const arrow = GENRE_STATE._loadMoreArrow;
+  if (!parent || !arrow) return;
+  const siblings = getManagedGenreHubSections(parent);
+  const last = siblings[siblings.length - 1] || null;
+  if (last?.parentElement === parent) {
+    last.insertAdjacentElement("afterend", arrow);
+  } else {
+    appendToParent(parent, arrow);
+  }
+}
+
 let __genreScrollIdleTimer = null;
 let __genreScrollIdleAttached = false;
 let __genreArrowObserver = null;
@@ -464,6 +549,7 @@ let __deferredHomeSectionSeq = 0;
 let __bywDeferredPromise = null;
 let __genreDeferredPromise = null;
 let __personalRecsRetryTo = null;
+let __personalRecsMountPromise = null;
 
 function isPersonalRecsHomeRoute() {
   const h = String(window.location.hash || "").toLowerCase();
@@ -524,9 +610,29 @@ function schedulePersonalRecsRetry(ms = 1000, options = {}, reason = "retry") {
   }, Math.max(120, ms | 0));
 }
 
-function scheduleDeferredBecauseYouWatchedRender({ force = false, seq = __deferredHomeSectionSeq } = {}) {
+function invalidatePersonalManagedQueue() {
+  try {
+    invalidateManagedSectionRenderKeys([
+      "personalRecommendations",
+      "becauseYouWatched",
+      "genreHubs"
+    ]);
+  } catch {}
+}
+
+function clearPersonalDeferredPromises() {
+  __bywDeferredPromise = null;
+  __genreDeferredPromise = null;
+}
+
+function scheduleDeferredBecauseYouWatchedRender({
+  force = false,
+  seq = __deferredHomeSectionSeq,
+  indexPage = null,
+} = {}) {
   if (force) {
-    __bywDeferredPromise = null;
+    clearPersonalDeferredPromises();
+    invalidatePersonalManagedQueue();
     prcWarn("BYW:force-reset", { force, seq });
   }
   if (__bywDeferredPromise) {
@@ -534,19 +640,20 @@ function scheduleDeferredBecauseYouWatchedRender({ force = false, seq = __deferr
     return __bywDeferredPromise;
   }
 
-  const run = (async () => {
+  const resolvePage = () => (
+    (indexPage?.isConnected ? indexPage : null) ||
+    currentIndexPage()
+  );
+
+  const run = enqueueManagedSectionRender("becauseYouWatched", async () => {
     try {
       prcLog("BYW:start", { force, seq });
-      prcLog("BYW:wait:managed-gate", { force, seq });
-      await waitForManagedSectionGate("becauseYouWatched", { timeoutMs: 25000 });
-      if (seq !== __deferredHomeSectionSeq) return false;
-      await waitForManagedSectionDependencyCompletion("becauseYouWatched", { timeoutMs: 25000 });
       if (seq !== __deferredHomeSectionSeq) return false;
       if (!hasActivePersonalRecsHomeSections()) {
         prcWarn("BYW:abort:no-home-sections", { force, seq });
         return false;
       }
-      await renderBecauseYouWatchedAuto(currentIndexPage(), { force });
+      await renderBecauseYouWatchedAuto(resolvePage(), { force });
       prcLog("BYW:success", { force, seq });
       return true;
     } catch (e) {
@@ -559,7 +666,20 @@ function scheduleDeferredBecauseYouWatchedRender({ force = false, seq = __deferr
       setBywDone(true);
       return false;
     }
-  })();
+  }, {
+    timeoutMs: 25000,
+    force,
+    reuseKey: false,
+    getAnchor: () => {
+      const page = resolvePage();
+      const section = getScopedSection("because-you-watched--0", page);
+      return section?.isConnected ? section : null;
+    },
+    isStillValid: () => (
+      seq === __deferredHomeSectionSeq &&
+      hasActivePersonalRecsHomeSections()
+    ),
+  });
 
   __bywDeferredPromise = run;
   run.finally(() => {
@@ -572,7 +692,8 @@ function scheduleDeferredBecauseYouWatchedRender({ force = false, seq = __deferr
 
 function scheduleDeferredGenreHubsRender({ force = false, seq = __deferredHomeSectionSeq } = {}) {
   if (force) {
-    __genreDeferredPromise = null;
+    clearPersonalDeferredPromises();
+    invalidatePersonalManagedQueue();
     prcWarn("GENRE:force-reset", { force, seq });
   }
   if (__genreDeferredPromise) {
@@ -580,13 +701,13 @@ function scheduleDeferredGenreHubsRender({ force = false, seq = __deferredHomeSe
     return __genreDeferredPromise;
   }
 
-  const run = (async () => {
+  const anchorWrap = hasActivePersonalRecsHomeSections()
+    ? ensureGenreHubsShell(currentIndexPage())
+    : null;
+
+  const run = enqueueManagedSectionRender("genreHubs", async () => {
     try {
       prcLog("GENRE:start", { force, seq });
-      prcLog("GENRE:wait:managed-gate", { force, seq });
-      await waitForManagedSectionGate("genreHubs", { timeoutMs: 25000 });
-      if (seq !== __deferredHomeSectionSeq) return false;
-      await waitForManagedSectionDependencyCompletion("genreHubs", { timeoutMs: 25000 });
       if (seq !== __deferredHomeSectionSeq) return false;
       if (!hasActivePersonalRecsHomeSections()) {
         prcWarn("GENRE:abort:no-home-sections", { force, seq });
@@ -605,7 +726,21 @@ function scheduleDeferredGenreHubsRender({ force = false, seq = __deferredHomeSe
       try { __signalGenreHubsDone(); } catch {}
       return false;
     }
-  })();
+  }, {
+    timeoutMs: 25000,
+    force,
+    reuseKey: false,
+    getAnchor: () => {
+      const wrap = anchorWrap?.isConnected
+        ? anchorWrap
+        : ensureGenreHubsShell(currentIndexPage());
+      return wrap?.isConnected ? wrap : null;
+    },
+    isStillValid: () => (
+      seq === __deferredHomeSectionSeq &&
+      hasActivePersonalRecsHomeSections()
+    ),
+  });
 
   __genreDeferredPromise = run;
   run.finally(() => {
@@ -644,10 +779,10 @@ function isGenreLoadTriggerNearViewport() {
     }
   }
 
-  const wrap = GENRE_STATE.wrap;
-  if (!wrap?.isConnected) return false;
+  const anchor = GENRE_STATE._loadMoreArrow || getManagedGenreHubSections(GENRE_STATE.hostEl || getHomeSectionsContainer(currentIndexPage()) || document).slice(-1)[0] || null;
+  if (!anchor?.isConnected) return false;
 
-  const rect = wrap.getBoundingClientRect();
+  const rect = anchor.getBoundingClientRect();
   return rect.bottom <= (viewportH + preloadPx);
 }
 
@@ -672,13 +807,69 @@ function queueGenreViewportLoad(delayMs = 220) {
     }
     if (!isGenreLoadTriggerNearViewport()) return;
 
-    loadNextGenreViaArrow();
+    requestNextGenreLoad({ force: false });
   }, Math.max(60, delayMs | 0));
+}
+
+function requestNextGenreLoad({ force = false } = {}) {
+  if (GENRE_STATE.loading) return;
+  if (GENRE_STATE.nextIndex >= (GENRE_STATE.genres?.length || 0)) {
+    detachGenreScrollIdleLoader();
+    return;
+  }
+
+  const start = () => {
+    if (GENRE_STATE.loading) return;
+    if (GENRE_STATE.nextIndex >= (GENRE_STATE.genres?.length || 0)) {
+      detachGenreScrollIdleLoader();
+      return;
+    }
+    loadNextGenreViaArrow();
+  };
+
+  if (force) {
+    GENRE_STATE.awaitingAdvance = false;
+    start();
+    return;
+  }
+
+  if (!GENRE_STATE.awaitingAdvance) {
+    start();
+    return;
+  }
+
+  if (GENRE_STATE.advancePromise) return;
+
+  const anchor = getManagedGenreHubSections(
+    GENRE_STATE.hostEl || getHomeSectionsContainer(currentIndexPage()) || document
+  ).slice(-1)[0] || null;
+  if (!anchor?.isConnected) {
+    GENRE_STATE.awaitingAdvance = false;
+    start();
+    return;
+  }
+
+  const gateSeq = GENRE_STATE.renderSeq;
+  GENRE_STATE.advancePromise = Promise.resolve(
+    waitForSectionTailAdvance(anchor, {
+      timeoutMs: 25000,
+      rootMargin: "0px 0px 0px 0px",
+    })
+  ).catch(() => {
+  }).then(() => {
+    if (gateSeq !== GENRE_STATE.renderSeq) return;
+    GENRE_STATE.awaitingAdvance = false;
+    start();
+  }).finally(() => {
+    if (gateSeq === GENRE_STATE.renderSeq) {
+      GENRE_STATE.advancePromise = null;
+    }
+  });
 }
 
 function attachGenreScrollIdleLoader() {
   if (__genreScrollIdleAttached) return;
-  if (!GENRE_STATE.wrap || !GENRE_STATE.genres || !GENRE_STATE.genres.length) return;
+  if (!GENRE_STATE.hostEl || !GENRE_STATE.genres || !GENRE_STATE.genres.length) return;
   if (GENRE_STATE.nextIndex >= GENRE_STATE.genres.length) return;
   __genreScrollIdleAttached = true;
 
@@ -694,15 +885,16 @@ function attachGenreScrollIdleLoader() {
         'Daha fazla tür göster')
     );
 
-    GENRE_STATE.wrap.appendChild(arrow);
     GENRE_STATE._loadMoreArrow = arrow;
 
     arrow.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      loadNextGenreViaArrow();
+      requestNextGenreLoad({ force: true });
     }, { passive: false });
   }
+
+  placeGenreLoadMoreArrow();
 
   if (__genreArrowObserver) {
     try { __genreArrowObserver.disconnect(); } catch {}
@@ -713,7 +905,7 @@ function attachGenreScrollIdleLoader() {
     __genreArrowObserver = new IntersectionObserver((entries) => {
       for (const ent of entries) {
         if (!ent.isIntersecting) continue;
-        queueGenreViewportLoad(180);
+        requestNextGenreLoad({ force: false });
         break;
       }
     }, {
@@ -722,7 +914,10 @@ function attachGenreScrollIdleLoader() {
       threshold: 0.01,
     });
 
-    try { __genreArrowObserver.observe(GENRE_STATE._loadMoreArrow); } catch {}
+    try {
+      placeGenreLoadMoreArrow();
+      __genreArrowObserver.observe(GENRE_STATE._loadMoreArrow);
+    } catch {}
   }
 
   const onScroll = () => {
@@ -766,7 +961,7 @@ function scheduleGenreAutoPump(delayMs = 90, retryCount = 0) {
       return;
     }
 
-    loadNextGenreViaArrow();
+    requestNextGenreLoad({ force: false });
   }, Math.max(32, delayMs | 0));
 }
 
@@ -797,8 +992,10 @@ function loadNextGenreViaArrow() {
 
     if (GENRE_STATE.nextIndex >= GENRE_STATE.genres.length) {
       detachGenreScrollIdleLoader();
+      GENRE_STATE.awaitingAdvance = false;
       __maybeSignalGenreHubsDone();
     } else {
+      GENRE_STATE.awaitingAdvance = true;
       scheduleGenreAutoPump(70);
     }
   });
@@ -860,6 +1057,12 @@ function __idle(fn, timeout = 800) {
   const ric = window.requestIdleCallback;
   if (typeof ric === "function") return ric(fn, { timeout });
   return setTimeout(fn, 0);
+}
+
+function yieldManagedHomeSectionStep(timeout = IS_MOBILE ? 96 : 44) {
+  return new Promise((resolve) => {
+    __idle(() => resolve(), Math.max(24, timeout | 0));
+  });
 }
 
 async function prunePlayedCardsInRow(rowEl, userId) {
@@ -950,56 +1153,6 @@ const SCROLLER_BUSY_ATTR = "data-jms-scroll-active";
 const SCROLLER_BUSY_IDLE_MS = 140;
 const SCROLLER_BUSY_COOLDOWN_MS = 220;
 const SCROLLER_BUSY_MAX_MS = 700;
-const SCROLLER_BUSY_RETRY_MS = 90;
-
-function __shouldRequestHiRes() {
-  try {
-    const c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-    if (c?.saveData) return false;
-    const et = String(c?.effectiveType || "");
-    if (/^2g$|slow-2g/i.test(et)) return false;
-  } catch {}
-  return true;
-}
-
-function getScrollerMediaHost(node) {
-  return node?.closest?.(".itemsContainer.personal-recs-row, .personal-recs-row, .genre-row") || null;
-}
-
-export function isScrollerMediaBusy(node) {
-  const row = getScrollerMediaHost(node);
-  if (!row) return false;
-  if (row.getAttribute?.(SCROLLER_BUSY_ATTR) === "1") return true;
-  return Number(row.__jmsScrollerBusyUntil || 0) > Date.now();
-}
-
-export function clearScrollerAwareHiResUpgrade(img) {
-  if (!img) return;
-  const tid = Number(img.__pendingHiTimer || 0);
-  if (tid > 0) {
-    try { clearTimeout(tid); } catch {}
-  }
-  delete img.__pendingHiTimer;
-}
-
-export function scheduleScrollerAwareHiResUpgrade(img, requestFn, delayMs = SCROLLER_BUSY_RETRY_MS) {
-  if (!img || typeof requestFn !== "function") return;
-  img.__pendingHi = true;
-  if (img.__pendingHiTimer) return;
-
-  const run = () => {
-    delete img.__pendingHiTimer;
-    if (!img?.isConnected || img.__pendingHi !== true) return;
-    if (isScrollerMediaBusy(img)) {
-      img.__pendingHiTimer = window.setTimeout(run, Math.max(32, delayMs | 0));
-      return;
-    }
-    requestFn(img);
-  };
-
-  img.__pendingHiTimer = window.setTimeout(run, Math.max(32, delayMs | 0));
-}
-
 function clearHeroHost(heroHost) {
   if (!heroHost) return;
   try {
@@ -1034,147 +1187,75 @@ function mountHero(heroHost, heroItem, serverId, heroLabel, { aboveFold=false } 
   return { hero, changed: true };
 }
 
-function hasKnownMissingImage(data) {
-  return !!(isKnownMissingImage(data?.lqSrc) || isKnownMissingImage(data?.hqSrc));
-}
-
-function getImageFailureCounts(img) {
-  return (img.__imageFailureCounts ||= { lq: 0, hi: 0 });
-}
-
-function incrementImageFailure(img, phase) {
-  const counts = getImageFailureCounts(img);
-  counts[phase] = (counts[phase] || 0) + 1;
-  return counts[phase];
-}
-
-function resetImageFailures(img, phase = null) {
+function finalizeManagedImage(img) {
   if (!img) return;
-  const counts = getImageFailureCounts(img);
-  if (!phase) {
-    counts.lq = 0;
-    counts.hi = 0;
-    return;
-  }
-  counts[phase] = 0;
-}
-
-function markImageSettled(img, src, { disableRecovery = false, disableHi = false } = {}) {
-  if (!img) return;
-  clearScrollerAwareHiResUpgrade(img);
-  try { img.removeAttribute('srcset'); } catch {}
-  if (src) {
-    try { img.src = src; } catch {}
-  }
-  img.__phase = 'settled';
-  img.__hiRequested = false;
-  img.__hiFailed = false;
+  img.classList.remove("is-lqip");
+  img.classList.add("__hydrated");
   img.__hydrated = true;
-  img.__disableRecovery = disableRecovery === true;
-  if (disableHi) img.__disableHi = true;
-  delete img.__allowLqHydrate;
-  delete img.__retryAfter;
-  img.classList.add('__hydrated');
-  img.classList.remove('is-lqip');
-  try { __imgIO.unobserve(img); } catch {}
 }
 
-function markImageTerminalFailure(img, data, fallbackSrc = PLACEHOLDER_URL) {
-  const brokenUrl = data?.lqSrc || data?.hqSrc || img?.currentSrc || img?.src || '';
-  if (brokenUrl) markImageMissing(brokenUrl);
-  markImageSettled(img, fallbackSrc, { disableRecovery: true, disableHi: true });
+function resolveManagedImageUrl(src, fallback = "") {
+  if (src && !isKnownMissingImage(src)) return src;
+  if (fallback && !isKnownMissingImage(fallback)) return fallback;
+  return "";
 }
 
-function requestHiResImage(img) {
-  if (!img || !img.isConnected) return;
-  const data = img.__data || {};
-  if (img.__disableRecovery || hasKnownMissingImage(data)) {
-    markImageSettled(img, data.fallback || PLACEHOLDER_URL, { disableRecovery: true, disableHi: true });
+export function cleanupManagedImage(img) {
+  if (!img) return;
+  try { if (img.__jmsManagedOnLoad) img.removeEventListener("load", img.__jmsManagedOnLoad); } catch {}
+  try { if (img.__jmsManagedOnError) img.removeEventListener("error", img.__jmsManagedOnError); } catch {}
+  delete img.__jmsManagedOnLoad;
+  delete img.__jmsManagedOnError;
+}
+
+export function setManagedImageSource(img, src, { fallback = PLACEHOLDER_URL } = {}) {
+  if (!img) return;
+
+  cleanupManagedImage(img);
+
+  const primarySrc = resolveManagedImageUrl(src, "");
+  const fallbackSrc = resolveManagedImageUrl(fallback, "");
+  const nextSrc = primarySrc || fallbackSrc;
+
+  try { img.removeAttribute("srcset"); } catch {}
+  try {
+    img.classList.remove("is-lqip");
+    img.classList.remove("__hydrated");
+  } catch {}
+  img.__hydrated = false;
+
+  if (!nextSrc) {
+    finalizeManagedImage(img);
     return;
   }
-  if (img.__disableHi) return;
-  if (!__shouldRequestHiRes()) return;
-  if (isScrollerMediaBusy(img)) {
-    scheduleScrollerAwareHiResUpgrade(img, requestHiResImage);
-    return;
-  }
-  clearScrollerAwareHiResUpgrade(img);
 
-  const now = Date.now();
-  const retryAfter = Number(img.__retryAfter || 0);
-  const canRetry = !retryAfter || now >= retryAfter;
-  const retryingHi = img.__hiFailed === true;
+  const onLoad = () => {
+    cleanupManagedImage(img);
+    finalizeManagedImage(img);
+  };
 
-  if (retryingHi && !canRetry) return;
-  if (img.__hiRequested && !(retryingHi && canRetry)) return;
-
-  img.__pendingHi = false;
-  img.__hiRequested = true;
-  img.__hiFailed = false;
-  img.__phase = 'hi';
-
-  const token = (img.__retryToken = (Number(img.__retryToken || 0) + 1));
-  const hqSrc = data.hqSrc
-    ? (retryingHi ? __appendCb(data.hqSrc, `${now}-${token}`) : data.hqSrc)
-    : null;
-  const hqSrcset = data.hqSrcset
-    ? data.hqSrcset.split(',')
-        .map(s => s.trim())
-        .filter(Boolean)
-        .map(part => {
-          const m = part.match(/^(\S+)\s+(.*)$/);
-          if (!m) return part;
-          const u = retryingHi ? __appendCb(m[1], `${now}-${token}`) : m[1];
-          return `${u} ${m[2]}`;
-        })
-        .join(', ')
-    : null;
-
-  (async () => {
-    if (hqSrc) {
-      const ok = await __preloadDecode(hqSrc);
-      if (!ok) throw new Error('decode failed');
-    }
-    if (hqSrcset) { try { img.srcset = hqSrcset; } catch {} }
-    if (hqSrc)    { try { img.src = hqSrc; } catch {} }
-  })().catch(() => {
-    const hiFailures = incrementImageFailure(img, 'hi');
-    if (hiFailures >= (PRC_IMAGE_RETRY_LIMITS.hi || 2)) {
-      const settleSrc = img.currentSrc || img.src || data.lqSrc || data.fallback || PLACEHOLDER_URL;
-      markImageSettled(img, settleSrc, { disableRecovery: true, disableHi: true });
+  const onError = () => {
+    cleanupManagedImage(img);
+    const currentSrc = img.currentSrc || img.src || "";
+    if (fallbackSrc && currentSrc !== fallbackSrc) {
+      setManagedImageSource(img, fallbackSrc, { fallback: "" });
       return;
     }
-    img.__hiFailed = true;
-    img.__hiRequested = false;
-    img.__phase = 'lq';
-    img.__retryAfter = Date.now() + 12_000;
-    try { __imgIO.unobserve(img); } catch {}
-    try { __imgIO.observe(img); } catch {}
-  });
-}
+    finalizeManagedImage(img);
+  };
 
-const __imgIO = new IntersectionObserver((entries) => {
-  for (const ent of entries) {
-    const img = ent.target;
-    const data = img.__data || {};
-    if (ent.isIntersecting) {
-        if (img.__disableRecovery || hasKnownMissingImage(data)) {
-          markImageSettled(img, data.fallback || PLACEHOLDER_URL, { disableRecovery: true, disableHi: true });
-          continue;
-        }
-        if (img.__disableHi) continue;
-        if (!__shouldRequestHiRes()) continue;
+  img.__jmsManagedOnLoad = onLoad;
+  img.__jmsManagedOnError = onError;
+  img.addEventListener("load", onLoad, { once: true });
+  img.addEventListener("error", onError, { once: true });
 
-        if (data.lqSrc && img.__lqLoaded !== true) {
-          img.__pendingHi = true;
-          continue;
-        }
-
-        requestHiResImage(img);
-      } else {
-    }
+  if (img.src !== nextSrc) {
+    img.src = nextSrc;
+  } else if (img.complete) {
+    if (img.naturalWidth > 0) onLoad();
+    else onError();
   }
-}, { rootMargin: '300px 0px' });
+}
 
 function makePRCKey(it) {
   const nm = String(it?.Name || "")
@@ -1202,12 +1283,8 @@ function makePRCLooseKey(it) {
   return `${tp}::${nm}`;
 }
 
-function buildPosterUrlLQ(item) {
-  return buildPosterUrl(item, 120, 25);
-}
-
-function buildPosterUrlHQ(item) {
-  return buildPosterUrl(item, 540, 72);
+function buildPosterImageUrl(item) {
+  return buildPosterUrl(item, 540, 72) || buildPosterUrl(item, 120, 25) || null;
 }
 
 function shouldPreferTaglessImages(item) {
@@ -1371,12 +1448,8 @@ function buildBackdropUrl(item, width = "auto", quality = 90) {
   return withServer(url);
 }
 
-function buildBackdropUrlLQ(item) {
-  return buildBackdropUrl(item, 420, 25);
-}
-
-function buildBackdropUrlHQ(item) {
-  return buildBackdropUrl(item, 1920, 80);
+function buildBackdropImageUrl(item) {
+  return buildBackdropUrl(item, 1920, 80) || buildBackdropUrl(item, 420, 25) || buildPosterImageUrl(item) || null;
 }
 
 function hardWipeHoverModalDom() {
@@ -1413,7 +1486,6 @@ function hardWipeHoverModalDom() {
     if (volBtn) volBtn.innerHTML = '<i class="fa-solid fa-volume-xmark"></i>';
   } catch {}
 
-  modal.classList.add('is-skeleton');
 }
 
 function currentIndexPage() {
@@ -1522,6 +1594,7 @@ function enforceOrder(homeSectionsHint) {
   const parent = homeSectionsHint || getHomeSectionsContainer(indexPage);
   if (!parent) return;
   bindManagedSectionsBelowNative(parent);
+  try { keepManagedSectionsBelowNative(parent); } catch {}
   try { parent.__jmsManagedBelowNativeSchedule?.(); } catch {}
 }
 
@@ -1531,284 +1604,6 @@ function placeSection(sectionEl, homeSections) {
   appendToParent(targetParent || document.body, sectionEl);
   enforceOrder(targetParent);
   try { ensureIntoHomeSections(sectionEl, currentIndexPage()); } catch {}
-}
-
-function hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback }) {
-  const fb = fallback || PLACEHOLDER_URL;
-  if (IS_MOBILE) {
-    try { __imgIO.unobserve(img); } catch {}
-    try { if (img.__onErr) img.removeEventListener('error', img.__onErr); } catch {}
-    try { if (img.__onLoad) img.removeEventListener('load',  img.__onLoad); } catch {}
-    delete img.__onErr;
-    delete img.__onLoad;
-    try { img.removeAttribute('srcset'); } catch {}
-    const staticSrc = (isKnownMissingImage(hqSrc) || isKnownMissingImage(lqSrc))
-      ? fb
-      : (hqSrc || lqSrc || fb);
-    const useMobileBlurTransition = img?.classList?.contains?.('cardImage') === true;
-    const alreadyStatic = (img.__mobileStaticSrc === staticSrc && img.src === staticSrc);
-    try { img.loading = "lazy"; } catch {}
-    img.__mobileStaticSrc = staticSrc;
-    img.__phase = 'static';
-    img.__hiRequested = true;
-    img.__disableHi = true;
-    img.__pendingHi = false;
-    if (!useMobileBlurTransition) {
-      if (!alreadyStatic && img.src !== staticSrc) img.src = staticSrc;
-      img.classList.remove('is-lqip');
-      img.classList.add('__hydrated');
-      img.__hydrated = true;
-      img.__lqLoaded = true;
-      return;
-    }
-
-    const cleanupMobileStaticListeners = () => {
-      try { if (img.__onErr) img.removeEventListener('error', img.__onErr); } catch {}
-      try { if (img.__onLoad) img.removeEventListener('load', img.__onLoad); } catch {}
-      delete img.__onErr;
-      delete img.__onLoad;
-    };
-
-    const finishMobileStaticHydration = () => {
-      cleanupMobileStaticListeners();
-      img.classList.add('__hydrated');
-      requestAnimationFrame(() => {
-        try { img.classList.remove('is-lqip'); } catch {}
-      });
-      img.__hydrated = true;
-      img.__lqLoaded = true;
-    };
-
-    const failMobileStaticHydration = () => {
-      cleanupMobileStaticListeners();
-      markImageSettled(img, fb, { disableRecovery: true, disableHi: true });
-      img.__disableHi = true;
-      img.__pendingHi = false;
-    };
-
-    if (alreadyStatic && img.__hydrated === true) {
-      img.classList.remove('is-lqip');
-      img.classList.add('__hydrated');
-      img.__lqLoaded = true;
-      return;
-    }
-
-    img.classList.add('is-lqip');
-    try { img.classList.remove('__hydrated'); } catch {}
-    img.__hydrated = false;
-    img.__lqLoaded = false;
-
-    img.__onLoad = () => finishMobileStaticHydration();
-    img.__onErr = () => failMobileStaticHydration();
-    img.addEventListener('load', img.__onLoad, { once: true });
-    img.addEventListener('error', img.__onErr, { once: true });
-
-    if (!alreadyStatic && img.src !== staticSrc) {
-      img.src = staticSrc;
-    } else if (img.complete) {
-      if (img.naturalWidth > 0) finishMobileStaticHydration();
-      else failMobileStaticHydration();
-    }
-    return;
-  }
-
-  const wantsHi = __shouldRequestHiRes() && (hqSrc || hqSrcset);
-  const lqSrcNoTag = toNoTagUrl(lqSrc);
-  const hqSrcNoTag = toNoTagUrl(hqSrc);
-  const hqSrcsetNoTag = toNoTagSrcset(hqSrcset);
-
-  try { __imgIO.unobserve(img); } catch {}
-  try { if (img.__onErr) img.removeEventListener('error', img.__onErr); } catch {}
-  try { if (img.__onLoad) img.removeEventListener('load',  img.__onLoad); } catch {}
-
-  img.__data = { lqSrc, hqSrc, hqSrcset, lqSrcNoTag, hqSrcNoTag, hqSrcsetNoTag, fallback: fb };
-  img.__phase = 'lq';
-  img.__hiRequested = false;
-  img.__hiFailed = false;
-  img.__disableHi = false;
-  img.__allowLqHydrate = false;
-  img.__fallbackState = { lqNoTagTried: false, hiNoTagTried: false };
-  img.__disableRecovery = false;
-  img.__imageFailureCounts = { lq: 0, hi: 0 };
-  img.__lqLoaded = false;
-  img.__pendingHi = false;
-
-  try { img.removeAttribute('srcset'); } catch {}
-  try { img.classList.remove('__hydrated'); } catch {}
-  if (hasKnownMissingImage(img.__data)) {
-    markImageSettled(img, fb, { disableRecovery: true, disableHi: true });
-    return;
-  }
-  if (lqSrc) {
-    if (img.src !== lqSrc) img.src = lqSrc;
-  } else {
-    img.src = fb;
-  }
-  img.classList.add('is-lqip');
-  img.__hydrated = false;
-
-  const onError = () => {
-    const data = img.__data || {};
-    const st = (img.__fallbackState ||= { lqNoTagTried: false, hiNoTagTried: false });
-    if (img.__phase === 'hi') {
-      if (!st.hiNoTagTried && data.hqSrcNoTag && data.hqSrcNoTag !== data.hqSrc) {
-        st.hiNoTagTried = true;
-        promoteTaglessImageData(data);
-        img.__phase = 'hi';
-        img.__hiRequested = true;
-        img.__hiFailed = false;
-        try { img.removeAttribute('srcset'); } catch {}
-        const cb = `hq-notag-${Date.now()}`;
-        if (data.hqSrcset) {
-          try { img.srcset = __appendCbToSrcset(data.hqSrcset, cb); } catch {}
-        }
-        try { img.src = __appendCb(data.hqSrc, cb); } catch {}
-        return;
-      }
-
-      const hiFailures = incrementImageFailure(img, 'hi');
-      if (hiFailures >= (PRC_IMAGE_RETRY_LIMITS.hi || 2)) {
-        const settleSrc = data.lqSrc || img.currentSrc || img.src || fb;
-        markImageSettled(img, settleSrc, { disableRecovery: true, disableHi: true });
-        return;
-      }
-
-      img.__hiFailed = true;
-      img.__hiRequested = false;
-      img.__retryAfter = Date.now() + 12_000;
-      if (st.hiNoTagTried || !data.hqSrcNoTag || data.hqSrcNoTag === data.hqSrc) {
-        img.__disableHi = true;
-      }
-
-      try { img.removeAttribute('srcset'); } catch {}
-      try { img.classList.remove('__hydrated'); } catch {}
-
-      if (!st.lqNoTagTried && data.lqSrcNoTag && data.lqSrcNoTag !== data.lqSrc) {
-        st.lqNoTagTried = true;
-        promoteTaglessImageData(data);
-        const lqNoTag = __appendCb(data.lqSrc, `lq-notag-${Date.now()}`);
-        if (img.src !== lqNoTag) img.src = lqNoTag;
-      } else if (data.lqSrc) {
-        const lq = __appendCb(data.lqSrc, `lq-${Date.now()}`);
-        if (img.src !== lq) img.src = lq;
-      } else {
-        img.src = fb;
-      }
-
-      img.__allowLqHydrate = true;
-      img.classList.add('is-lqip');
-      img.__phase = 'lq';
-
-      try { __imgIO.unobserve(img); } catch {}
-      try { __imgIO.observe(img); } catch {}
-    } else {
-      if (!st.lqNoTagTried && data.lqSrcNoTag && data.lqSrcNoTag !== data.lqSrc) {
-        st.lqNoTagTried = true;
-        promoteTaglessImageData(data);
-        const lqNoTag = __appendCb(data.lqSrc, `lq-notag-${Date.now()}`);
-        if (img.src !== lqNoTag) img.src = lqNoTag;
-        return;
-      }
-      const lqFailures = incrementImageFailure(img, 'lq');
-      if (lqFailures >= (PRC_IMAGE_RETRY_LIMITS.lq || 2) || hasKnownMissingImage(data)) {
-        markImageTerminalFailure(img, data, fb);
-        return;
-      }
-      img.__allowLqHydrate = true;
-      img.__retryAfter = Date.now() + 12_000;
-      try { img.src = fb; } catch {}
-    }
-  };
-
-  const onLoad = () => {
-    const data = img.__data || {};
-    const fallbackRecoveryActive = !!img.__allowLqHydrate;
-
-    const loadedSrc = img.currentSrc || img.src || '';
-    if (loadedSrc && loadedSrc !== fb) {
-      clearMissingImage(loadedSrc);
-      clearMissingImage(data.lqSrc);
-      clearMissingImage(data.hqSrc);
-      resetImageFailures(img);
-    }
-
-    if (img.__phase === 'lq' && !fallbackRecoveryActive) {
-      img.__lqLoaded = true;
-      img.classList.add('__hydrated');
-      img.classList.add('is-lqip');
-      img.__hydrated = true;
-
-      if (!wantsHi) {
-        img.classList.remove('is-lqip');
-        try { __imgIO.unobserve(img); } catch {}
-        return;
-      }
-
-      if (img.__pendingHi) {
-        scheduleScrollerAwareHiResUpgrade(img, requestHiResImage, 32);
-      }
-      return;
-    }
-
-    if (img.__phase === 'hi' || !wantsHi) {
-      img.classList.add('__hydrated');
-      img.classList.remove('is-lqip');
-      img.__hydrated = true;
-      img.__pendingHi = false;
-      try { __imgIO.unobserve(img); } catch {}
-      try { img.removeEventListener('error', onError); } catch {}
-      try { img.removeEventListener('load',  onLoad); } catch {}
-      delete img.__onErr;
-      delete img.__onLoad;
-      delete img.__allowLqHydrate;
-      delete img.__retryAfter;
-      return;
-    }
-
-    if (fallbackRecoveryActive) {
-      img.classList.add('__hydrated');
-      img.classList.remove('is-lqip');
-      img.__hydrated = true;
-      img.__hiRequested = false;
-      img.__pendingHi = false;
-      img.__retryAfter = Math.max(Number(img.__retryAfter || 0), Date.now() + 12_000);
-      try { __imgIO.unobserve(img); } catch {}
-      try { __imgIO.observe(img); } catch {}
-    }
-  };
-
-  img.__onErr = onError;
-  img.__onLoad = onLoad;
-  img.addEventListener('error', onError, { passive: true });
-  img.addEventListener('load',  onLoad,  { passive: true });
-
-  if (wantsHi) {
-    __imgIO.observe(img);
-  }
-}
-
-function unobserveImage(img) {
-  clearScrollerAwareHiResUpgrade(img);
-  try { __imgIO.unobserve(img); } catch {}
-  try { img.removeEventListener('error', img.__onErr); } catch {}
-  try { img.removeEventListener('load',  img.__onLoad); } catch {}
-  delete img.__onErr;
-  delete img.__onLoad;
-  delete img.__hiFailed;
-  delete img.__hiRequested;
-  delete img.__disableHi;
-  delete img.__disableRecovery;
-  delete img.__allowLqHydrate;
-  delete img.__retryAfter;
-  delete img.__retryToken;
-  delete img.__fallbackState;
-  delete img.__imageFailureCounts;
-  delete img.__lqLoaded;
-  delete img.__pendingHi;
-  if (img) {
-    try { img.removeAttribute('srcset'); } catch {}
-    try { delete img.__data; } catch {}
-  }
 }
 
 (function ensureGlobalTouchOutsideCloser(){
@@ -1882,7 +1677,7 @@ function hasRenderablePersonalRecsContent(indexPage) {
   const section = getScopedSection("personal-recommendations", indexPage);
   if (!section) return false;
   return !!section.querySelector(
-    ".personal-recs-row .personal-recs-card:not(.skeleton), .personal-recs-row .no-recommendations"
+    ".personal-recs-row .personal-recs-card, .personal-recs-row .no-recommendations"
   );
 }
 
@@ -1896,7 +1691,7 @@ function hasRenderableBecauseYouWatchedContent(indexPage) {
   const sections = getBecauseYouWatchedSections(indexPage);
   if (!sections.length) return false;
   return sections.some((section) => !!section.querySelector(
-    ".byw-row .personal-recs-card:not(.skeleton), .byw-row .no-recommendations"
+    ".byw-row .personal-recs-card, .byw-row .no-recommendations"
   ));
 }
 
@@ -1922,7 +1717,7 @@ function hasMountedRecommendationUi(runtimeConfig, indexPage) {
   return personalOk && genreOk && bywOk;
 }
 
-export async function renderPersonalRecommendations(options = {}) {
+async function renderPersonalRecommendationsInternal(options = {}) {
   const force = options?.force === true;
   if (force) {
     __deferredHomeSectionSeq += 1;
@@ -1995,6 +1790,21 @@ export async function renderPersonalRecommendations(options = {}) {
     return false;
   }
 
+  const homeSections = getHomeSectionsContainer(activeIndexPage);
+  if (
+    homeSections?.isConnected &&
+    runtimeConfig.enablePersonalRecommendations &&
+    !getScopedSection("personal-recommendations", activeIndexPage)
+  ) {
+    try {
+      await waitForNativeHomeSectionStability(homeSections, {
+        timeoutMs: 1800,
+        stableMs: 220,
+        minVisibleCount: 1,
+      });
+    } catch {}
+  }
+
   if (!force && hasMountedRecommendationUi(runtimeConfig, activeIndexPage)) {
     prcLog("render:skip:already-rendered", {
       force,
@@ -2033,6 +1843,26 @@ export async function renderPersonalRecommendations(options = {}) {
       });
       scheduleHomeScrollerRefresh(0);
       return;
+    }
+  }
+  if (!force) {
+    const hasPersonalShell = !!getScopedSection("personal-recommendations", activeIndexPage);
+    const hasBywShell = getBecauseYouWatchedSections(activeIndexPage).length > 0;
+    const hasGenreShell = !!getScopedSection("genre-hubs", activeIndexPage);
+    const hasPartialShellOnly =
+      (runtimeConfig.enablePersonalRecommendations && hasPersonalShell && !hasRenderablePersonalRecsContent(activeIndexPage)) ||
+      (runtimeConfig.enableBecauseYouWatched && hasBywShell && !hasRenderableBecauseYouWatchedContent(activeIndexPage)) ||
+      (runtimeConfig.enableGenreHubs && hasGenreShell && !hasRenderableGenreHubContent(getScopedSection("genre-hubs", activeIndexPage)));
+    if (hasPartialShellOnly) {
+      prcWarn("render:invalidate:stale-shell-only-state", {
+        force,
+        deferredSeq,
+        hasPersonalShell,
+        hasBywShell,
+        hasGenreShell,
+      });
+      clearPersonalDeferredPromises();
+      invalidatePersonalManagedQueue();
     }
   }
   __personalRecsInitDone = true;
@@ -2080,26 +1910,33 @@ export async function renderPersonalRecommendations(options = {}) {
     const tasks = [];
 
     if (runtimeConfig.enablePersonalRecommendations) {
-      setPersonalRecsDone(false);
-      const personalCardCount = getPersonalRecsCardCount();
-      const section = ensurePersonalRecsContainer(indexPage);
-      const row = section?.querySelector?.(".personal-recs-row") || null;
-      if (row) {
-        if (!row.dataset.mounted || row.childElementCount === 0) {
-          row.dataset.mounted = "1";
-          renderSkeletonCards(row, personalCardCount);
-          setupScroller(row);
-        }
+      const personalAlreadyReady =
+        !force &&
+        getPersonalRecsDone() &&
+        hasRenderablePersonalRecsContent(indexPage);
 
-        tasks.push((async () => {
+      if (!personalAlreadyReady) {
+        setPersonalRecsDone(false);
+      }
+      const personalCardCount = getPersonalRecsCardCount();
+      if (!personalAlreadyReady) {
+        try {
+          await waitForManagedHomeRowRelease({
+            timeoutMs: 25000,
+            rootMargin: "0px 0px 0px 0px",
+          });
+        } catch {}
+      }
+      const section = ensurePersonalRecsContainer(indexPage);
+      try { registerManagedHomeRowAnchor(section); } catch {}
+      const row = section?.querySelector?.(".personal-recs-row") || null;
+      if (row && !personalAlreadyReady) {
+        tasks.push(enqueueManagedSectionRender("personalRecommendations", async () => {
           try {
-            prcLog("PERSONAL:wait:managed-gate", {
+            prcLog("PERSONAL:queue:start", {
               force,
               seq: deferredSeq,
             });
-            await waitForManagedSectionGate("personalRecommendations", { timeoutMs: 25000 });
-            if (deferredSeq !== __deferredHomeSectionSeq) return;
-            await waitForManagedSectionDependencyCompletion("personalRecommendations", { timeoutMs: 25000 });
             if (deferredSeq !== __deferredHomeSectionSeq) return;
             if (!row.isConnected || !hasActivePersonalRecsHomeSections()) {
               prcWarn("PERSONAL:abort:gate-invalidated", {
@@ -2107,6 +1944,10 @@ export async function renderPersonalRecommendations(options = {}) {
                 seq: deferredSeq,
               });
               return;
+            }
+            if (!row.dataset.mounted || row.childElementCount === 0) {
+              row.dataset.mounted = "1";
+              setupScroller(row);
             }
             const { userId, serverId } = getSessionInfo();
             const recommendations = await fetchPersonalRecommendations(
@@ -2122,17 +1963,51 @@ export async function renderPersonalRecommendations(options = {}) {
             console.error("Kişisel öneriler alınırken hata:", e);
             setPersonalRecsDone(true);
           }
-        })());
+        }, {
+          timeoutMs: 25000,
+          force,
+          reuseKey: false,
+          getAnchor: () => section?.isConnected ? section : null,
+          isStillValid: () => (
+            deferredSeq === __deferredHomeSectionSeq &&
+            row.isConnected &&
+            hasActivePersonalRecsHomeSections()
+          ),
+        }));
+      } else if (personalAlreadyReady) {
+        setPersonalRecsDone(true);
       }
     }
 
     if (runtimeConfig.enableBecauseYouWatched) {
-      setBywDone(false);
-      scheduleDeferredBecauseYouWatchedRender({ force, seq: deferredSeq });
+      const bywAlreadyReady =
+        !force &&
+        getBywDone() &&
+        hasReadyBecauseYouWatchedState(indexPage);
+      if (!bywAlreadyReady) {
+        setBywDone(false);
+        tasks.push(scheduleDeferredBecauseYouWatchedRender({
+          force,
+          seq: deferredSeq,
+          indexPage,
+        }));
+      } else {
+        setBywDone(true);
+      }
     }
 
     if (runtimeConfig.enableGenreHubs) {
-      scheduleDeferredGenreHubsRender({ force, seq: deferredSeq });
+      const genreAlreadyReady =
+        !force &&
+        window.__jmsGenreHubsDone === true &&
+        hasRenderableGenreHubContent(getScopedSection("genre-hubs", indexPage));
+      if (!genreAlreadyReady) {
+        __resetGenreHubsDoneSignal();
+        try { window.__jmsGenreFirstReady = false; } catch {}
+        tasks.push(scheduleDeferredGenreHubsRender({ force, seq: deferredSeq }));
+      } else {
+        try { __signalGenreHubsDone(); } catch {}
+      }
     }
 
     prcLog("render:deferred-sections-scheduled", {
@@ -2155,20 +2030,32 @@ export async function renderPersonalRecommendations(options = {}) {
     const personalMounted =
       !runtimeConfig.enablePersonalRecommendations ||
       hasRenderablePersonalRecsContent(indexPage);
-    if (personalMounted) {
-      prcLog("render:success:personal-block-ready", {
+    const bywMounted =
+      !runtimeConfig.enableBecauseYouWatched ||
+      hasReadyBecauseYouWatchedState(indexPage);
+    const genreMounted =
+      !runtimeConfig.enableGenreHubs ||
+      hasRenderableGenreHubContent(getScopedSection("genre-hubs", indexPage));
+    if (personalMounted && bywMounted && genreMounted) {
+      prcLog("render:success:managed-blocks-ready", {
         force,
         deferredSeq,
         indexPageId: indexPage?.id || null,
+        personalMounted,
+        bywMounted,
+        genreMounted,
       });
       clearPersonalRecsRetry();
     } else {
-      prcWarn("render:retry:personal-block-empty", {
+      prcWarn("render:retry:managed-blocks-incomplete", {
         force,
         deferredSeq,
         indexPageId: indexPage?.id || null,
+        personalMounted,
+        bywMounted,
+        genreMounted,
       });
-      schedulePersonalRecsRetry(1400, options, "personal-block-empty");
+      schedulePersonalRecsRetry(1400, options, "managed-blocks-incomplete");
     }
 
   } catch (error) {
@@ -2182,6 +2069,22 @@ export async function renderPersonalRecommendations(options = {}) {
   } finally {
     unlockDownScroll();
     __personalRecsBusy = false;
+  }
+}
+
+export async function renderPersonalRecommendations(options = {}) {
+  if (__personalRecsMountPromise) {
+    return __personalRecsMountPromise;
+  }
+
+  const run = renderPersonalRecommendationsInternal(options);
+  __personalRecsMountPromise = run;
+  try {
+    return await run;
+  } finally {
+    if (__personalRecsMountPromise === run) {
+      __personalRecsMountPromise = null;
+    }
   }
 }
 
@@ -2461,7 +2364,7 @@ async function fetchBecauseYouWatched(userId, targetCount, minRating, seedKey, o
   return { seedId, items: uniq.slice(0, targetCount) };
 }
 
-function runWithConcurrency(fns, limit = 2) {
+function runWithConcurrency(fns, limit = 1) {
   const queue = (fns || []).slice();
   const n = Math.max(1, Math.min(limit | 0, queue.length || 1));
   const workers = new Array(n).fill(0).map(async () => {
@@ -2472,6 +2375,13 @@ function runWithConcurrency(fns, limit = 2) {
     }
   });
   return Promise.all(workers);
+}
+
+function waitForBywSectionAdvance(section, {
+  timeoutMs = IS_MOBILE ? 110 : 56,
+} = {}) {
+  void section;
+  return yieldManagedHomeSectionStep(timeoutMs);
 }
 
 async function renderBecauseYouWatchedAuto(indexPage, options = {}) {
@@ -2516,22 +2426,28 @@ async function renderBecauseYouWatchedAuto(indexPage, options = {}) {
     }
   }
 
-  const ctxs = [];
+  let lastRenderedSection = null;
   for (let i = 0; i < seeds.length; i++) {
+    try {
+      await waitForManagedHomeRowRelease({
+        anchor: lastRenderedSection?.isConnected ? lastRenderedSection : null,
+        timeoutMs: 25000,
+        rootMargin: "0px 0px 0px 0px",
+      });
+    } catch {}
+
     const seed = seeds[i];
     const seedId = seed.Id;
     const seedName = seed.Name || "";
     const section = ensureBecauseContainer(indexPage, String(i));
+    try { registerManagedHomeRowAnchor(section); } catch {}
     setBywTitle(section, seedName);
     const row = section.querySelector(".byw-row");
     if (!row) continue;
-    renderSkeletonCards(row, bywCardCount);
-    setupScroller(row);
-    ctxs.push({ i, seed, seedId, seedName, section, row });
-  }
-
-  const jobs = ctxs.map((ctx) => async () => {
-    const { i, seedId, seedName, section, row } = ctx;
+    if (!row.dataset.mounted || row.childElementCount === 0) {
+      row.dataset.mounted = "1";
+      setupScroller(row);
+    }
     const showHero = isPersonalRecsHeroEnabled();
     const fetchCount = showHero
       ? Math.min(UNIFIED_ROW_ITEM_LIMIT, bywCardCount + 1)
@@ -2540,7 +2456,7 @@ async function renderBecauseYouWatchedAuto(indexPage, options = {}) {
     clearRowWithCleanup(row);
     if (!items || !items.length) {
       cleanupBecauseYouWatchedSection(section);
-      return;
+      continue;
     }
 
     const heroItem = showHero ? (items[0] || null) : null;
@@ -2587,19 +2503,49 @@ async function renderBecauseYouWatchedAuto(indexPage, options = {}) {
       }
     } catch {}
 
-    const frag = document.createDocumentFragment();
-    for (let k = 0; k < Math.min(rowItems.length, bywCardCount); k++) {
-      frag.appendChild(createRecommendationCard(rowItems[k], serverId, {
-        aboveFold: k < (IS_MOBILE ? 2 : 3),
-        sizeHint: "byw"
-      }));
-    }
-    row.appendChild(frag);
-    try { applyResumeLabelsToCards(Array.from(row.querySelectorAll('.personal-recs-card')), userId); } catch {}
-    triggerScrollerUpdate(row);
-  });
+    await new Promise((resolve) => {
+      const allCards = [];
+      let scrollerReady = false;
+      progressivelyRenderCardRow({
+        row,
+        items: rowItems,
+        limit: bywCardCount,
+        initialCount: getProgressiveRowInitialCount(
+          Math.min(rowItems.length, bywCardCount),
+          { mobileCount: 2, desktopCount: 3 }
+        ),
+        chunkSize: getProgressiveRowChunkSize({ mobileCount: 2, desktopCount: 3 }),
+        delayMs: IS_MOBILE ? 82 : 38,
+        appendCard: (item, index) => {
+          const card = createRecommendationCard(item, serverId, {
+            aboveFold: index < (IS_MOBILE ? 2 : 3),
+            sizeHint: "byw"
+          });
+          allCards.push(card);
+          return card;
+        },
+        onAppend: () => {
+          if (!scrollerReady) {
+            setupScroller(row);
+            scrollerReady = true;
+          }
+          triggerScrollerUpdate(row);
+        },
+        onComplete: () => {
+          if (!scrollerReady) {
+            setupScroller(row);
+          }
+          try { applyResumeLabelsToCards(allCards, userId); } catch {}
+          triggerScrollerUpdate(row);
+          resolve();
+        }
+      });
+    });
 
-  await runWithConcurrency(jobs, IS_MOBILE ? MOBILE_ROW_BATCH_SIZE : 2);
+    if (section?.isConnected) {
+      lastRenderedSection = section;
+    }
+  }
   try { enforceOrder(getHomeSectionsContainer(indexPage)); } catch {}
   scheduleHomeScrollerRefresh(0);
   setBywDone(true);
@@ -2657,34 +2603,24 @@ function ensurePersonalRecsContainer(indexPage) {
       return section;
     }
 
-function renderSkeletonCards(row, count = 1) {
-  row.innerHTML = "";
-  for (let i = 0; i < count; i++) {
-    const el = document.createElement("div");
-    el.className = "card personal-recs-card skeleton";
-    el.innerHTML = `
-      <div class="cardBox">
-        <div class="cardImageContainer">
-          <div class="cardImage"></div>
-          <div class="prc-gradient"></div>
-          <div class="prc-overlay">
-            <div class="prc-type-badge skeleton-line" style="width:40px;height:18px;border-radius:4px;"></div>
-            <div class="prc-meta">
-              <span class="skeleton-line" style="width:42px;height:18px;border-radius:999px;"></span>
-              <span class="prc-dot">•</span>
-              <span class="skeleton-line" style="width:38px;height:12px;"></span>
-              <span class="prc-dot">•</span>
-              <span class="skeleton-line" style="width:38px;height:12px;"></span>
-            </div>
-            <div class="prc-genres">
-              <span class="skeleton-line" style="width:90px;height:12px;"></span>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-    row.appendChild(el);
+function ensureGenreHubsShell(indexPage) {
+  const page = indexPage || currentIndexPage();
+  if (!page) return null;
+
+  let wrap = getScopedSection("genre-hubs", page);
+  if (!wrap) {
+    wrap = document.createElement("div");
+    wrap.id = "genre-hubs";
+    wrap.className = "jms-managed-state-wrap genre-hubs-state-wrap";
+    wrap.hidden = true;
+    wrap.setAttribute("aria-hidden", "true");
+    wrap.style.display = "none";
   }
+
+  if (wrap.parentElement !== page) {
+    page.appendChild(wrap);
+  }
+  return wrap;
 }
 
 async function fetchPersonalRecommendations(userId, targetCount = null, minRating = 0, options = {}) {
@@ -2923,6 +2859,162 @@ function cleanupRow(row) {
   row.innerHTML = '';
 }
 
+function getProgressiveRowInitialCount(limit, { mobileCount = 2, desktopCount = 4 } = {}) {
+  const max = Math.max(0, Number(limit) || 0);
+  if (!max) return 0;
+  const configured = IS_MOBILE ? mobileCount : desktopCount;
+  return Math.max(1, Math.min(max, configured | 0));
+}
+
+function getProgressiveRowChunkSize({ mobileCount = 2, desktopCount = 3 } = {}) {
+  const configured = IS_MOBILE ? mobileCount : desktopCount;
+  return Math.max(1, configured | 0);
+}
+
+export function progressivelyRenderCardRow({
+  row,
+  items,
+  appendCard,
+  limit = null,
+  initialCount = null,
+  chunkSize = null,
+  delayMs = null,
+  isCurrent = null,
+  onAppend = null,
+  onComplete = null,
+} = {}) {
+  if (!row?.isConnected || !Array.isArray(items) || !items.length || typeof appendCard !== "function") {
+    try { onComplete?.({ rendered: 0, total: 0, aborted: false }); } catch {}
+    return { cancel() {} };
+  }
+
+  const total = Math.max(0, Math.min(
+    Number.isFinite(Number(limit)) ? Number(limit) : items.length,
+    items.length
+  ));
+  if (!total) {
+    try { onComplete?.({ rendered: 0, total: 0, aborted: false }); } catch {}
+    return { cancel() {} };
+  }
+
+  let rendered = 0;
+  let cancelled = false;
+  let timerId = 0;
+  let idleId = 0;
+  let usedIdle = false;
+
+  const clearScheduled = () => {
+    if (timerId) {
+      try { clearTimeout(timerId); } catch {}
+      timerId = 0;
+    }
+    if (idleId) {
+      try {
+        const cancelIdle = window.cancelIdleCallback;
+        if (typeof cancelIdle === "function") {
+          cancelIdle(idleId);
+        }
+      } catch {}
+      idleId = 0;
+    }
+    usedIdle = false;
+  };
+
+  const isAlive = () => (
+    !cancelled &&
+    !!row?.isConnected &&
+    (typeof isCurrent !== "function" || isCurrent() === true)
+  );
+
+  const finish = ({ aborted = false } = {}) => {
+    clearScheduled();
+    if (cancelled) return;
+    cancelled = true;
+    try { onComplete?.({ rendered, total, aborted }); } catch {}
+  };
+
+  const appendNext = (count) => {
+    if (!isAlive()) return false;
+    const frag = document.createDocumentFragment();
+    let appended = 0;
+
+    while (rendered < total && appended < count) {
+      const card = appendCard(items[rendered], rendered);
+      rendered += 1;
+      if (!card) continue;
+      frag.appendChild(card);
+      appended += 1;
+    }
+
+    if (!appended) return false;
+    row.appendChild(frag);
+    try { onAppend?.({ rendered, total, appended }); } catch {}
+    return true;
+  };
+
+  const pump = () => {
+    clearScheduled();
+    if (!isAlive()) {
+      finish({ aborted: true });
+      return;
+    }
+    if (rendered >= total) {
+      finish();
+      return;
+    }
+    const nextChunkSize = Math.max(1, chunkSize | 0);
+    const appended = appendNext(nextChunkSize);
+    if (!appended || rendered >= total) {
+      finish({ aborted: !appended });
+      return;
+    }
+    schedule();
+  };
+
+  const schedule = () => {
+    if (!isAlive()) {
+      finish({ aborted: true });
+      return;
+    }
+    if (rendered >= total) {
+      finish();
+      return;
+    }
+
+    const waitMs = Math.max(16, Number(delayMs) || (IS_MOBILE ? 80 : 32));
+    if (typeof window.requestIdleCallback === "function") {
+      usedIdle = true;
+      idleId = window.requestIdleCallback(() => {
+        idleId = 0;
+        usedIdle = false;
+        pump();
+      }, { timeout: Math.max(80, waitMs) });
+      return;
+    }
+
+    timerId = window.setTimeout(() => {
+      timerId = 0;
+      pump();
+    }, waitMs);
+  };
+
+  const head = Math.max(
+    1,
+    Math.min(total, Number.isFinite(Number(initialCount)) ? Number(initialCount) : total)
+  );
+
+  const appended = appendNext(head);
+  if (!appended || rendered >= total) {
+    finish({ aborted: !appended });
+    return { cancel: () => finish({ aborted: true }) };
+  }
+
+  schedule();
+  return {
+    cancel: () => finish({ aborted: true })
+  };
+}
+
 function renderRecommendationCards(row, items, serverId) {
   const personalCardCount = getPersonalRecsCardCount();
   clearRowWithCleanup(row);
@@ -2933,56 +3025,49 @@ function renderRecommendationCards(row, items, serverId) {
 
   const unique = items;
   const slice = unique;
-  if (IS_MOBILE) {
-    const mobileCards = [];
-    const mobileFrag = document.createDocumentFragment();
-    const limit = Math.min(slice.length, personalCardCount);
+  const allCards = [];
+  const domSeen = new Set();
+  let scrollerReady = false;
 
-    for (let i = 0; i < limit; i++) {
-      const c = createRecommendationCard(slice[i], serverId, {
-        aboveFold: i < 4,
+  progressivelyRenderCardRow({
+    row,
+    items: slice,
+    limit: personalCardCount,
+    initialCount: getProgressiveRowInitialCount(
+      Math.min(slice.length, personalCardCount),
+      { mobileCount: 2, desktopCount: 4 }
+    ),
+    chunkSize: getProgressiveRowChunkSize({ mobileCount: 2, desktopCount: 3 }),
+    delayMs: IS_MOBILE ? 76 : 34,
+    appendCard: (it, index) => {
+      const key = makePRCKey(it);
+      if (key && domSeen.has(key)) return null;
+      if (key) domSeen.add(key);
+      const card = createRecommendationCard(it, serverId, {
+        aboveFold: index < (IS_MOBILE ? 2 : 4),
         sizeHint: "personal"
       });
-      mobileCards.push(c);
-      mobileFrag.appendChild(c);
+      allCards.push(card);
+      return card;
+    },
+    onAppend: () => {
+      if (!scrollerReady) {
+        setupScroller(row);
+        scrollerReady = true;
+      }
+      triggerScrollerUpdate(row);
+    },
+    onComplete: () => {
+      if (!scrollerReady) {
+        setupScroller(row);
+      }
+      triggerScrollerUpdate(row);
+      try {
+        const { userId } = getSessionInfo();
+        scheduleResumeLabels(allCards, userId);
+      } catch {}
     }
-
-    row.appendChild(mobileFrag);
-
-    try {
-      const { userId } = getSessionInfo();
-      scheduleResumeLabels(mobileCards, userId);
-    } catch {}
-    return;
-  }
-
-  const aboveFoldCount = Math.min(6, slice.length);
-  const frag = document.createDocumentFragment();
-  const domSeen = new Set();
-  const allCards = [];
-  let rendered = 0;
-
-  for (let i = 0; i < slice.length && rendered < personalCardCount; i++) {
-    const it = slice[i];
-    const k = makePRCKey(it);
-    if (k && domSeen.has(k)) continue;
-    if (k) domSeen.add(k);
-    const c = createRecommendationCard(it, serverId, {
-      aboveFold: rendered < aboveFoldCount,
-      sizeHint: "personal"
-    });
-    allCards.push(c);
-    frag.appendChild(c);
-    rendered++;
-  }
-
-  row.appendChild(frag);
-  triggerScrollerUpdate(row);
-
-  try {
-    const { userId } = getSessionInfo();
-    scheduleResumeLabels(allCards, userId);
-  } catch {}
+  });
 }
 
 const LIGHT_FIELDS = [
@@ -3021,24 +3106,6 @@ const COMMON_FIELDS = [
   "RemoteTrailers"
 ].join(",");
 
-function buildPosterSrcSet(item) {
-  const primaryCandidate = getPrimaryImageCandidate(item);
-  if (!primaryCandidate) return "";
-
-  const hs = [240, 360, 540, 720];
-  const q  = 50;
-  const ar = Number(item.PrimaryImageAspectRatio) || 0.6667;
-  const omitTag = shouldPreferTaglessImages(item);
-  const raw = hs
-    .map(h => {
-      const u = buildCandidateImageUrl(item, primaryCandidate, h, q, { omitTag });
-      return u ? `${u} ${Math.round(h * ar)}w` : "";
-    })
-    .filter(Boolean)
-    .join(", ");
-  return withServerSrcset(raw);
-}
-
 function clampText(s, max = 220) {
   const t = String(s || "").replace(/\s+/g, " ").trim();
   if (!t) return "";
@@ -3069,53 +3136,13 @@ function buildPosterUrl(item, height = 540, quality = 72, { omitTag = false } = 
   return buildCandidateImageUrl(item, candidate, height, quality, { omitTag });
 }
 
-function toNoTagUrl(url) {
-  if (!url) return "";
-  const s = String(url);
-  try {
-    const u = new URL(s, window.location?.origin || "http://localhost");
-    u.searchParams.delete("tag");
-    return u.toString();
-  } catch {
-    const [base, q = ""] = s.split("?");
-    if (!q) return s;
-    const rest = q.split("&").filter(Boolean).filter(p => !/^tag=/i.test(p));
-    return rest.length ? `${base}?${rest.join("&")}` : base;
-  }
-}
-
-function toNoTagSrcset(srcset) {
-  if (!srcset || typeof srcset !== "string") return "";
-  return srcset
-    .split(",")
-    .map(part => {
-      const p = part.trim();
-      if (!p) return "";
-      const m = p.match(/^(\S+)(\s+.+)?$/);
-      if (!m) return p;
-      return `${toNoTagUrl(m[1])}${m[2] || ""}`;
-    })
-    .filter(Boolean)
-    .join(", ");
-}
-
-function promoteTaglessImageData(data) {
-  if (!data || data.__taglessPromoted) return data;
-  if (data.lqSrcNoTag && data.lqSrcNoTag !== data.lqSrc) data.lqSrc = data.lqSrcNoTag;
-  if (data.hqSrcNoTag && data.hqSrcNoTag !== data.hqSrc) data.hqSrc = data.hqSrcNoTag;
-  if (data.hqSrcsetNoTag && data.hqSrcsetNoTag !== data.hqSrcset) data.hqSrcset = data.hqSrcsetNoTag;
-  data.__taglessPromoted = true;
-  return data;
-}
-
 function createGenreHeroCard(item, serverId, genreName, { aboveFold = false } = {}) {
   const { itemId, itemName } = primeItemIdentity(item);
   const hero = document.createElement('div');
   hero.className = 'dir-row-hero';
   if (itemId) hero.dataset.itemId = itemId;
 
-  const bgLQ = buildBackdropUrlLQ(item) || buildPosterUrlLQ(item) || null;
-  const bgHQ = buildBackdropUrlHQ(item) || buildPosterUrlHQ(item) || null;
+  const bgSrc = buildBackdropImageUrl(item);
 
   const logo = buildLogoUrl(item);
   const year = item.ProductionYear || '';
@@ -3173,16 +3200,7 @@ function createGenreHeroCard(item, serverId, genreName, { aboveFold = false } = 
   try {
     const img = hero.querySelector('.dir-row-hero-bg');
     if (img) {
-      if (bgHQ || bgLQ) {
-        hydrateBlurUp(img, {
-          lqSrc: bgLQ,
-          hqSrc: bgHQ,
-          hqSrcset: null,
-          fallback: PLACEHOLDER_URL
-        });
-      } else {
-        img.src = PLACEHOLDER_URL;
-      }
+      setManagedImageSource(img, bgSrc, { fallback: PLACEHOLDER_URL });
     }
   } catch {}
 
@@ -3215,7 +3233,7 @@ function createGenreHeroCard(item, serverId, genreName, { aboveFold = false } = 
     detachPreviewHandlers(hero);
     try {
       const img = hero.querySelector('.dir-row-hero-bg');
-      if (img) unobserveImage(img);
+      if (img) cleanupManagedImage(img);
     } catch {}
   }, { once: true });
 
@@ -3238,6 +3256,83 @@ function queueEnterAnimation(el) {
   return el;
 }
 
+export function getManagedCardTitleDisplayMode(source = null) {
+  const cfg = source || getConfig?.() || config || {};
+  return normalizeManagedCardTitleDisplayMode(cfg.managedCardTitleDisplayMode);
+}
+
+function buildManagedCardTitleLineHtml(titleText, subtitleText = "", { maxTitleLength = 42 } = {}) {
+  const safeTitle = escapeHtml(clampText(titleText, maxTitleLength));
+  const safeSubtitle = escapeHtml(String(subtitleText || "").trim());
+  if (!safeTitle && !safeSubtitle) return "";
+  return `
+    <div class="prc-titleline">
+      ${safeTitle}
+      ${safeSubtitle ? `<div class="prc-subtitleline">${safeSubtitle}</div>` : ""}
+    </div>
+  `;
+}
+
+export function resolveManagedCardTitleRender({
+  titleText = "",
+  subtitleText = "",
+  logoUrl = "",
+  logoAltText = "",
+  aboveFold = false,
+  maxTitleLength = 42,
+  mode = null,
+} = {}) {
+  const resolvedMode = normalizeManagedCardTitleDisplayMode(
+    mode ?? getManagedCardTitleDisplayMode()
+  );
+  const titleHtml = buildManagedCardTitleLineHtml(titleText, subtitleText, {
+    maxTitleLength,
+  });
+  const canRenderLogo = !!logoUrl && (
+    resolvedMode === "logo" ||
+    resolvedMode === "logoTitle"
+  );
+  const safeSubtitle = escapeHtml(String(subtitleText || "").trim());
+  const safeLogoAlt = escapeHtml(String(logoAltText || titleText || "").trim());
+  const logoHtml = canRenderLogo
+    ? `
+      <div class="prc-card-logo">
+        <img src="${escapeHtml(logoUrl)}"
+          alt="${safeLogoAlt}"
+          loading="${aboveFold ? "eager" : "lazy"}"
+          decoding="async"
+          ${aboveFold ? 'fetchpriority="high"' : ""}>
+      </div>
+    `
+    : "";
+
+  switch (resolvedMode) {
+    case "title":
+      return {
+        html: titleHtml,
+        hasLogo: false,
+      };
+    case "logoTitle":
+      return {
+        html: canRenderLogo
+          ? `${logoHtml}${safeSubtitle ? `<div class="prc-subtitleline prc-logo-subtitle">${safeSubtitle}</div>` : ""}`
+          : titleHtml,
+        hasLogo: canRenderLogo,
+      };
+    case "none":
+      return {
+        html: "",
+        hasLogo: false,
+      };
+    case "logo":
+    default:
+      return {
+        html: logoHtml,
+        hasLogo: canRenderLogo,
+      };
+  }
+}
+
 function createRecommendationCard(item, serverId, renderOptions = false) {
   const normalizedOptions = (typeof renderOptions === "object" && renderOptions !== null)
     ? renderOptions
@@ -3253,9 +3348,7 @@ function createRecommendationCard(item, serverId, renderOptions = false) {
   if (itemId) card.dataset.itemId = itemId;
   card.setAttribute('data-key', makePRCKey(item));
 
-  const posterUrlHQ = buildPosterUrlHQ(item);
-  const posterSetHQ = posterUrlHQ ? buildPosterSrcSet(item) : "";
-  const posterUrlLQ = buildPosterUrlLQ(item);
+  const posterUrlStatic = buildPosterImageUrl(item);
   const year = item.ProductionYear || "";
   const ageChip = formatOfficialRatingLabel(item.OfficialRating || "");
   const runtimeTicks = item.Type === "Series" ? item.CumulativeRunTimeTicks : item.RunTimeTicks;
@@ -3266,22 +3359,13 @@ function createRecommendationCard(item, serverId, renderOptions = false) {
     ? `<div class="community-rating" title="Community Rating">⭐ ${item.CommunityRating.toFixed(1)}</div>`
     : "";
   const logoUrl = buildLogoUrl(item);
-  const fallbackTitleHtml = `
-    <div class="prc-titleline">
-      ${escapeHtml(clampText(itemName, 42))}
-    </div>
-  `;
-  const titleBlockHtml = logoUrl
-    ? `
-      <div class="prc-card-logo">
-        <img src="${escapeHtml(logoUrl)}"
-          alt="${escapeHtml(itemName)} logo"
-          loading="${aboveFold ? 'eager' : 'lazy'}"
-          decoding="async"
-          ${aboveFold ? 'fetchpriority="high"' : ''}>
-      </div>
-    `
-    : fallbackTitleHtml;
+  const titleRender = resolveManagedCardTitleRender({
+    titleText: itemName,
+    logoUrl,
+    logoAltText: `${itemName} logo`,
+    aboveFold,
+    maxTitleLength: 42,
+  });
 
   card.innerHTML = `
     <div class="cardBox">
@@ -3301,7 +3385,7 @@ function createRecommendationCard(item, serverId, renderOptions = false) {
           </div>
           <div class="prc-gradient"></div>
           <div class="prc-overlay">
-            ${titleBlockHtml}
+            ${titleRender.html}
             <div class="prc-meta">
               ${ageChip ? `<span class="prc-age">${ageChip}</span><span class="prc-dot">•</span>` : ""}
               ${year ? `<span class="prc-year">${year}</span><span class="prc-dot">•</span>` : ""}
@@ -3318,9 +3402,7 @@ function createRecommendationCard(item, serverId, renderOptions = false) {
   if (logoImg) {
     logoImg.addEventListener('error', () => {
       try {
-        const logoWrap = logoImg.closest('.prc-card-logo');
-        if (!logoWrap?.isConnected) return;
-        logoWrap.outerHTML = fallbackTitleHtml;
+        logoImg.closest('.prc-card-logo')?.remove();
       } catch {}
     }, { once: true });
   }
@@ -3343,13 +3425,8 @@ function createRecommendationCard(item, serverId, renderOptions = false) {
           };
     img.setAttribute('sizes', IS_MOBILE ? sizePreset.mobile : sizePreset.desktop);
   } catch {}
-  if (posterUrlHQ) {
-    hydrateBlurUp(img, {
-      lqSrc: posterUrlLQ,
-      hqSrc: posterUrlHQ,
-      hqSrcset: posterSetHQ,
-      fallback: PLACEHOLDER_URL
-    });
+  if (posterUrlStatic) {
+    setManagedImageSource(img, posterUrlStatic, { fallback: PLACEHOLDER_URL });
   } else {
     try { img.style.display = 'none'; } catch {}
     const noImg = document.createElement('div');
@@ -3394,7 +3471,7 @@ function createRecommendationCard(item, serverId, renderOptions = false) {
   const defer = window.requestIdleCallback || ((fn)=>setTimeout(fn, 0));
   defer(() => attachPreviewByMode(card, { ...item, Id: itemId, Name: itemName }, mode));
   card.addEventListener('jms:cleanup', () => {
-    unobserveImage(img);
+    cleanupManagedImage(img);
     detachPreviewHandlers(card);
   }, { once: true });
   return card;
@@ -3646,27 +3723,19 @@ function makeGenreHubsRenderKey(userId, serverId, genres) {
 }
 
 function hasRenderableGenreHubContent(wrap) {
-  if (!wrap) return false;
-  return !!wrap.querySelector(
-    ".genre-hub-section .genre-row .personal-recs-card:not(.skeleton), .genre-hub-section .genre-row .no-recommendations"
-  );
+  return getManagedGenreHubSections(GENRE_STATE.hostEl || getHomeSectionsContainer(currentIndexPage()) || document)
+    .some((section) => !!section.querySelector(
+      ".genre-row .personal-recs-card, .genre-row .no-recommendations"
+    ));
 }
 
 async function renderGenreHubs(indexPage) {
   try { window.__jmsGenreHubsStarted = true; } catch {}
   const homeSections = getHomeSectionsContainer(indexPage);
 
-  let wrap = getScopedSection("genre-hubs", indexPage);
-  if (!wrap) {
-    wrap = document.createElement("div");
-    wrap.id = "genre-hubs";
-    wrap.className = "homeSection genre-hubs-wrapper";
-  }
-
+  const wrap = ensureGenreHubsShell(indexPage);
   const parent = homeSections || getHomeSectionsContainer(indexPage) || document.body;
-  placeSection(wrap, homeSections, false);
-
-  try { ensureIntoHomeSections(wrap, indexPage); } catch {}
+  GENRE_STATE.hostEl = parent;
   enforceOrder(homeSections);
 
   const { userId, serverId } = getSessionInfo();
@@ -3687,13 +3756,16 @@ async function renderGenreHubs(indexPage) {
     GENRE_STATE.wrap = wrap;
     GENRE_STATE.genres = picked;
     GENRE_STATE.serverId = serverId;
+    GENRE_STATE.renderSeq += 1;
+    GENRE_STATE.advancePromise = null;
     GENRE_STATE.nextIndex = Math.max(
       Number(GENRE_STATE.nextIndex) || 0,
-      Math.min(wrap.querySelectorAll(".genre-hub-section").length, picked.length)
+      Math.min(getManagedGenreHubSections(parent).length, picked.length)
     );
+    GENRE_STATE.awaitingAdvance = GENRE_STATE.nextIndex < picked.length;
 
     if (GENRE_STATE.nextIndex < GENRE_STATE.genres.length) {
-      attachGenreScrollIdleLoader();
+      await drainGenreHubsSequentially(GENRE_STATE.renderSeq);
     } else {
       detachGenreScrollIdleLoader();
       __signalGenreHubsDone();
@@ -3712,38 +3784,105 @@ async function renderGenreHubs(indexPage) {
     try { window.__jmsGenreFirstReady = false; } catch {}
     wrap.dataset.genreRenderKey = renderKey;
 
-    if (wrap.childElementCount > 0) {
+    if (getManagedGenreHubSections(parent).length > 0) {
       try { abortAllGenreFetches(); } catch {}
-      try {
-        wrap.querySelectorAll('.personal-recs-card,.genre-row').forEach(el => {
-          el.dispatchEvent(new Event('jms:cleanup'));
-        });
-      } catch {}
-      wrap.innerHTML = '';
+      cleanupManagedGenreHubSections(parent);
     }
     __globalGenreHeroLoose.clear();
     __globalGenreHeroStrict.clear();
 
     GENRE_STATE.wrap     = wrap;
+    GENRE_STATE.hostEl   = parent;
     GENRE_STATE.genres   = picked;
     GENRE_STATE.sections = new Array(picked.length);
     GENRE_STATE.nextIndex = 0;
     GENRE_STATE.loading   = false;
+    GENRE_STATE.awaitingAdvance = false;
+    GENRE_STATE.advancePromise = null;
+    GENRE_STATE.renderSeq += 1;
     GENRE_STATE.serverId  = serverId;
 
     const initialLoads = Math.min(getInitialGenreLoadCount(), picked.length);
     const initialJobs = [];
-    for (let i = 0; i < initialLoads; i++) initialJobs.push(ensureGenreLoaded(i));
+    for (let i = 0; i < initialLoads; i++) {
+      initialJobs.push((async () => {
+        try {
+          await waitForManagedHomeRowRelease({
+            timeoutMs: 25000,
+            rootMargin: "0px 0px 0px 0px",
+          });
+        } catch {}
+        await ensureGenreLoaded(i);
+        try {
+          registerManagedHomeRowAnchor(GENRE_STATE.sections[i]?.section || null);
+        } catch {}
+      })());
+    }
     await Promise.allSettled(initialJobs);
     GENRE_STATE.nextIndex = initialLoads;
 
     __maybeSignalGenreHubsDone();
 
     if (GENRE_STATE.nextIndex < GENRE_STATE.genres.length) {
-      attachGenreScrollIdleLoader();
+      GENRE_STATE.awaitingAdvance = false;
+      await drainGenreHubsSequentially(GENRE_STATE.renderSeq);
+    } else {
+      detachGenreScrollIdleLoader();
+      __signalGenreHubsDone();
     }
   } finally {
     __genreHubsBusy = false;
+  }
+}
+
+async function drainGenreHubsSequentially(renderSeq = GENRE_STATE.renderSeq) {
+  detachGenreScrollIdleLoader();
+  try {
+    GENRE_STATE.loading = true;
+    while (
+      renderSeq === GENRE_STATE.renderSeq &&
+      GENRE_STATE.wrap?.isConnected &&
+      GENRE_STATE.hostEl?.isConnected &&
+      GENRE_STATE.nextIndex < (GENRE_STATE.genres?.length || 0)
+    ) {
+      const index = GENRE_STATE.nextIndex;
+      GENRE_STATE.nextIndex = index + 1;
+      const previousSection =
+        GENRE_STATE.sections[index - 1]?.section ||
+        getManagedGenreHubSections(GENRE_STATE.hostEl || getHomeSectionsContainer(currentIndexPage()) || document).slice(-1)[0] ||
+        null;
+      try {
+        await waitForManagedHomeRowRelease({
+          anchor: previousSection?.isConnected ? previousSection : null,
+          timeoutMs: 25000,
+          rootMargin: "0px 0px 0px 0px",
+        });
+      } catch {}
+      await ensureGenreLoaded(index);
+      try {
+        registerManagedHomeRowAnchor(GENRE_STATE.sections[index]?.section || null);
+      } catch {}
+
+      if (
+        renderSeq !== GENRE_STATE.renderSeq ||
+        !GENRE_STATE.wrap?.isConnected ||
+        !GENRE_STATE.hostEl?.isConnected
+      ) {
+        break;
+      }
+
+      if (GENRE_STATE.nextIndex < (GENRE_STATE.genres?.length || 0)) {
+        await yieldManagedHomeSectionStep();
+      }
+    }
+  } finally {
+    if (renderSeq === GENRE_STATE.renderSeq) {
+      GENRE_STATE.loading = false;
+      GENRE_STATE.awaitingAdvance = false;
+      GENRE_STATE.advancePromise = null;
+      detachGenreScrollIdleLoader();
+      __maybeSignalGenreHubsDone();
+    }
   }
 }
 
@@ -3760,6 +3899,7 @@ function ensureGenreSectionElement(idx) {
   const genre = genres[idx];
 
   const section = document.createElement("div");
+  section.id = makeManagedGenreHubSectionId(idx);
   section.className = "homeSection genre-hub-section";
   section.dataset.genreKey = normalizeGenreKey(genre);
   section.innerHTML = `
@@ -3805,14 +3945,9 @@ function ensureGenreSectionElement(idx) {
   }
 
   const row = section.querySelector(".genre-row");
-  renderSkeletonCards(row, getGenreRowCardCount());
 
-  const arrow = GENRE_STATE._loadMoreArrow;
-  if (arrow && arrow.parentElement === wrap) {
-    wrap.insertBefore(section, arrow);
-  } else {
-    wrap.appendChild(section);
-  }
+  placeGenreHubSection(section);
+  placeGenreLoadMoreArrow();
 
   rec = {
   genre, section, row,
@@ -3861,44 +3996,13 @@ async function ensureGenreLoaded(idx) {
   rec.loadingPromise = (async () => {
     const { genre, row, serverId, heroHost } = rec;
     const { userId } = getSessionInfo();
-    const rIC = window.requestIdleCallback
-    ? (fn) => window.requestIdleCallback(fn, { timeout: 650 })
-    : (fn) => setTimeout(fn, 0);
-
-  function pumpRemainder(list, startIndex) {
-    let j = startIndex;
-
-    (function pump() {
-      if (rec.seq !== mySeq) return;
-      if (!row || !row.isConnected) return;
-
-      const chunk = IS_MOBILE ? 2 : 4;
-      const f = document.createDocumentFragment();
-
-      let added = 0;
-      for (let k = 0; k < chunk && j < list.length; k++, j++) {
-        f.appendChild(createRecommendationCard(list[j], serverId, {
-          aboveFold: false,
-          sizeHint: "genre"
-        }));
-        added++;
-      }
-
-      if (added) row.appendChild(f);
-      triggerScrollerUpdate(row);
-
-      if (j < list.length) rIC(pump);
-      else {
-        if (idx === 0 && !window.__jmsGenreFirstReady) {
-          window.__jmsGenreFirstReady = true;
-          try { document.dispatchEvent(new Event("jms:genre-first-ready")); } catch {}
-        }
-      }
-    })();
-  }
 
     try {
       const genreRowCardCount = getGenreRowCardCount();
+      if (!row.dataset.mounted || row.childElementCount === 0) {
+        row.dataset.mounted = "1";
+        setupScroller(row);
+      }
       const items = await fetchItemsBySingleGenre(userId, genre, genreRowCardCount * 3, MIN_RATING);
       if (rec.seq !== mySeq) return;
 
@@ -3972,45 +4076,47 @@ async function ensureGenreLoaded(idx) {
       }
 
       const unique = remaining.slice(0, genreRowCardCount);
+      let scrollerReady = false;
 
-      if (IS_MOBILE) {
-        const mobileFrag = document.createDocumentFragment();
-        for (let i = 0; i < unique.length; i++) {
-          mobileFrag.appendChild(createRecommendationCard(unique[i], serverId, {
-            aboveFold: i < Math.min(6, unique.length),
+      await new Promise((resolve) => {
+        progressivelyRenderCardRow({
+          row,
+          items: unique,
+          limit: genreRowCardCount,
+          initialCount: getProgressiveRowInitialCount(
+            Math.min(unique.length, genreRowCardCount),
+            { mobileCount: 2, desktopCount: 4 }
+          ),
+          chunkSize: getProgressiveRowChunkSize({ mobileCount: 2, desktopCount: 3 }),
+          delayMs: IS_MOBILE ? 78 : 34,
+          isCurrent: () => rec.seq === mySeq,
+          appendCard: (item, index) => createRecommendationCard(item, serverId, {
+            aboveFold: index < (IS_MOBILE ? 2 : 4),
             sizeHint: "genre"
-          }));
-        }
-        row.appendChild(mobileFrag);
-        triggerScrollerUpdate(row);
-
-        if (rec.seq === mySeq) rec.loaded = true;
-        if (idx === 0 && !window.__jmsGenreFirstReady) {
-          window.__jmsGenreFirstReady = true;
-          try { document.dispatchEvent(new Event("jms:genre-first-ready")); } catch {}
-        }
-        return;
-      }
-
-      const head = Math.min(unique.length, genreRowCardCount);
-
-      const f1 = document.createDocumentFragment();
-      for (let i = 0; i < head; i++) {
-        f1.appendChild(createRecommendationCard(unique[i], serverId, {
-          aboveFold: i < Math.min(6, head),
-          sizeHint: "genre"
-        }));
-      }
-      row.appendChild(f1);
-      triggerScrollerUpdate(row);
-
-      if (rec.seq === mySeq) rec.loaded = true;
-      if (idx === 0 && !window.__jmsGenreFirstReady) {
-        window.__jmsGenreFirstReady = true;
-        try { document.dispatchEvent(new Event("jms:genre-first-ready")); } catch {}
-      }
-
-      pumpRemainder(unique, head);
+          }),
+          onAppend: () => {
+            if (!scrollerReady) {
+              setupScroller(row);
+              scrollerReady = true;
+            }
+            triggerScrollerUpdate(row);
+          },
+          onComplete: ({ aborted = false } = {}) => {
+            if (rec.seq === mySeq && !aborted) {
+              if (!scrollerReady) {
+                setupScroller(row);
+              }
+              rec.loaded = true;
+              if (idx === 0 && !window.__jmsGenreFirstReady) {
+                window.__jmsGenreFirstReady = true;
+                try { document.dispatchEvent(new Event("jms:genre-first-ready")); } catch {}
+              }
+              triggerScrollerUpdate(row);
+            }
+            resolve();
+          }
+        });
+      });
 
     } catch (err) {
       if (rec.seq !== mySeq) return;
@@ -4414,12 +4520,13 @@ export function resetPersonalRecsAndGenreState() {
     genreSections: GENRE_STATE.sections?.length || 0,
   });
   clearPersonalRecsRetry();
+  invalidatePersonalManagedQueue();
   try { detachGenreScrollIdleLoader(); } catch {}
   try { abortAllGenreFetches(); } catch {}
 
   __deferredHomeSectionSeq += 1;
-  __bywDeferredPromise = null;
-  __genreDeferredPromise = null;
+  clearPersonalDeferredPromises();
+  __personalRecsMountPromise = null;
   __personalRecsInitDone = false;
   __personalRecsBusy = false;
   setPersonalRecsDone(false);
@@ -4544,35 +4651,6 @@ function scheduleHomeScrollerRefresh(ms = 120) {
   document.addEventListener("viewshown", () => scheduleHomeScrollerRefresh(0));
 })();
 
-function __forceRetryAllBroken() {
-  document.querySelectorAll('img.cardImage, img.dir-row-hero-bg').forEach(img => {
-    if (!img?.__data || !img.isConnected) return;
-    if (img.__disableRecovery === true || hasKnownMissingImage(img.__data)) return;
-    const retryAt = Number(img.__retryAfter || 0);
-    const retryDue = retryAt > 0 && retryAt <= Date.now();
-
-    const shouldRetry =
-      (img.__allowLqHydrate === true && (retryAt === 0 || retryDue)) ||
-      (img.__hiFailed === true && (retryAt === 0 || retryDue)) ||
-      img.__hydrated === false ||
-      retryDue ||
-      (img.complete && img.naturalWidth === 0);
-
-    if (!shouldRetry) return;
-
-    const { lqSrc, hqSrc, hqSrcset, fallback } = img.__data;
-    try {
-      hydrateBlurUp(img, { lqSrc, hqSrc, hqSrcset, fallback });
-    } catch {}
-  });
-}
-
-window.addEventListener('online', __forceRetryAllBroken);
-window.addEventListener('focus', __forceRetryAllBroken, { passive: true });
-window.addEventListener('pageshow', __forceRetryAllBroken, { passive: true });
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) __forceRetryAllBroken();
-});
 
 if (!window.__prcImageRecoveryTimer) {
   window.__prcImageRecoveryTimer = true;

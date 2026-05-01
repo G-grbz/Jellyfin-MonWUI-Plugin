@@ -1,4 +1,4 @@
-import { makeApiRequest, fetchItemDetailsFull, fetchItemsBulk, getSessionInfo } from "/Plugins/JMSFusion/runtime/api.js";
+import { makeApiRequest, fetchItemDetailsFull, fetchItemsBulk, getSessionInfo } from "../../Plugins/JMSFusion/runtime/api.js";
 import { CollectionCacheDB } from "./collectionCacheDb.js";
 
 const META_CURSOR = "bg_index_cursor_movie_start";

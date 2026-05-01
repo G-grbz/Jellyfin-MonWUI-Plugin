@@ -5,7 +5,7 @@ import {
   updateFavoriteStatus,
   getDetailsUrl,
   isCurrentUserAdmin
-} from "/Plugins/JMSFusion/runtime/api.js";
+} from "../../Plugins/JMSFusion/runtime/api.js";
 import { getConfig } from "./config.js";
 import { withServer } from "./jfUrl.js";
 import { getWatchlistButtonText, getWatchlistToast } from "./watchlist.js";

@@ -1,6 +1,6 @@
-import { getConfig, getServerAddress, isParentalPinModuleEnabled } from "/slider/modules/config.js";
-import { clearCredentials, getWebClientHints, getStoredServerBase } from "/Plugins/JMSFusion/runtime/auth.js";
-import { withServer, withServerSrcset, invalidateServerBaseCache, resolveServerBase } from "/slider/modules/jfUrl.js";
+import { getConfig, getServerAddress, isParentalPinModuleEnabled } from "../../../slider/modules/config.js";
+import { clearCredentials, getWebClientHints, getStoredServerBase } from "./auth.js";
+import { withServer, withServerSrcset, invalidateServerBaseCache, resolveServerBase } from "../../../slider/modules/jfUrl.js";
 
 const config = getConfig();
 const SERVER_ADDR_KEY = "jf_serverAddress";
@@ -84,7 +84,7 @@ function warmParentalPinRuntimeIfEnabled() {
     }
 
     if (!__parentalPinRuntimePromise) {
-      __parentalPinRuntimePromise = import("/slider/modules/parentalPinRuntime.js");
+      __parentalPinRuntimePromise = import("../../../slider/modules/parentalPinRuntime.js");
     }
 
     __parentalPinRuntimePromise.catch((error) => {
@@ -103,7 +103,7 @@ async function maybeEnsureParentalPinBeforePlayback(item, options = {}) {
     }
 
     if (!__parentalPinRuntimePromise) {
-      __parentalPinRuntimePromise = import("/slider/modules/parentalPinRuntime.js");
+      __parentalPinRuntimePromise = import("../../../slider/modules/parentalPinRuntime.js");
     }
 
     const mod = await __parentalPinRuntimePromise;
@@ -125,7 +125,7 @@ async function __getGmmp() {
     if (typeof window !== "undefined" && window.__GMMP?.playTrackById) return window.__GMMP;
   } catch {}
   try {
-    await import("/slider/modules/player/main.js");
+    await import("../../../slider/modules/player/main.js");
   } catch (e) {
   }
   try {
@@ -144,7 +144,7 @@ async function __destroyGmmpBeforeVideoPlayNow() {
 
   if (typeof destroyFn !== "function") {
     try {
-      const gmmpModule = await import("/slider/modules/player/main.js");
+      const gmmpModule = await import("../../../slider/modules/player/main.js");
       destroyFn = gmmpModule?.destroyGmmp || null;
     } catch {}
   }
@@ -184,8 +184,8 @@ function __qbIsPrimed(id) {
 async function __qbEnsurePrimer() {
   if (__qbPrimerPromise) return __qbPrimerPromise;
   __qbPrimerPromise = (async () => {
-    const cm = await import('/slider/modules/cacheManager.js').catch(() => null);
-    const cu = await import('/slider/modules/containerUtils.js').catch(() => null);
+    const cm = await import('../../../slider/modules/cacheManager.js').catch(() => null);
+    const cu = await import('../../../slider/modules/containerUtils.js').catch(() => null);
     return {
       setCachedQuality: cm?.setCachedQuality || null,
       getVideoQualityText: cu?.getVideoQualityText || null,
@@ -836,7 +836,7 @@ export function pickBestLocalTrailer(trailers = []) {
 async function hydrateWatchlistPayload(payload) {
   if (!payload) return payload;
   try {
-    const watchlistModule = await import("/slider/modules/watchlist.js");
+    const watchlistModule = await import("../../../slider/modules/watchlist.js");
     if (typeof watchlistModule?.hydrateWatchlistState === "function") {
       await watchlistModule.hydrateWatchlistState(payload);
     }
@@ -1587,7 +1587,7 @@ async function setJellyfinFavoriteStatus(itemId, isFavorite, { signal } = {}) {
 }
 
 export async function updateFavoriteStatus(itemId, isFavorite, options = {}) {
-  const watchlistModule = await import("/slider/modules/watchlist.js");
+  const watchlistModule = await import("../../../slider/modules/watchlist.js");
   const cleanItemId = String(itemId || "").trim();
   if (!cleanItemId) throw new Error("itemId gerekli");
   const localOptions = {
@@ -1628,7 +1628,7 @@ export async function updatePlayedStatus(itemId, played) {
 
   if (played) {
     try {
-      const watchlistModule = await import("/slider/modules/watchlist.js");
+      const watchlistModule = await import("../../../slider/modules/watchlist.js");
       await watchlistModule?.removePlayedItemFromWatchlist?.(itemId);
     } catch {}
   }

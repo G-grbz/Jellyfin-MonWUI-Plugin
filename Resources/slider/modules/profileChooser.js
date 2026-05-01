@@ -6,10 +6,10 @@ import {
   waitForAuthReadyStrict,
   persistAuthSnapshotFromApiClient,
   getAuthHeader,
-} from "/Plugins/JMSFusion/runtime/api.js";
+} from "../../Plugins/JMSFusion/runtime/api.js";
 import { getRandomAvatarUrl } from "./avatarPicker.js";
 import { createConfiguredUserAvatar } from "./userAvatar.js";
-import { saveCredentials, saveApiKey, clearCredentials } from "/Plugins/JMSFusion/runtime/auth.js";
+import { saveCredentials, saveApiKey, clearCredentials } from "../../Plugins/JMSFusion/runtime/auth.js";
 import { enhanceFormAccessibility } from "./accessibility.js";
 import { findHeaderMountTarget, getHeaderMountWaitSelector } from "./headerCompat.js";
 

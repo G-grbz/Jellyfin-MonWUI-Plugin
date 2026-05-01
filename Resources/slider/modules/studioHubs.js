@@ -1,4 +1,4 @@
-import { getSessionInfo, getEmbyHeaders, makeApiRequest, updateFavoriteStatus } from "/Plugins/JMSFusion/runtime/api.js";
+import { getSessionInfo, getEmbyHeaders, makeApiRequest, updateFavoriteStatus } from "../../Plugins/JMSFusion/runtime/api.js";
 import { getConfig, getDeviceProfileAuto, getHomeSectionsRuntimeConfig } from './config.js';
 import { getLanguageLabels } from "../language/index.js";
 import { attachMiniPosterHover } from "./studioHubsUtils.js";
@@ -8,6 +8,8 @@ import {
   waitForVisibleHomeSections
 } from "./homeSectionNative.js";
 import {
+  registerManagedHomeRowAnchor,
+  waitForManagedHomeRowRelease,
   waitForManagedSectionDependencyCompletion,
   waitForManagedSectionGate
 } from "./homeSectionChain.js";
@@ -1287,8 +1289,15 @@ export function ensureStudioHubsMounted({ eager=false, force=false } = {}) {
         scheduleRetry(800);
         return;
       }
+      try {
+        await waitForManagedHomeRowRelease({
+          timeoutMs: 25000,
+          rootMargin: "0px 0px 0px 0px",
+        });
+      } catch {}
       const row = ensureContainer(host.page);
       if (!row) { scheduleRetry(800); return; }
+      try { registerManagedHomeRowAnchor(host.page.querySelector("#studio-hubs")); } catch {}
       if (!force && __studioHubsMountedOnce && hasMountedStudioHubsSection()) {
         setStudioHubsReady(true);
         return;

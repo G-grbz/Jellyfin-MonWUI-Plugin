@@ -2,6 +2,7 @@ import {
   getAdminTargetProfile,
   getDeviceProfileAuto,
   isNativeHomeSectionOrderKey,
+  normalizeManagedCardTitleDisplayMode,
   normalizeManagedHomeSectionOrder
 } from "../config.js";
 import { getGlobalTmdbApiKey } from "../jmsPluginConfig.js";
@@ -11,7 +12,7 @@ import {
 } from "../homeSectionNative.js";
 import { createCheckbox, createSection, createNumberInput } from "./shared.js";
 import { applySettings } from "./applySettings.js";
-import { fetchItemDetails, makeApiRequest } from "/Plugins/JMSFusion/runtime/api.js";
+import { fetchItemDetails, makeApiRequest } from "../../../Plugins/JMSFusion/runtime/api.js";
 import {
   JMS_STUDIO_HUB_MANUAL_ENTRY_ADDED_EVENT,
   buildStudioHubLogoUrl,
@@ -330,6 +331,9 @@ function getManagedHomeSectionOrderLabel(name, config, labels) {
   }
   if (name === "continueRows") {
     return labels?.managedContinueRowsLabel || "İzlemeye Devam Et";
+  }
+  if (name === "nextUpRows") {
+    return labels?.managedNextUpRowsLabel || labels?.nextUpEpisodes || "Sıradaki Bölümler";
   }
   if (name === "becauseYouWatched") {
     return (
@@ -1795,6 +1799,53 @@ export function createStudioHubsPanel(config, labels) {
   subheading.textContent = labels?.personalRecommendations || 'Kişisel Öneriler';
   section.appendChild(subheading);
 
+  const cardTitleModeWrap = document.createElement("div");
+  cardTitleModeWrap.className = "input-container";
+
+  const cardTitleModeLabel = document.createElement("label");
+  cardTitleModeLabel.htmlFor = "managedCardTitleDisplayMode";
+  cardTitleModeLabel.textContent =
+    labels?.managedCardTitleDisplayMode ||
+    "Normal kart başlık/logo görünümü";
+  cardTitleModeWrap.appendChild(cardTitleModeLabel);
+
+  const cardTitleModeSelect = document.createElement("select");
+  cardTitleModeSelect.id = "managedCardTitleDisplayMode";
+  cardTitleModeSelect.name = "managedCardTitleDisplayMode";
+
+  const cardTitleModeValue = normalizeManagedCardTitleDisplayMode(
+    config.managedCardTitleDisplayMode
+  );
+  const cardTitleModeOptions = [
+    {
+      value: "logo",
+      label: labels?.managedCardTitleDisplayModeLogoOnly || "Sadece logo",
+    },
+    {
+      value: "title",
+      label: labels?.managedCardTitleDisplayModeTitleOnly || "Sadece başlık",
+    },
+    {
+      value: "logoTitle",
+      label: labels?.managedCardTitleDisplayModeLogoAndTitle || "Logo - başlık",
+    },
+    {
+      value: "none",
+      label: labels?.managedCardTitleDisplayModeNone || "Hiçbiri",
+    },
+  ];
+
+  for (const optionDef of cardTitleModeOptions) {
+    const option = document.createElement("option");
+    option.value = optionDef.value;
+    option.textContent = optionDef.label;
+    option.selected = optionDef.value === cardTitleModeValue;
+    cardTitleModeSelect.appendChild(option);
+  }
+
+  cardTitleModeWrap.appendChild(cardTitleModeSelect);
+  section.appendChild(cardTitleModeWrap);
+
   const enableForYouCheckbox = createCheckbox(
     'enablePersonalRecommendations',
     labels?.enableForYou || config.languageLabels.enableForYou || 'Sana Özel Koleksiyonları Etkinleştir',
@@ -1988,6 +2039,29 @@ export function createStudioHubsPanel(config, labels) {
   );
   recentSubWrap.appendChild(recentEpisodesCountWrap);
 
+  const enableNextUpRow = createCheckbox(
+    'enableNextUpRow',
+    labels?.enableNextUpRow || 'Sıradaki bölümler kartlarını etkinleştir',
+    config.enableNextUpRow !== false
+  );
+  recentSubWrap.appendChild(enableNextUpRow);
+
+  const showNextUpHeroCards = createCheckbox(
+    'showNextUpHeroCards',
+    labels?.showNextUpHeroCards || 'Hero kartını göster (Sıradaki Bölümler)',
+    config.showNextUpHeroCards !== false
+  );
+  recentSubWrap.appendChild(showNextUpHeroCards);
+
+  const nextUpCountWrap = createNumberInput(
+    'nextUpCardCount',
+    labels?.nextUpCardCount || 'Sıradaki bölümler kart sayısı',
+    Number.isFinite(config.nextUpCardCount) ? config.nextUpCardCount : 10,
+    1,
+    20
+  );
+  recentSubWrap.appendChild(nextUpCountWrap);
+
   const getCb = wrap => wrap?.querySelector?.('input[type="checkbox"]');
   const bindDependentCheckboxVisibility = (controllerWrap, dependentWrap) => {
     const controllerCb = getCb(controllerWrap);
@@ -2018,11 +2092,14 @@ export function createStudioHubsPanel(config, labels) {
   const recTracksHeroCb = getCb(showRecentTracksHeroCards);
   const recEpCb  = getCb(enableRecentEpisodesRow);
   const recEpHeroCb = getCb(showRecentEpisodesHeroCards);
+  const nextUpCb = getCb(enableNextUpRow);
+  const nextUpHeroCb = getCb(showNextUpHeroCards);
   const syncRecentMoviesHeroVisibility = bindDependentCheckboxVisibility(enableRecentMoviesRow, showRecentMoviesHeroCards);
   const syncRecentSeriesHeroVisibility = bindDependentCheckboxVisibility(enableRecentSeriesRow, showRecentSeriesHeroCards);
   const syncRecentMusicHeroVisibility = bindDependentCheckboxVisibility(enableRecentMusicRow, showRecentMusicHeroCards);
   const syncRecentTracksHeroVisibility = bindDependentCheckboxVisibility(enableRecentMusicTracksRow, showRecentTracksHeroCards);
   const syncRecentEpisodesHeroVisibility = bindDependentCheckboxVisibility(enableRecentEpisodesRow, showRecentEpisodesHeroCards);
+  const syncNextUpHeroVisibility = bindDependentCheckboxVisibility(enableNextUpRow, showNextUpHeroCards);
 
   function syncRecentSubState() {
     const on = !!masterCb?.checked;
@@ -2041,12 +2118,15 @@ export function createStudioHubsPanel(config, labels) {
       if (recTracksHeroCb) recTracksHeroCb.checked = false;
       if (recEpCb)  recEpCb.checked  = false;
       if (recEpHeroCb) recEpHeroCb.checked = false;
+      if (nextUpCb) nextUpCb.checked = false;
+      if (nextUpHeroCb) nextUpHeroCb.checked = false;
     }
     syncRecentMoviesHeroVisibility();
     syncRecentSeriesHeroVisibility();
     syncRecentMusicHeroVisibility();
     syncRecentTracksHeroVisibility();
     syncRecentEpisodesHeroVisibility();
+    syncNextUpHeroVisibility();
   }
   syncRecentSubState();
   enableRecentRows.addEventListener('change', syncRecentSubState, { passive: true });

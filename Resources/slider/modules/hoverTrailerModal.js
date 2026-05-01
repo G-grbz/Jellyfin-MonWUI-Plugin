@@ -1,6 +1,6 @@
 import { getConfig } from './config.js';
 import { getLanguageLabels, getDefaultLanguage } from '../language/index.js';
-import { playNow, getVideoStreamUrl, fetchItemDetails, fetchPlayableItemDetails, updateFavoriteStatus, goToDetailsPage, fetchLocalTrailers, pickBestLocalTrailer, getCachedUserTopGenres } from '/Plugins/JMSFusion/runtime/api.js';
+import { playNow, getVideoStreamUrl, fetchItemDetails, fetchPlayableItemDetails, updateFavoriteStatus, goToDetailsPage, fetchLocalTrailers, pickBestLocalTrailer, getCachedUserTopGenres } from '../../Plugins/JMSFusion/runtime/api.js';
 import { getYoutubeEmbedUrl, isValidUrl } from './utils.js';
 import { getVideoQualityText } from './containerUtils.js';
 import { attachMiniPosterHover, openMiniPopoverFor } from "./studioHubsUtils.js";

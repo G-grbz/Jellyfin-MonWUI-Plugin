@@ -5,7 +5,15 @@ import {
 } from "./config.js";
 const HOME_SCROLL_INTENT_EVENT = "jms:home-scroll-intent";
 const HOME_SCROLL_INTENT_TTL_MS = 30_000;
-const HOME_SCROLL_INTENT_MIN_MARGIN_PX = 140;
+const HOME_SCROLL_INTENT_END_PROGRESS_RATIO = 0.82;
+const HOME_SCROLL_INTENT_MIN_PROGRESS_RATIO = 0.06;
+const HOME_SCROLL_INTENT_MIN_ADVANCE_RATIO = 0.003;
+const HOME_SECTION_TAIL_PRELOAD_RATIO = 0.28;
+const HOME_SECTION_QUEUE_ACTIVATE_ROOT_MARGIN = "0px 0px 18% 0px";
+const HOME_SECTION_QUEUE_HANDOFF_TIMEOUT_MS = 1800;
+const HOME_SECTION_QUEUE_DISCOVERY_WAIT_MS = 350;
+const HOME_SECTION_QUEUE_DISCOVERY_MAX_WAITS = 12;
+const HOME_INITIAL_EAGER_ROW_COUNT = 5;
 const HOME_SCROLL_TRACKER = {
   installed: false,
   rafId: 0,
@@ -19,6 +27,22 @@ const HOME_SCROLL_TRACKER = {
   nextTokenId: 0,
   pendingTokenId: 0,
   consumedTokenId: 0,
+};
+const MANAGED_RENDER_QUEUE = {
+  tasks: [],
+  draining: false,
+  drainScheduled: false,
+  activeTask: null,
+  nextTaskId: 0,
+  liveByKey: new Map(),
+  startedKeys: new Set(),
+  routeKey: "",
+  generation: 0,
+};
+const MANAGED_HOME_ROW_RELEASE = {
+  routeKey: "",
+  nextIndex: 0,
+  lastAnchor: null,
 };
 
 function isHomeRouteHash(hash = window.location.hash || "") {
@@ -75,6 +99,30 @@ function getScrollTargetViewportSize(target) {
   return Math.max(0, target?.clientHeight || 0);
 }
 
+function clamp01(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  if (n <= 0) return 0;
+  if (n >= 1) return 1;
+  return n;
+}
+
+function ensureManagedHomeRowReleaseState() {
+  const routeKey = getCurrentHomeRouteKey();
+  if (MANAGED_HOME_ROW_RELEASE.routeKey !== routeKey) {
+    MANAGED_HOME_ROW_RELEASE.routeKey = routeKey;
+    MANAGED_HOME_ROW_RELEASE.nextIndex = 0;
+    MANAGED_HOME_ROW_RELEASE.lastAnchor = null;
+  }
+  return MANAGED_HOME_ROW_RELEASE;
+}
+
+export function resetManagedHomeRowReleaseState() {
+  MANAGED_HOME_ROW_RELEASE.routeKey = getCurrentHomeRouteKey();
+  MANAGED_HOME_ROW_RELEASE.nextIndex = 0;
+  MANAGED_HOME_ROW_RELEASE.lastAnchor = null;
+}
+
 function getRemainingScrollPx(target) {
   if (target === window || target === document) {
     const docEl = document.scrollingElement || document.documentElement;
@@ -123,15 +171,28 @@ function getMaxScrollablePx(target) {
   return Math.max(0, (target?.scrollHeight || 0) - viewport);
 }
 
-function isNearScrollEnd(target) {
-  const remaining = getRemainingScrollPx(target);
-  if (!Number.isFinite(remaining)) return false;
+function getScrollProgressRatio(target) {
   const maxScrollable = getMaxScrollablePx(target);
-  if (!Number.isFinite(maxScrollable) || maxScrollable <= 24) return false;
-  if (getCurrentScrollPx(target) <= 2) return false;
-  const viewport = getScrollTargetViewportSize(target);
-  const margin = Math.max(HOME_SCROLL_INTENT_MIN_MARGIN_PX, Math.min(360, Math.round(viewport * 0.14)));
-  return remaining <= margin;
+  if (!Number.isFinite(maxScrollable) || maxScrollable <= 0) return 0;
+  return clamp01(getCurrentScrollPx(target) / maxScrollable);
+}
+
+function hasMeaningfulScrollAdvance(target, currentScrollPx, previousScrollPx) {
+  if (!Number.isFinite(currentScrollPx) || !Number.isFinite(previousScrollPx)) return false;
+  if (currentScrollPx <= previousScrollPx) return false;
+  const maxScrollable = getMaxScrollablePx(target);
+  if (!Number.isFinite(maxScrollable) || maxScrollable <= 0) return true;
+  const previousRatio = clamp01(previousScrollPx / maxScrollable);
+  const currentRatio = clamp01(currentScrollPx / maxScrollable);
+  return (currentRatio - previousRatio) >= HOME_SCROLL_INTENT_MIN_ADVANCE_RATIO;
+}
+
+function isNearScrollEnd(target) {
+  const maxScrollable = getMaxScrollablePx(target);
+  if (!Number.isFinite(maxScrollable) || maxScrollable <= 0) return false;
+  const progress = getScrollProgressRatio(target);
+  return progress >= HOME_SCROLL_INTENT_END_PROGRESS_RATIO &&
+    progress > HOME_SCROLL_INTENT_MIN_PROGRESS_RATIO;
 }
 
 function markHomeScrollIntent() {
@@ -201,7 +262,7 @@ function checkHomeScrollIntentNow() {
   let prevWindowScrollPx = HOME_SCROLL_TRACKER.lastWindowScrollPx || 0;
   if (!Number.isFinite(prevWindowScrollPx)) prevWindowScrollPx = 0;
   const currentWindowScrollPx = getCurrentScrollPx(window);
-  const advancedWindow = currentWindowScrollPx > (prevWindowScrollPx + 2);
+  const advancedWindow = hasMeaningfulScrollAdvance(window, currentWindowScrollPx, prevWindowScrollPx);
   HOME_SCROLL_TRACKER.lastWindowScrollPx = currentWindowScrollPx;
 
   for (const target of HOME_SCROLL_TRACKER.elementTargets) {
@@ -209,7 +270,7 @@ function checkHomeScrollIntentNow() {
     let prevTargetScrollPx = HOME_SCROLL_TRACKER.targetScrollPx.get(target) || 0;
     if (!Number.isFinite(prevTargetScrollPx)) prevTargetScrollPx = 0;
     const currentTargetScrollPx = getCurrentScrollPx(target);
-    const advancedTarget = currentTargetScrollPx > (prevTargetScrollPx + 2);
+    const advancedTarget = hasMeaningfulScrollAdvance(target, currentTargetScrollPx, prevTargetScrollPx);
     HOME_SCROLL_TRACKER.targetScrollPx.set(target, currentTargetScrollPx);
 
     if (fromUser && advancedTarget && isNearScrollEnd(target)) {
@@ -291,6 +352,7 @@ function getSectionState(source = null) {
     tmdbTopMoviesRows: runtime.enableTmdbTopMoviesRowsSection === true,
     recentRows: runtime.enableRecentRowsSection === true,
     continueRows: runtime.enableContinueRowsSection === true,
+    nextUpRows: runtime.enableNextUpRowsSection === true,
     personalRecommendations: runtime.enablePersonalRecommendations !== false,
     becauseYouWatched: runtime.enableBecauseYouWatched !== false,
     genreHubs: runtime.enableGenreHubs !== false,
@@ -309,6 +371,12 @@ function normalizeExcludedSectionKeys(excludeKeys = []) {
 
 function isSectionEnabled(key, state) {
   return !!state?.[key];
+}
+
+function delay(ms = 0) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, Math.max(0, ms | 0));
+  });
 }
 
 export function getManagedSectionDependencyKeys(targetKey, source = null, { excludeKeys = [] } = {}) {
@@ -338,6 +406,7 @@ function hasSectionReady(key) {
     if (key === "tmdbTopMoviesRows") return window.__jmsTmdbTopMoviesRowsDone === true;
     if (key === "recentRows") return window.__jmsRecentRowsDone === true;
     if (key === "continueRows") return window.__jmsContinueRowsDone === true;
+    if (key === "nextUpRows") return window.__jmsNextUpRowsDone === true;
     if (key === "personalRecommendations") return window.__jmsPersonalRecsDone === true;
     if (key === "becauseYouWatched") return window.__jmsBywDone === true;
     if (key === "genreHubs") {
@@ -355,6 +424,7 @@ function getSectionReadyEvents(key) {
   if (key === "tmdbTopMoviesRows") return ["jms:tmdb-top-movie-rows-done"];
   if (key === "recentRows") return ["jms:recent-rows-done"];
   if (key === "continueRows") return ["jms:continue-rows-done"];
+  if (key === "nextUpRows") return ["jms:nextup-rows-done"];
   if (key === "personalRecommendations") return ["jms:personal-recommendations-done"];
   if (key === "becauseYouWatched") return ["jms:because-you-watched-done"];
   if (key === "genreHubs") return ["jms:genre-first-ready", "jms:genre-hubs-done"];
@@ -371,6 +441,26 @@ function hasRenderableCards(root, selector) {
   }
 }
 
+function getManagedSectionsByPrefix(prefix = "") {
+  if (!prefix) return [];
+  return Array.from(document.querySelectorAll(`[id^="${prefix}"]`))
+    .filter((el) => el?.isConnected)
+    .sort((left, right) => {
+      const li = Number(String(left.id || "").slice(prefix.length)) || 0;
+      const ri = Number(String(right.id || "").slice(prefix.length)) || 0;
+      return li - ri;
+    });
+}
+
+function getManagedSectionTail(prefix = "") {
+  const sections = getManagedSectionsByPrefix(prefix);
+  return sections.length ? sections[sections.length - 1] : null;
+}
+
+function hasRenderableManagedSections(prefix = "", selector = "") {
+  return getManagedSectionsByPrefix(prefix).some((section) => hasRenderableCards(section, selector));
+}
+
 function hasSectionRenderableContent(key) {
   if (key === "studioHubs") {
     return hasRenderableCards(
@@ -380,36 +470,43 @@ function hasSectionRenderableContent(key) {
   }
 
   if (key === "top10SeriesRows") {
-    return hasRenderableCards(
-      document.getElementById("top10-series-rows"),
+    return hasRenderableManagedSections(
+      "top10-series-rows--",
       ".recent-row-section .personal-recs-card:not(.skeleton), .recent-row-section .no-recommendations"
     );
   }
 
   if (key === "top10MovieRows") {
-    return hasRenderableCards(
-      document.getElementById("top10-movie-rows"),
+    return hasRenderableManagedSections(
+      "top10-movie-rows--",
       ".recent-row-section .personal-recs-card:not(.skeleton), .recent-row-section .no-recommendations"
     );
   }
 
   if (key === "tmdbTopMoviesRows") {
-    return hasRenderableCards(
-      document.getElementById("tmdb-top-movie-rows"),
+    return hasRenderableManagedSections(
+      "tmdb-top-movie-rows--",
       ".recent-row-section .personal-recs-card:not(.skeleton), .recent-row-section .no-recommendations"
     );
   }
 
   if (key === "recentRows") {
-    return hasRenderableCards(
-      document.getElementById("recent-rows"),
+    return hasRenderableManagedSections(
+      "recent-rows--",
       ".recent-row-section .personal-recs-card:not(.skeleton), .recent-row-section .no-recommendations, .recent-row-section .dir-row-hero"
     );
   }
 
   if (key === "continueRows") {
-    return hasRenderableCards(
-      document.getElementById("continue-rows"),
+    return hasRenderableManagedSections(
+      "continue-rows--",
+      ".recent-row-section .personal-recs-card:not(.skeleton), .recent-row-section .no-recommendations, .recent-row-section .dir-row-hero"
+    );
+  }
+
+  if (key === "nextUpRows") {
+    return hasRenderableManagedSections(
+      "nextup-rows--",
       ".recent-row-section .personal-recs-card:not(.skeleton), .recent-row-section .no-recommendations, .recent-row-section .dir-row-hero"
     );
   }
@@ -436,8 +533,8 @@ function hasSectionRenderableContent(key) {
   }
 
   if (key === "directorRows") {
-    return hasRenderableCards(
-      document.getElementById("director-rows"),
+    return hasRenderableManagedSections(
+      "director-rows--",
       ".dir-row-section .personal-recs-card:not(.skeleton), .dir-row-section .no-recommendations, .dir-row-section .dir-row-hero"
     );
   }
@@ -445,7 +542,22 @@ function hasSectionRenderableContent(key) {
   return false;
 }
 
+const COMPLETION_GATED_SECTION_KEYS = new Set([
+  "top10SeriesRows",
+  "top10MovieRows",
+  "tmdbTopMoviesRows",
+  "recentRows",
+  "continueRows",
+  "nextUpRows",
+  "becauseYouWatched",
+  "genreHubs",
+  "directorRows",
+]);
+
 function isSectionReadyForGate(key) {
+  if (COMPLETION_GATED_SECTION_KEYS.has(key)) {
+    return hasSectionCompleted(key);
+  }
   return hasSectionReady(key) || hasSectionRenderableContent(key);
 }
 
@@ -457,6 +569,7 @@ function hasSectionCompleted(key) {
     if (key === "tmdbTopMoviesRows") return window.__jmsTmdbTopMoviesRowsDone === true;
     if (key === "recentRows") return window.__jmsRecentRowsDone === true;
     if (key === "continueRows") return window.__jmsContinueRowsDone === true;
+    if (key === "nextUpRows") return window.__jmsNextUpRowsDone === true;
     if (key === "personalRecommendations") return window.__jmsPersonalRecsDone === true;
     if (key === "becauseYouWatched") return window.__jmsBywDone === true;
     if (key === "genreHubs") return window.__jmsGenreHubsDone === true;
@@ -472,6 +585,7 @@ function getSectionCompletionEvents(key) {
   if (key === "tmdbTopMoviesRows") return ["jms:tmdb-top-movie-rows-done"];
   if (key === "recentRows") return ["jms:recent-rows-done"];
   if (key === "continueRows") return ["jms:continue-rows-done"];
+  if (key === "nextUpRows") return ["jms:nextup-rows-done"];
   if (key === "personalRecommendations") return ["jms:personal-recommendations-done"];
   if (key === "becauseYouWatched") return ["jms:because-you-watched-done"];
   if (key === "genreHubs") return ["jms:genre-hubs-done"];
@@ -601,6 +715,473 @@ export function waitForManagedSectionCompletion(key, { timeoutMs = 20000 } = {})
   });
 }
 
+function isElementNearViewport(anchor, rootMargin = HOME_SECTION_QUEUE_ACTIVATE_ROOT_MARGIN) {
+  if (!anchor?.isConnected) return true;
+  const rect = anchor.getBoundingClientRect?.();
+  if (!rect) return true;
+  const viewport = Math.max(1, window.innerHeight || document.documentElement?.clientHeight || 0);
+  const preloadRatio = parseBottomRootMarginRatio(rootMargin);
+  return rect.top <= (viewport * (1 + preloadRatio));
+}
+
+function getManagedRenderQueueOrderedKeys(source = null) {
+  const ordered = getManagedHomeSectionRuntimeOrder(source, { enabledOnly: true });
+  return Array.isArray(ordered) ? ordered : [];
+}
+
+function hasPendingManagedRenderTaskForKey(key) {
+  return MANAGED_RENDER_QUEUE.tasks.some((task) => task?.key === key);
+}
+
+function shouldDelayManagedRenderTask(task) {
+  if (!task?.key) return false;
+  if ((task.discoveryWaits || 0) >= HOME_SECTION_QUEUE_DISCOVERY_MAX_WAITS) return false;
+
+  const ordered = getManagedRenderQueueOrderedKeys(task.options?.source);
+  const targetIndex = ordered.indexOf(task.key);
+  if (targetIndex <= 0) return false;
+
+  const earlierKeys = ordered.slice(0, targetIndex);
+  for (const earlierKey of earlierKeys) {
+    if (MANAGED_RENDER_QUEUE.startedKeys.has(earlierKey)) continue;
+    if (MANAGED_RENDER_QUEUE.activeTask?.key === earlierKey) continue;
+    if (hasPendingManagedRenderTaskForKey(earlierKey)) continue;
+    if (isSectionReadyForGate(earlierKey) || hasSectionCompleted(earlierKey)) continue;
+    return true;
+  }
+
+  return false;
+}
+
+function pickNextManagedRenderTask() {
+  if (!MANAGED_RENDER_QUEUE.tasks.length) return null;
+
+  const ordered = getManagedRenderQueueOrderedKeys();
+  if (ordered.length) {
+    for (const key of ordered) {
+      const index = MANAGED_RENDER_QUEUE.tasks.findIndex((task) => task?.key === key);
+      if (index >= 0) {
+        return MANAGED_RENDER_QUEUE.tasks.splice(index, 1)[0] || null;
+      }
+    }
+  }
+
+  return MANAGED_RENDER_QUEUE.tasks.shift() || null;
+}
+
+function finalizeManagedRenderTask(task) {
+  if (!task?.key) return;
+  if (MANAGED_RENDER_QUEUE.liveByKey.get(task.key) === task) {
+    MANAGED_RENDER_QUEUE.liveByKey.delete(task.key);
+  }
+}
+
+function resolveManagedRenderTask(task, value = false) {
+  if (!task) return;
+  try { task.resolve?.(value); } catch {}
+}
+
+function resetManagedRenderQueueState({ resolvePending = true } = {}) {
+  MANAGED_RENDER_QUEUE.generation += 1;
+  const nextGeneration = MANAGED_RENDER_QUEUE.generation;
+
+  const pendingTasks = Array.isArray(MANAGED_RENDER_QUEUE.tasks)
+    ? MANAGED_RENDER_QUEUE.tasks.slice()
+    : [];
+  MANAGED_RENDER_QUEUE.tasks = [];
+
+  const activeTask = MANAGED_RENDER_QUEUE.activeTask || null;
+  MANAGED_RENDER_QUEUE.activeTask = null;
+
+  if (resolvePending) {
+    for (const task of pendingTasks) {
+      task.cancelled = true;
+      resolveManagedRenderTask(task, false);
+    }
+    if (activeTask) {
+      activeTask.cancelled = true;
+      resolveManagedRenderTask(activeTask, false);
+    }
+  } else if (activeTask) {
+    activeTask.cancelled = true;
+  }
+
+  MANAGED_RENDER_QUEUE.liveByKey.clear();
+  MANAGED_RENDER_QUEUE.startedKeys.clear();
+  MANAGED_RENDER_QUEUE.draining = false;
+  MANAGED_RENDER_QUEUE.drainScheduled = false;
+  if (getCurrentHomeRouteKey() !== MANAGED_HOME_ROW_RELEASE.routeKey) {
+    MANAGED_HOME_ROW_RELEASE.routeKey = "";
+    MANAGED_HOME_ROW_RELEASE.nextIndex = 0;
+    MANAGED_HOME_ROW_RELEASE.lastAnchor = null;
+  }
+  return nextGeneration;
+}
+
+export function registerManagedHomeRowAnchor(anchor) {
+  const state = ensureManagedHomeRowReleaseState();
+  if (anchor?.isConnected) {
+    state.lastAnchor = anchor;
+  }
+  return state.nextIndex;
+}
+
+export function waitForManagedHomeRowRelease({
+  anchor = null,
+  eagerRows = HOME_INITIAL_EAGER_ROW_COUNT,
+  timeoutMs = 25000,
+  rootMargin = "0px 0px 0px 0px",
+} = {}) {
+  const state = ensureManagedHomeRowReleaseState();
+  const releaseIndex = state.nextIndex++;
+  if (releaseIndex < Math.max(1, eagerRows | 0)) {
+    return Promise.resolve(releaseIndex);
+  }
+
+  const releaseAnchor = anchor?.isConnected
+    ? anchor
+    : (state.lastAnchor?.isConnected ? state.lastAnchor : null);
+  if (!releaseAnchor) {
+    return Promise.resolve(releaseIndex);
+  }
+
+  return Promise.resolve(
+    waitForSectionTailAdvance(releaseAnchor, {
+      timeoutMs,
+      rootMargin,
+    })
+  ).then(() => releaseIndex).catch(() => releaseIndex);
+}
+
+export function waitForManagedSectionViewportReveal(anchor, {
+  timeoutMs = 20000,
+  rootMargin = HOME_SECTION_QUEUE_ACTIVATE_ROOT_MARGIN,
+} = {}) {
+  if (!anchor?.isConnected || isElementNearViewport(anchor, rootMargin)) {
+    return Promise.resolve();
+  }
+
+  if (typeof IntersectionObserver !== "function") {
+    return new Promise((resolve) => {
+      let done = false;
+      let timeoutId = null;
+
+      const finish = () => {
+        if (done) return;
+        done = true;
+        try { window.removeEventListener("scroll", onActivity, true); } catch {}
+        try { document.removeEventListener("scroll", onActivity, true); } catch {}
+        try { window.removeEventListener("resize", onActivity, true); } catch {}
+        if (timeoutId) {
+          try { clearTimeout(timeoutId); } catch {}
+        }
+        resolve();
+      };
+
+      const onActivity = () => {
+        if (!anchor?.isConnected || isElementNearViewport(anchor, rootMargin)) {
+          finish();
+        }
+      };
+
+      window.addEventListener("scroll", onActivity, { passive: true, capture: true });
+      document.addEventListener("scroll", onActivity, { passive: true, capture: true });
+      window.addEventListener("resize", onActivity, { passive: true, capture: true });
+      timeoutId = setTimeout(finish, Math.max(0, timeoutMs | 0));
+      onActivity();
+    });
+  }
+
+  return new Promise((resolve) => {
+    let done = false;
+    let timeoutId = null;
+    let observer = null;
+    let resizeObserver = null;
+
+    const finish = () => {
+      if (done) return;
+      done = true;
+      if (timeoutId) {
+        try { clearTimeout(timeoutId); } catch {}
+      }
+      timeoutId = null;
+      try { window.removeEventListener("scroll", onActivity, true); } catch {}
+      try { document.removeEventListener("scroll", onActivity, true); } catch {}
+      try { window.removeEventListener("resize", onActivity, true); } catch {}
+      if (observer) {
+        try { observer.disconnect(); } catch {}
+      }
+      if (resizeObserver) {
+        try { resizeObserver.disconnect(); } catch {}
+      }
+      resolve();
+    };
+
+    const onActivity = () => {
+      if (!anchor?.isConnected || isElementNearViewport(anchor, rootMargin)) {
+        finish();
+      }
+    };
+
+    observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.target !== anchor) continue;
+        if (entry.isIntersecting) {
+          finish();
+          break;
+        }
+      }
+    }, {
+      root: null,
+      rootMargin,
+      threshold: 0.01,
+    });
+
+    window.addEventListener("scroll", onActivity, { passive: true, capture: true });
+    document.addEventListener("scroll", onActivity, { passive: true, capture: true });
+    window.addEventListener("resize", onActivity, { passive: true, capture: true });
+    observer.observe(anchor);
+
+    if (typeof ResizeObserver === "function") {
+      resizeObserver = new ResizeObserver(() => {
+        onActivity();
+      });
+      try { resizeObserver.observe(anchor); } catch {}
+    }
+
+    timeoutId = setTimeout(finish, Math.max(0, timeoutMs | 0));
+    onActivity();
+  });
+}
+
+async function runManagedRenderTask(task, generation = MANAGED_RENDER_QUEUE.generation) {
+  if (task?.cancelled === true) {
+    task.resolve(false);
+    return;
+  }
+  if (generation !== MANAGED_RENDER_QUEUE.generation) {
+    task.resolve(false);
+    return;
+  }
+  const timeoutMs = Number.isFinite(task?.options?.timeoutMs)
+    ? Math.max(0, task.options.timeoutMs | 0)
+    : 20000;
+  const rootMargin = task?.options?.rootMargin || HOME_SECTION_QUEUE_ACTIVATE_ROOT_MARGIN;
+  const handoffTimeoutMs = Number.isFinite(task?.options?.handoffTimeoutMs)
+    ? Math.max(0, task.options.handoffTimeoutMs | 0)
+    : HOME_SECTION_QUEUE_HANDOFF_TIMEOUT_MS;
+  const isStillValid = typeof task?.options?.isStillValid === "function"
+    ? task.options.isStillValid
+    : null;
+
+  if (isStillValid && !isStillValid()) {
+    task.resolve(false);
+    return;
+  }
+  if (!isHomeRouteHash()) {
+    task.resolve(false);
+    return;
+  }
+
+  const anchor = typeof task?.options?.getAnchor === "function"
+    ? task.options.getAnchor()
+    : (task?.options?.anchorEl || resolveManagedSectionAnchor([task.key]));
+
+  if (anchor?.isConnected) {
+    await waitForManagedSectionViewportReveal(anchor, {
+      timeoutMs,
+      rootMargin,
+    });
+  }
+
+  if (generation !== MANAGED_RENDER_QUEUE.generation) {
+    task.resolve(false);
+    return;
+  }
+  if (isStillValid && !isStillValid()) {
+    task.resolve(false);
+    return;
+  }
+  if (!isHomeRouteHash()) {
+    task.resolve(false);
+    return;
+  }
+
+  MANAGED_RENDER_QUEUE.startedKeys.add(task.key);
+
+  let runnerPromise;
+  try {
+    runnerPromise = Promise.resolve().then(() => task.runner());
+  } catch (error) {
+    runnerPromise = Promise.reject(error);
+  }
+
+  runnerPromise.then(task.resolve, task.reject);
+
+  const settledPromise = runnerPromise.then(
+    () => undefined,
+    () => undefined
+  );
+
+  await Promise.race([
+    settledPromise,
+    waitForManagedSectionReady(task.key, { timeoutMs: handoffTimeoutMs }),
+  ]);
+}
+
+async function drainManagedRenderQueue() {
+  if (MANAGED_RENDER_QUEUE.draining) return;
+  const generation = MANAGED_RENDER_QUEUE.generation;
+  MANAGED_RENDER_QUEUE.draining = true;
+  MANAGED_RENDER_QUEUE.drainScheduled = false;
+
+  try {
+    while (generation === MANAGED_RENDER_QUEUE.generation && MANAGED_RENDER_QUEUE.tasks.length) {
+      const task = pickNextManagedRenderTask();
+      if (!task) break;
+
+      if (shouldDelayManagedRenderTask(task)) {
+        task.discoveryWaits = (task.discoveryWaits || 0) + 1;
+        MANAGED_RENDER_QUEUE.tasks.unshift(task);
+        await delay(HOME_SECTION_QUEUE_DISCOVERY_WAIT_MS);
+        continue;
+      }
+
+      MANAGED_RENDER_QUEUE.activeTask = task;
+      try {
+        await runManagedRenderTask(task, generation);
+      } finally {
+        if (MANAGED_RENDER_QUEUE.activeTask === task) {
+          MANAGED_RENDER_QUEUE.activeTask = null;
+        }
+        finalizeManagedRenderTask(task);
+      }
+    }
+  } finally {
+    if (generation !== MANAGED_RENDER_QUEUE.generation) {
+      return;
+    }
+    MANAGED_RENDER_QUEUE.draining = false;
+    if (!MANAGED_RENDER_QUEUE.tasks.length) {
+      MANAGED_RENDER_QUEUE.startedKeys.clear();
+    } else if (!MANAGED_RENDER_QUEUE.drainScheduled) {
+      MANAGED_RENDER_QUEUE.drainScheduled = true;
+      Promise.resolve().then(() => {
+        void drainManagedRenderQueue();
+      });
+    }
+  }
+}
+
+export function enqueueManagedSectionRender(key, runner, options = {}) {
+  if (!key || typeof runner !== "function") {
+    return Promise.resolve(false);
+  }
+
+  const routeKey = getCurrentHomeRouteKey();
+  if (MANAGED_RENDER_QUEUE.routeKey !== routeKey) {
+    resetManagedRenderQueueState({ resolvePending: true });
+    MANAGED_RENDER_QUEUE.routeKey = routeKey;
+  }
+
+  const reuseKey = options?.reuseKey !== false;
+  const force = options?.force === true;
+  if (reuseKey && !force) {
+    const existing = MANAGED_RENDER_QUEUE.liveByKey.get(key);
+    if (existing?.resultPromise) {
+      return existing.resultPromise;
+    }
+  }
+
+  let resolveResult;
+  let rejectResult;
+  const resultPromise = new Promise((resolve, reject) => {
+    resolveResult = resolve;
+    rejectResult = reject;
+  });
+
+  const task = {
+    id: ++MANAGED_RENDER_QUEUE.nextTaskId,
+    key,
+    runner,
+    options,
+    routeKey,
+    discoveryWaits: 0,
+    resultPromise,
+    resolve: resolveResult,
+    reject: rejectResult,
+  };
+
+  MANAGED_RENDER_QUEUE.tasks.push(task);
+  MANAGED_RENDER_QUEUE.liveByKey.set(key, task);
+
+  resultPromise.finally(() => {
+    finalizeManagedRenderTask(task);
+  }).catch(() => {});
+
+  if (!MANAGED_RENDER_QUEUE.drainScheduled) {
+    MANAGED_RENDER_QUEUE.drainScheduled = true;
+    Promise.resolve().then(() => {
+      void drainManagedRenderQueue();
+    });
+  }
+
+  return resultPromise;
+}
+
+export function invalidateManagedSectionRenderKeys(keys = []) {
+  const wanted = new Set(
+    (Array.isArray(keys) ? keys : [keys])
+      .map((key) => String(key || "").trim())
+      .filter(Boolean)
+  );
+  if (!wanted.size) return 0;
+
+  let invalidatedCount = 0;
+  if (MANAGED_RENDER_QUEUE.tasks.length) {
+    const keep = [];
+    for (const task of MANAGED_RENDER_QUEUE.tasks) {
+      if (!task?.key || !wanted.has(task.key)) {
+        keep.push(task);
+        continue;
+      }
+      task.cancelled = true;
+      invalidatedCount += 1;
+      try { task.resolve(false); } catch {}
+      finalizeManagedRenderTask(task);
+    }
+    MANAGED_RENDER_QUEUE.tasks = keep;
+  }
+
+  const activeTask = MANAGED_RENDER_QUEUE.activeTask;
+  if (activeTask?.key && wanted.has(activeTask.key)) {
+    activeTask.cancelled = true;
+    invalidatedCount += 1;
+    if (MANAGED_RENDER_QUEUE.liveByKey.get(activeTask.key) === activeTask) {
+      MANAGED_RENDER_QUEUE.liveByKey.delete(activeTask.key);
+    }
+  }
+
+  for (const key of wanted) {
+    const liveTask = MANAGED_RENDER_QUEUE.liveByKey.get(key);
+    if (!liveTask) continue;
+    liveTask.cancelled = true;
+    if (liveTask !== activeTask) {
+      invalidatedCount += 1;
+      try { liveTask.resolve(false); } catch {}
+    }
+    MANAGED_RENDER_QUEUE.liveByKey.delete(key);
+  }
+
+  return invalidatedCount;
+}
+
+export function resetManagedSectionRenderQueue(options = {}) {
+  return resetManagedRenderQueueState({
+    resolvePending: options?.resolvePending !== false
+  });
+}
+
 function getBecauseYouWatchedSections() {
   return Array.from(
     document.querySelectorAll('[id^="because-you-watched--"], #because-you-watched')
@@ -615,19 +1196,22 @@ function getBecauseYouWatchedSections() {
 
 function resolveAnchorElementByKey(key) {
   if (key === "top10SeriesRows") {
-    return document.getElementById("top10-series-rows");
+    return getManagedSectionTail("top10-series-rows--");
   }
   if (key === "top10MovieRows") {
-    return document.getElementById("top10-movie-rows");
+    return getManagedSectionTail("top10-movie-rows--");
   }
   if (key === "tmdbTopMoviesRows") {
-    return document.getElementById("tmdb-top-movie-rows");
+    return getManagedSectionTail("tmdb-top-movie-rows--");
   }
   if (key === "recentRows") {
-    return document.getElementById("recent-rows");
+    return getManagedSectionTail("recent-rows--");
   }
   if (key === "continueRows") {
-    return document.getElementById("continue-rows");
+    return getManagedSectionTail("continue-rows--");
+  }
+  if (key === "nextUpRows") {
+    return getManagedSectionTail("nextup-rows--");
   }
   if (key === "personalRecommendations") {
     return document.getElementById("personal-recommendations");
@@ -640,7 +1224,7 @@ function resolveAnchorElementByKey(key) {
     return document.getElementById("genre-hubs");
   }
   if (key === "directorRows") {
-    return document.getElementById("director-rows");
+    return getManagedSectionTail("director-rows--");
   }
   if (key === "studioHubs") {
     return document.getElementById("studio-hubs");
@@ -658,11 +1242,16 @@ export function resolveManagedSectionAnchor(keys = []) {
   return null;
 }
 
-function parseBottomRootMargin(rootMargin) {
+function parseBottomRootMarginRatio(rootMargin) {
   const parts = String(rootMargin || "").trim().split(/\s+/).filter(Boolean);
   const bottom = parts[2] || parts[0] || "0px";
   const value = Number.parseFloat(bottom);
-  return Number.isFinite(value) ? value : 0;
+  if (!Number.isFinite(value)) return HOME_SECTION_TAIL_PRELOAD_RATIO;
+  if (/%$/.test(bottom)) {
+    return clamp01(value / 100);
+  }
+  const viewport = Math.max(1, getScrollTargetViewportSize(window));
+  return clamp01(value / viewport);
 }
 
 function ensureTailSentinel(anchor) {
@@ -689,7 +1278,7 @@ function ensureTailSentinel(anchor) {
 
 export function waitForSectionTailReveal(anchor, {
   timeoutMs = 20000,
-  rootMargin = "0px 0px 240px 0px",
+  rootMargin = "0px 0px 28% 0px",
 } = {}) {
   ensureHomeScrollIntentTracking();
   if (!anchor?.isConnected) {
@@ -701,13 +1290,14 @@ export function waitForSectionTailReveal(anchor, {
     return Promise.resolve();
   }
 
-  const preloadPx = parseBottomRootMargin(rootMargin);
+  const preloadRatio = parseBottomRootMarginRatio(rootMargin);
   const maxIntentAgeMs = Math.max(HOME_SCROLL_INTENT_TTL_MS, Math.max(0, timeoutMs | 0));
   const isNearViewport = () => {
     if (!sentinel.isConnected) return true;
     const rect = sentinel.getBoundingClientRect?.();
     if (!rect) return true;
-    return rect.top <= ((window.innerHeight || 0) + preloadPx);
+    const viewport = Math.max(1, window.innerHeight || document.documentElement?.clientHeight || 0);
+    return (rect.top / viewport) <= (1 + preloadRatio);
   };
   const isReady = () => {
     if (isNearViewport()) return true;
@@ -722,6 +1312,7 @@ export function waitForSectionTailReveal(anchor, {
     return new Promise((resolve) => {
       let done = false;
       let timeoutId = null;
+      let timeoutCheck = null;
 
       const finish = () => {
         if (done) return;
@@ -733,20 +1324,49 @@ export function waitForSectionTailReveal(anchor, {
         if (timeoutId) {
           try { clearTimeout(timeoutId); } catch {}
         }
+        timeoutId = null;
         resolve();
+      };
+
+      const armTimeoutCheck = () => {
+        if (timeoutId) {
+          try { clearTimeout(timeoutId); } catch {}
+        }
+        timeoutId = setTimeout(() => {
+          timeoutId = null;
+          if (done) return;
+          timeoutCheck?.();
+        }, Math.max(0, timeoutMs | 0));
       };
 
       const onScroll = () => {
         if (isReady()) {
           finish();
+          return;
         }
+        if (!anchor?.isConnected || !isHomeRouteHash()) {
+          finish();
+        }
+      };
+
+      timeoutCheck = () => {
+        if (done) return;
+        if (!anchor?.isConnected || !isHomeRouteHash()) {
+          finish();
+          return;
+        }
+        if (isReady()) {
+          finish();
+          return;
+        }
+        armTimeoutCheck();
       };
 
       window.addEventListener("scroll", onScroll, { passive: true, capture: true });
       document.addEventListener("scroll", onScroll, { passive: true, capture: true });
       window.addEventListener("resize", onScroll, { passive: true, capture: true });
       document.addEventListener(HOME_SCROLL_INTENT_EVENT, onScroll);
-      timeoutId = setTimeout(finish, Math.max(0, timeoutMs | 0));
+      armTimeoutCheck();
       onScroll();
     });
   }
@@ -756,6 +1376,7 @@ export function waitForSectionTailReveal(anchor, {
     let timeoutId = null;
     let observer = null;
     let resizeObserver = null;
+    let timeoutCheck = null;
 
     const finish = () => {
       if (done) return;
@@ -763,6 +1384,7 @@ export function waitForSectionTailReveal(anchor, {
       if (timeoutId) {
         try { clearTimeout(timeoutId); } catch {}
       }
+      timeoutId = null;
       try { window.removeEventListener("scroll", onActivity, true); } catch {}
       try { document.removeEventListener("scroll", onActivity, true); } catch {}
       try { window.removeEventListener("resize", onActivity, true); } catch {}
@@ -775,10 +1397,39 @@ export function waitForSectionTailReveal(anchor, {
       }
       resolve();
     };
+
+    const armTimeoutCheck = () => {
+      if (timeoutId) {
+        try { clearTimeout(timeoutId); } catch {}
+      }
+      timeoutId = setTimeout(() => {
+        timeoutId = null;
+        if (done) return;
+        timeoutCheck?.();
+      }, Math.max(0, timeoutMs | 0));
+    };
+
     const onActivity = () => {
       if (isReady()) {
         finish();
+        return;
       }
+      if (!anchor?.isConnected || !isHomeRouteHash()) {
+        finish();
+      }
+    };
+
+    timeoutCheck = () => {
+      if (done) return;
+      if (!anchor?.isConnected || !isHomeRouteHash()) {
+        finish();
+        return;
+      }
+      if (isReady()) {
+        finish();
+        return;
+      }
+      armTimeoutCheck();
     };
 
     observer = new IntersectionObserver((entries) => {
@@ -806,10 +1457,83 @@ export function waitForSectionTailReveal(anchor, {
       });
       try { resizeObserver.observe(anchor); } catch {}
     }
-    timeoutId = setTimeout(finish, Math.max(0, timeoutMs | 0));
+    armTimeoutCheck();
     if (isReady()) {
       finish();
     }
+  });
+}
+
+export function waitForSectionTailAdvance(anchor, {
+  timeoutMs = 20000,
+  rootMargin = "0px 0px 0px 0px",
+} = {}) {
+  ensureHomeScrollIntentTracking();
+  if (!anchor?.isConnected) {
+    return Promise.resolve();
+  }
+
+  const sentinel = ensureTailSentinel(anchor);
+  if (!sentinel?.isConnected) {
+    return Promise.resolve();
+  }
+
+  const preloadRatio = parseBottomRootMarginRatio(rootMargin);
+  const isNearViewport = () => {
+    if (!sentinel.isConnected) return true;
+    const rect = sentinel.getBoundingClientRect?.();
+    if (!rect) return true;
+    const viewport = Math.max(1, window.innerHeight || document.documentElement?.clientHeight || 0);
+    return (rect.top / viewport) <= (1 + preloadRatio);
+  };
+
+  if (!isNearViewport()) {
+    return waitForSectionTailReveal(anchor, {
+      timeoutMs,
+      rootMargin,
+    });
+  }
+
+  return new Promise((resolve) => {
+    let done = false;
+    let timeoutId = null;
+    const startedAt = Date.now();
+
+    const finish = (next = undefined) => {
+      if (done) return;
+      done = true;
+      try { window.removeEventListener("scroll", onActivity, true); } catch {}
+      try { document.removeEventListener("scroll", onActivity, true); } catch {}
+      try { window.removeEventListener("resize", onActivity, true); } catch {}
+      try { document.removeEventListener(HOME_SCROLL_INTENT_EVENT, onActivity); } catch {}
+      if (timeoutId) {
+        try { clearTimeout(timeoutId); } catch {}
+      }
+      resolve(next);
+    };
+
+    const release = () => {
+      if (!anchor?.isConnected || !isHomeRouteHash()) {
+        finish();
+        return;
+      }
+      const elapsed = Math.max(0, Date.now() - startedAt);
+      const remaining = Math.max(0, (timeoutMs | 0) - elapsed);
+      finish(waitForSectionTailReveal(anchor, {
+        timeoutMs: remaining,
+        rootMargin,
+      }));
+    };
+
+    const onActivity = () => {
+      release();
+    };
+
+    window.addEventListener("scroll", onActivity, { passive: true, capture: true });
+    document.addEventListener("scroll", onActivity, { passive: true, capture: true });
+    window.addEventListener("resize", onActivity, { passive: true, capture: true });
+    document.addEventListener(HOME_SCROLL_INTENT_EVENT, onActivity);
+    timeoutId = setTimeout(() => finish(), Math.max(0, timeoutMs | 0));
   });
 }
 
@@ -838,7 +1562,12 @@ export async function waitForManagedSectionDependencyCompletion(targetKey, optio
   });
   const dependencyKey = dependencyKeys[0] || null;
   if (dependencyKey) {
-    await waitForManagedSectionCompletion(dependencyKey, options);
+    const requireCompletion = options?.requireCompletion === true;
+    if (requireCompletion) {
+      await waitForManagedSectionCompletion(dependencyKey, options);
+    } else {
+      await waitForManagedSectionReady(dependencyKey, options);
+    }
   }
   return dependencyKey;
 }

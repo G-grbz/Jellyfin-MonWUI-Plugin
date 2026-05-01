@@ -27,7 +27,7 @@ import {
   resolveRadioStationArtUrl,
   resolveRadioStream
 } from "../core/radio.js";
-import { getVideoStreamUrl, getAuthHeader, getEmbyHeaders, getSessionInfo } from "/Plugins/JMSFusion/runtime/api.js";
+import { getVideoStreamUrl, getAuthHeader, getEmbyHeaders, getSessionInfo } from "../../../../Plugins/JMSFusion/runtime/api.js";
 
 const config = getConfig();
 const SEEK_RETRY_DELAY = 0;

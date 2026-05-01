@@ -13,7 +13,7 @@ import { updatePlaylistModal } from "./playlistModal.js";
 import { withServer, withParams, getServerBaseCached } from "../../jfUrl.js";
 import { isRadioTrack } from "../core/radio.js";
 import { enhanceFormAccessibility } from "../../accessibility.js";
-import { getSessionInfo } from "/Plugins/JMSFusion/runtime/api.js";
+import { getSessionInfo } from "../../../../Plugins/JMSFusion/runtime/api.js";
 
 window.__musicDB = musicDB;
 

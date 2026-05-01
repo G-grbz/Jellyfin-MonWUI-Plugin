@@ -1,4 +1,4 @@
-import { getServerBase } from "/Plugins/JMSFusion/runtime/api.js";
+import { getServerBase } from "../../Plugins/JMSFusion/runtime/api.js";
 import { cleanAvatars, updateHeaderUserAvatar, clearAvatarCache } from "./userAvatar.js";
 import { getConfig } from "./config.js";
 

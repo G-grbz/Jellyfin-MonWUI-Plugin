@@ -10,7 +10,7 @@ import { togglePlayPause } from "./player/playback.js";
 import { faIconHtml } from "../faIcons.js";
 import { loadCSS } from "../playerStyles.js";
 import { apiUrl } from "./core/auth.js";
-import { getEmbyHeaders, getSessionInfo } from "/Plugins/JMSFusion/runtime/api.js";
+import { getEmbyHeaders, getSessionInfo } from "../../../Plugins/JMSFusion/runtime/api.js";
 import { applyHeaderIconButtonMode, findHeaderMountTarget, getHeaderMountWaitSelector } from "../headerCompat.js";
 
 export { isMobileDevice } from "../playerStyles.js";

@@ -1643,9 +1643,19 @@ export function createSelect(key, label, options, selectedValue) {
 let __isAdminCached = null;
 
 function getJfRootFromLocation() {
-  const path = window.location.pathname || "/";
-  const split = path.split("/web/");
-  return split.length > 1 ? split[0] : "";
+  try {
+    const baseHref = document.querySelector("base[href]")?.getAttribute("href");
+    if (baseHref) {
+      const url = new URL(baseHref, window.location.href);
+      return String(url.pathname || "")
+        .replace(/\/web\/?$/i, "")
+        .replace(/\/+$/, "");
+    }
+  } catch {}
+
+  const path = String(window.location.pathname || "/");
+  const match = path.match(/^(.*?)(?:\/web(?:\/|$).*)$/i);
+  return match?.[1] ? match[1].replace(/\/+$/, "") : "";
 }
 
 function getEmbyTokenSafe() {

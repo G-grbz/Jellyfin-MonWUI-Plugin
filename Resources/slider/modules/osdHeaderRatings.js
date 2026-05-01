@@ -1,4 +1,4 @@
-import { getSessionInfo, getAuthHeader } from "/Plugins/JMSFusion/runtime/api.js";
+import { getSessionInfo, getAuthHeader } from "../../Plugins/JMSFusion/runtime/api.js";
 import { getConfig, getPauseFeaturesRuntimeConfig } from "./config.js";
 import { getTomatoIconHtml } from "./customIcons.js";
 import { withServer } from "./jfUrl.js";
@@ -6,8 +6,18 @@ import { withServer } from "./jfUrl.js";
 const HOST_ID = "jms-osd-header-ratings-v4";
 const SESSION_POLL_INTERVAL_MS = 10_000;
 const ITEM_DETAILS_CACHE_TTL_MS = 2_500;
+const LEGACY_LOGO_SELECTOR = '[data-jms-osd-legacy-logo="1"]';
 const HOST_BRAND_SELECTOR = '[data-jms-osd-header-brand="1"]';
 const HOST_RATINGS_SELECTOR = '[data-jms-osd-header-ratings="1"]';
+const LEGACY_HEADER_TITLE_SELECTORS = [
+  ".pageTitle",
+  ".headerTitle",
+  ".headerLeft .title",
+  "h1",
+  "h2",
+  ".sectionTitle",
+  ".headerName",
+].join(", ");
 const MUI_PLAYBACK_HEADER_SELECTOR = ".MuiToolbar-root";
 const MUI_PLAYBACK_ACTION_STRONG_SELECTOR = [
   '[aria-controls="app-sync-play-menu"]',
@@ -352,6 +362,10 @@ function ensureHostStructure(host) {
 
 function applyHostModeStyles(host, mode) {
   if (!(host instanceof HTMLElement)) return;
+  const prevMode = getHostMode(host);
+  if (prevMode === "legacy" && mode !== "legacy") {
+    clearLegacyBrand(host);
+  }
   const { brandEl, ratingsEl } = ensureHostStructure(host);
   const display = host.style.display === "none" ? "none" : getHostVisibleDisplay(mode);
 
@@ -402,10 +416,143 @@ function applyHostModeStyles(host, mode) {
 
 function clearBrand(host) {
   const brandEl = getHostBrandEl(host);
-  if (!brandEl) return;
-  brandEl.replaceChildren();
-  brandEl.removeAttribute("data-brand-key");
-  brandEl.style.display = "none";
+  if (brandEl) {
+    brandEl.replaceChildren();
+    brandEl.removeAttribute("data-brand-key");
+    brandEl.style.display = "none";
+  }
+  clearLegacyBrand(host);
+}
+
+function getLegacyHeaderTitleEl(host) {
+  if (!(host instanceof HTMLElement)) return null;
+  if (getHostMode(host) !== "legacy") return null;
+
+  const container = host.parentElement;
+  if (!(container instanceof HTMLElement)) return null;
+
+  const candidate = container.querySelector(LEGACY_HEADER_TITLE_SELECTORS);
+  if (!(candidate instanceof HTMLElement)) return null;
+  if (candidate === host || candidate.closest?.(`#${HOST_ID}`)) return null;
+  return candidate;
+}
+
+function getLegacyLogoEl(host) {
+  if (!(host instanceof HTMLElement)) return null;
+  const titleEl = getLegacyHeaderTitleEl(host);
+  const container = titleEl?.parentElement;
+  if (!(container instanceof HTMLElement)) return null;
+  const candidate = container.querySelector(LEGACY_LOGO_SELECTOR);
+  return candidate instanceof HTMLElement ? candidate : null;
+}
+
+function syncLegacyHeaderTitleVisibility(host, hidden) {
+  const titleEl = getLegacyHeaderTitleEl(host);
+  if (!(titleEl instanceof HTMLElement)) return;
+
+  if (hidden) {
+    if (!titleEl.hasAttribute("data-jms-osd-prev-display")) {
+      titleEl.setAttribute("data-jms-osd-prev-display", titleEl.style.display || "");
+    }
+    titleEl.style.setProperty("display", "none", "important");
+    return;
+  }
+
+  const prevDisplay = titleEl.getAttribute("data-jms-osd-prev-display");
+  if (prevDisplay != null) {
+    if (prevDisplay) {
+      titleEl.style.display = prevDisplay;
+    } else {
+      titleEl.style.removeProperty("display");
+    }
+    titleEl.removeAttribute("data-jms-osd-prev-display");
+  }
+}
+
+function clearLegacyBrand(host) {
+  const logoEl = getLegacyLogoEl(host);
+  if (logoEl) {
+    logoEl.replaceChildren();
+    logoEl.removeAttribute("data-brand-key");
+    try { logoEl.remove(); } catch {}
+  }
+  syncLegacyHeaderTitleVisibility(host, false);
+}
+
+function ensureLegacyLogoEl(host) {
+  const titleEl = getLegacyHeaderTitleEl(host);
+  if (!(titleEl instanceof HTMLElement)) return null;
+
+  let logoEl = getLegacyLogoEl(host);
+  if (!logoEl) {
+    logoEl = document.createElement("div");
+    logoEl.setAttribute("data-jms-osd-legacy-logo", "1");
+    titleEl.insertAdjacentElement("beforebegin", logoEl);
+  }
+
+  Object.assign(logoEl.style, {
+    display: "none",
+    alignItems: "center",
+    flex: "0 0 auto",
+    minWidth: "0",
+    maxWidth: "min(34vw, 240px)",
+    overflow: "hidden",
+    margin: "0 0.35em 0 0.2em",
+    pointerEvents: "none",
+    userSelect: "none",
+  });
+
+  return logoEl;
+}
+
+function renderLegacyBrand(host, item) {
+  const logoEl = ensureLegacyLogoEl(host);
+  if (!logoEl || !item) {
+    clearLegacyBrand(host);
+    return false;
+  }
+
+  const title = buildBrandTitle(item);
+  const logoUrl = buildItemLogoUrl(item);
+  if (!logoUrl) {
+    clearLegacyBrand(host);
+    return false;
+  }
+
+  const brandKey = `${logoUrl}|${title}`;
+  if (logoEl.getAttribute("data-brand-key") === brandKey && logoEl.childNodes.length > 0) {
+    logoEl.style.display = "inline-flex";
+    syncLegacyHeaderTitleVisibility(host, true);
+    return true;
+  }
+
+  logoEl.setAttribute("data-brand-key", brandKey);
+  logoEl.replaceChildren();
+
+  const img = document.createElement("img");
+  img.alt = title || "";
+  img.decoding = "async";
+  img.loading = "eager";
+  img.src = logoUrl;
+  Object.assign(img.style, {
+    display: "block",
+    width: "auto",
+    height: "auto",
+    maxWidth: "100%",
+    maxHeight: "clamp(26px, 4.5vh, 42px)",
+    objectFit: "contain",
+    filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.78))",
+  });
+
+  img.addEventListener("error", () => {
+    if (logoEl.getAttribute("data-brand-key") !== brandKey) return;
+    clearLegacyBrand(host);
+  }, { once: true });
+
+  logoEl.appendChild(img);
+  logoEl.style.display = "inline-flex";
+  syncLegacyHeaderTitleVisibility(host, true);
+  return true;
 }
 
 function createTitleFallbackNode(title) {
@@ -523,17 +670,29 @@ function renderBrand(host, item) {
   if (!brandEl) return false;
 
   const mode = getHostMode(host);
-  if (mode !== "mui" || !item) {
+  if ((mode !== "mui" && mode !== "legacy") || !item) {
     clearBrand(host);
     return false;
   }
 
+  if (mode === "legacy") {
+    brandEl.replaceChildren();
+    brandEl.removeAttribute("data-brand-key");
+    brandEl.style.display = "none";
+    return renderLegacyBrand(host, item);
+  }
+
+  clearLegacyBrand(host);
+
   const title = buildBrandTitle(item);
   const logoUrl = buildItemLogoUrl(item);
   const brandKey = `${logoUrl}|${title}`;
+  const allowTitleFallback = mode === "mui";
 
   if (brandEl.getAttribute("data-brand-key") === brandKey && hasHostVisibleContent(host)) {
-    brandEl.style.display = brandEl.childNodes.length ? "inline-flex" : "none";
+    const hasBrandContent = brandEl.childNodes.length > 0;
+    brandEl.style.display = hasBrandContent ? "inline-flex" : "none";
+    syncLegacyHeaderTitleVisibility(host, mode === "legacy" && !!logoUrl && hasBrandContent);
     return brandEl.childNodes.length > 0;
   }
 
@@ -543,7 +702,7 @@ function renderBrand(host, item) {
   Object.assign(brandEl.style, {
     display: "none",
     alignItems: "center",
-    flex: "1 1 auto",
+    flex: mode === "mui" ? "1 1 auto" : "0 0 auto",
     minWidth: "0",
     overflow: "hidden",
   });
@@ -566,26 +725,31 @@ function renderBrand(host, item) {
     img.addEventListener("error", () => {
       if (brandEl.getAttribute("data-brand-key") !== brandKey) return;
       brandEl.replaceChildren();
-      if (!title) {
+      if (!allowTitleFallback || !title) {
         brandEl.style.display = "none";
+        syncLegacyHeaderTitleVisibility(host, false);
         return;
       }
       brandEl.appendChild(createTitleFallbackNode(title));
       brandEl.style.display = "inline-flex";
+      syncLegacyHeaderTitleVisibility(host, false);
     }, { once: true });
 
     brandEl.appendChild(img);
     brandEl.style.display = "inline-flex";
+    syncLegacyHeaderTitleVisibility(host, mode === "legacy");
     return true;
   }
 
-  if (!title) {
+  if (!allowTitleFallback || !title) {
     brandEl.style.display = "none";
+    syncLegacyHeaderTitleVisibility(host, false);
     return false;
   }
 
   brandEl.appendChild(createTitleFallbackNode(title));
   brandEl.style.display = "inline-flex";
+  syncLegacyHeaderTitleVisibility(host, false);
   return true;
 }
 
@@ -608,6 +772,7 @@ function ensureHost() {
 function removeExistingHost() {
   const host = document.getElementById(HOST_ID);
   if (!host) return false;
+  clearBrand(host);
   host.innerHTML = "";
   host.remove();
   return true;
@@ -1054,7 +1219,10 @@ export function initOsdHeaderRatings() {
 
   if (!shouldRenderRatings(cfg)) {
     const staleHost = document.getElementById(HOST_ID);
-    if (staleHost) staleHost.remove();
+    if (staleHost) {
+      clearBrand(staleHost);
+      staleHost.remove();
+    }
     const style = document.getElementById("jms-rating-animations");
     if (style) style.remove();
     window.__jmsOsdHeaderRatings = { active: false, destroy: null };
@@ -1265,6 +1433,7 @@ export function initOsdHeaderRatings() {
 
     const el = document.getElementById(HOST_ID);
     if (el) {
+      clearBrand(el);
       Object.assign(el.style, {
         opacity: "0",
         transform: "translateX(-10px)"

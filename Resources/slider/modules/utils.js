@@ -7,7 +7,7 @@ import {
   pickBestLocalTrailer,
   getAuthHeader,
   playNow,
-} from "/Plugins/JMSFusion/runtime/api.js";
+} from "../../Plugins/JMSFusion/runtime/api.js";
 import { openDetailsModal } from "./detailsModalLoader.js";
 import { withServer, withServerSrcset, invalidateServerBaseCache, resolveServerBase } from "./jfUrl.js";
 

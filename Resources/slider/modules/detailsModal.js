@@ -1,4 +1,4 @@
-import { makeApiRequest, fetchItemDetailsFull, getDetailsUrl, playNow, fetchLocalTrailers, pickBestLocalTrailer, getVideoStreamUrl, updateFavoriteStatus, getEmbyHeaders, getSessionInfo } from "/Plugins/JMSFusion/runtime/api.js";
+import { makeApiRequest, fetchItemDetailsFull, getDetailsUrl, playNow, fetchLocalTrailers, pickBestLocalTrailer, getVideoStreamUrl, updateFavoriteStatus, getEmbyHeaders, getSessionInfo } from "../../Plugins/JMSFusion/runtime/api.js";
 import { withServer } from "./jfUrl.js";
 import { getConfig, getDetailsModalRuntimeConfig } from "./config.js";
 import { getLanguageLabels } from "../language/index.js";

@@ -1,5 +1,5 @@
 import { getConfig } from "../../config.js";
-import { getEmbyHeaders, getSessionInfo } from "/Plugins/JMSFusion/runtime/api.js";
+import { getEmbyHeaders, getSessionInfo } from "../../../../Plugins/JMSFusion/runtime/api.js";
 import { musicPlayerState } from "./state.js";
 
 const RADIO_BROWSER_MIRRORS = [

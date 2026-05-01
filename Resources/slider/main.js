@@ -1,4 +1,4 @@
-import { saveCredentials, saveApiKey, getAuthToken } from "/Plugins/JMSFusion/runtime/auth.js";
+import { saveCredentials, saveApiKey, getAuthToken } from "../Plugins/JMSFusion/runtime/auth.js";
 import {
   getConfig,
   getHomeSectionsRuntimeConfig,
@@ -13,7 +13,7 @@ import { ensureProgressBarExists, resetProgressBar, pauseProgressBar, resumeProg
 import { createSlide } from "./modules/slideCreator.js";
 import { changeSlide, createDotNavigation, enablePeakNeighborActivation, getPeakDisplayOptions, initSwipeEvents, primePeakFirstPaint, syncPeakStructureNow, updatePeakClasses } from "./modules/navigation.js";
 import { attachMouseEvents } from "./modules/events.js";
-import { fetchItemDetails as fetchItemDetailsNet, getSessionInfo, getAuthHeader, waitForAuthReadyStrict, isAuthReadyStrict, AUTH_PROFILE_CHANGED_EVENT } from "/Plugins/JMSFusion/runtime/api.js";
+import { fetchItemDetails as fetchItemDetailsNet, getSessionInfo, getAuthHeader, waitForAuthReadyStrict, isAuthReadyStrict, AUTH_PROFILE_CHANGED_EVENT } from "../Plugins/JMSFusion/runtime/api.js";
 import { cachedFetchJson, createCachedItemDetailsFetcher, startLibraryDeltaWatcher } from "./modules/sliderCache.js";
 import { forceHomeSectionsTop, forceSkinHeaderPointerEvents } from "./modules/positionOverrides.js";
 import { initAvatarSystem } from "./modules/userAvatar.js";
@@ -50,6 +50,8 @@ const CUSTOM_SPLASH_PING_CACHE_MS = 15_000;
 const CUSTOM_SPLASH_TIMEOUT_MS = 12_000;
 const CUSTOM_SPLASH_CLEANUP_MS = 420;
 const CUSTOM_SPLASH_EXIT_SYNC_MS = 120;
+const HOME_DEBUG_STORAGE_KEY = "jms:debug:home-sections";
+const HOME_TRACE_STORAGE_KEY = "jms:trace:home-sections";
 const AUTH_CONTEXT_REBOOT_DEBOUNCE_MS = 180;
 let materialIconsRepairPromise = null;
 let __notificationsModulePromise = null;
@@ -59,6 +61,7 @@ let __personalRecommendationsModulePromise = null;
 let __directorRowsModulePromise = null;
 let __recentRowsModulePromise = null;
 let __studioHubsModulePromise = null;
+let __homeSectionChainModulePromise = null;
 let __customSplashObserver = null;
 let __customSplashCleanupTimer = 0;
 let __customSplashHideTimer = 0;
@@ -1221,6 +1224,10 @@ function loadStudioHubsModule() {
   return __studioHubsModulePromise || (__studioHubsModulePromise = import("./modules/studioHubs.js"));
 }
 
+function loadHomeSectionChainModule() {
+  return __homeSectionChainModulePromise || (__homeSectionChainModulePromise = import("./modules/homeSectionChain.js"));
+}
+
 function renderPersonalRecommendationsLazy(options = {}) {
   return loadPersonalRecommendationsModule()
     .then(({ renderPersonalRecommendations }) => renderPersonalRecommendations?.(options))
@@ -1269,14 +1276,188 @@ function cleanupStudioHubsLazy() {
     .catch(() => {});
 }
 
+function resetManagedSectionRenderQueueLazy(options = {}) {
+  return loadHomeSectionChainModule()
+    .then(({ resetManagedSectionRenderQueue }) => resetManagedSectionRenderQueue?.(options))
+    .catch(() => {});
+}
+
 let homeSectionMountSeq = 0;
 const homeSectionMountTimers = new Set();
 let managedHomeSectionRecoverySeq = 0;
 const managedHomeSectionRecoveryTimers = new Set();
+let managedHomeSectionCleanupSeq = 0;
+let pendingManagedHomeSectionCleanupPromise = null;
 
-function homeSectionLog() {}
+function isHomeSectionDebugEnabled() {
+  try {
+    if (window.__JMS_DEBUG_HOME_SECTIONS === true) return true;
+    if (window.__JMS_DEBUG_HOME_SECTIONS === false) return false;
+    const raw = localStorage.getItem(HOME_DEBUG_STORAGE_KEY);
+    return raw === "1" || raw === "true" || raw === "on";
+  } catch {
+    return window.__JMS_DEBUG_HOME_SECTIONS === true;
+  }
+}
 
-function homeSectionWarn() {}
+function buildHomeDebugPayload(payload) {
+  const extra = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? payload
+    : { value: payload };
+  return {
+    at: new Date().toISOString(),
+    hash: String(window.location.hash || ""),
+    page: (
+      document.querySelector("#indexPage:not(.hide)")?.id ||
+      document.querySelector("#homePage:not(.hide)")?.id ||
+      null
+    ),
+    ...extra,
+  };
+}
+
+function homeSectionLog(event, payload = {}) {
+  if (!isHomeSectionDebugEnabled()) return;
+  try {
+    console.log("[JMS:HOME]", event, buildHomeDebugPayload(payload));
+  } catch {}
+}
+
+function homeSectionWarn(event, payload = {}) {
+  if (!isHomeSectionDebugEnabled()) return;
+  try {
+    console.warn("[JMS:HOME]", event, buildHomeDebugPayload(payload));
+  } catch {}
+}
+
+function isHomeSectionTraceEnabled() {
+  try {
+    if (window.__JMS_TRACE_HOME_SECTIONS === true) return true;
+    if (window.__JMS_TRACE_HOME_SECTIONS === false) return false;
+    const raw = localStorage.getItem(HOME_TRACE_STORAGE_KEY);
+    return raw === "1" || raw === "true" || raw === "on";
+  } catch {}
+  return false;
+}
+
+function homeSectionTrace(event, payload = {}) {
+  if (!isHomeSectionTraceEnabled()) return;
+  try {
+    console.warn("[JMS:HOME:TRACE]", event, buildHomeDebugPayload(payload));
+  } catch {}
+}
+
+function rememberManagedCleanupReason(reason = "unspecified", payload = {}) {
+  const detail = buildHomeDebugPayload({
+    reason,
+    ...payload,
+  });
+  try { window.__jmsLastManagedCleanupReason = detail; } catch {}
+  homeSectionTrace("managedCleanup:reason", detail);
+  return detail;
+}
+
+try {
+  window.__jmsEnableHomeDebug = () => {
+    try { localStorage.setItem(HOME_DEBUG_STORAGE_KEY, "1"); } catch {}
+    try { window.__JMS_DEBUG_HOME_SECTIONS = true; } catch {}
+    console.log("[JMS:HOME] debug enabled");
+    return true;
+  };
+  window.__jmsDisableHomeDebug = () => {
+    try { localStorage.removeItem(HOME_DEBUG_STORAGE_KEY); } catch {}
+    try { window.__JMS_DEBUG_HOME_SECTIONS = false; } catch {}
+    console.log("[JMS:HOME] debug disabled");
+    return false;
+  };
+  window.__jmsEnableHomeTrace = () => {
+    try { localStorage.setItem(HOME_TRACE_STORAGE_KEY, "1"); } catch {}
+    try { window.__JMS_TRACE_HOME_SECTIONS = true; } catch {}
+    console.warn("[JMS:HOME:TRACE] trace enabled");
+    return true;
+  };
+  window.__jmsDisableHomeTrace = () => {
+    try { localStorage.removeItem(HOME_TRACE_STORAGE_KEY); } catch {}
+    try { window.__JMS_TRACE_HOME_SECTIONS = false; } catch {}
+    console.warn("[JMS:HOME:TRACE] trace disabled");
+    return false;
+  };
+} catch {}
+
+function queueManagedHomeSectionCleanup(reason = "unspecified", meta = {}) {
+  const seq = ++managedHomeSectionCleanupSeq;
+  const reasonDetail = rememberManagedCleanupReason(reason, {
+    seq,
+    meta,
+    stack: new Error().stack?.split("\n").slice(0, 7).join("\n") || "",
+  });
+  const run = Promise.allSettled([
+    resetManagedSectionRenderQueueLazy(),
+    cleanupRecentRowsLazy(),
+    cleanupDirectorRowsLazy(),
+    resetPersonalRecommendationsLazy(),
+    cleanupStudioHubsLazy(),
+  ]).then((results) => {
+    homeSectionLog("managedCleanup:settled", {
+      seq,
+      results: results.map((result, index) => ({
+        index,
+        status: result?.status || "unknown",
+      })),
+    });
+    return results;
+  }).finally(() => {
+    homeSectionLog("managedCleanup:complete", { seq });
+    homeSectionTrace("managedCleanup:complete", {
+      seq,
+      reason: reasonDetail?.reason || reason,
+    });
+    if (pendingManagedHomeSectionCleanupPromise === run) {
+      pendingManagedHomeSectionCleanupPromise = null;
+    }
+  });
+
+  pendingManagedHomeSectionCleanupPromise = run;
+  homeSectionLog("managedCleanup:queued", { seq });
+  homeSectionTrace("managedCleanup:queued", {
+    seq,
+    reason: reasonDetail?.reason || reason,
+    meta,
+  });
+  return run;
+}
+
+async function waitForManagedHomeSectionCleanup({ timeoutMs = 2500 } = {}) {
+  const promise = pendingManagedHomeSectionCleanupPromise;
+  if (!promise) return true;
+
+  let timeoutId = 0;
+  let timedOut = false;
+  homeSectionLog("managedCleanup:wait:start", { timeoutMs });
+  try {
+    await Promise.race([
+      promise,
+      new Promise((resolve) => {
+        timeoutId = window.setTimeout(() => {
+          timedOut = true;
+          resolve();
+        }, Math.max(0, timeoutMs | 0));
+      })
+    ]);
+    if (timedOut) {
+      homeSectionWarn("managedCleanup:wait:timeout", { timeoutMs });
+    } else {
+      homeSectionLog("managedCleanup:wait:complete", { timeoutMs });
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
 
 function clearHomeSectionMountTimers() {
   for (const timer of homeSectionMountTimers) {
@@ -1285,10 +1466,26 @@ function clearHomeSectionMountTimers() {
   homeSectionMountTimers.clear();
 }
 
+function getEffectiveManagedHomeSectionForce(forceManagedSections = false, { requireSliderDisabled = false } = {}) {
+  if (forceManagedSections !== true) return false;
+  if (requireSliderDisabled === true) return false;
+  try {
+    return isSliderEnabled();
+  } catch {
+    return false;
+  }
+}
+
 function scheduleHomeSectionMount(seq, fn, delayMs = 0) {
   const timer = window.setTimeout(() => {
     homeSectionMountTimers.delete(timer);
     if (homeSectionMountSeq !== seq) return;
+    homeSectionTrace("scheduleHomeSectionMount:fire", {
+      seq,
+      delayMs,
+      fnName: fn?.name || "anonymous",
+      stack: new Error().stack?.split("\n").slice(0, 6).join("\n") || "",
+    });
     try { fn?.(); } catch (e) { console.warn("scheduleHomeSectionMount hata:", e); }
   }, Math.max(0, delayMs | 0));
 
@@ -1334,14 +1531,14 @@ function hasRenderablePersonalRecommendationUi(cfg = getMainConfig()) {
 function hasRenderableRecentRowsUi(cfg = getMainConfig()) {
   if (!shouldRenderRecentRowsUi(cfg)) return true;
   return hasRenderableDom(
-    "#recent-rows .recent-row-section .personal-recs-card:not(.skeleton), #recent-rows .recent-row-section .no-recommendations, #recent-rows .recent-row-section .dir-row-hero, #continue-rows .recent-row-section .personal-recs-card:not(.skeleton), #continue-rows .recent-row-section .no-recommendations, #continue-rows .recent-row-section .dir-row-hero"
+    "[id^=\"top10-series-rows--\"] .personal-recs-card:not(.skeleton), [id^=\"top10-series-rows--\"] .no-recommendations, #top10-series-rows .recent-row-section .personal-recs-card:not(.skeleton), #top10-series-rows .recent-row-section .no-recommendations, [id^=\"top10-movie-rows--\"] .personal-recs-card:not(.skeleton), [id^=\"top10-movie-rows--\"] .no-recommendations, #top10-movie-rows .recent-row-section .personal-recs-card:not(.skeleton), #top10-movie-rows .recent-row-section .no-recommendations, [id^=\"tmdb-top-movie-rows--\"] .personal-recs-card:not(.skeleton), [id^=\"tmdb-top-movie-rows--\"] .no-recommendations, #tmdb-top-movie-rows .recent-row-section .personal-recs-card:not(.skeleton), #tmdb-top-movie-rows .recent-row-section .no-recommendations, [id^=\"recent-rows--\"] .personal-recs-card:not(.skeleton), [id^=\"recent-rows--\"] .no-recommendations, [id^=\"recent-rows--\"] .dir-row-hero, #recent-rows .recent-row-section .personal-recs-card:not(.skeleton), #recent-rows .recent-row-section .no-recommendations, #recent-rows .recent-row-section .dir-row-hero, [id^=\"continue-rows--\"] .personal-recs-card:not(.skeleton), [id^=\"continue-rows--\"] .no-recommendations, [id^=\"continue-rows--\"] .dir-row-hero, #continue-rows .recent-row-section .personal-recs-card:not(.skeleton), #continue-rows .recent-row-section .no-recommendations, #continue-rows .recent-row-section .dir-row-hero, [id^=\"nextup-rows--\"] .personal-recs-card:not(.skeleton), [id^=\"nextup-rows--\"] .no-recommendations, [id^=\"nextup-rows--\"] .dir-row-hero, #nextup-rows .recent-row-section .personal-recs-card:not(.skeleton), #nextup-rows .recent-row-section .no-recommendations, #nextup-rows .recent-row-section .dir-row-hero"
   );
 }
 
 function hasRenderableDirectorRowsUi(cfg = getMainConfig()) {
   if (!shouldRenderDirectorRowsUi(cfg)) return true;
   return hasRenderableDom(
-    "#director-rows .dir-row-section .personal-recs-card:not(.skeleton), #director-rows .dir-row-section .no-recommendations, #director-rows .dir-row-section .dir-row-hero"
+    "[id^=\"director-rows--\"] .personal-recs-card:not(.skeleton), [id^=\"director-rows--\"] .no-recommendations, [id^=\"director-rows--\"] .dir-row-hero, #director-rows .dir-row-section .personal-recs-card:not(.skeleton), #director-rows .dir-row-section .no-recommendations, #director-rows .dir-row-section .dir-row-hero"
   );
 }
 
@@ -1366,6 +1563,46 @@ function needsManagedHomeSectionRecovery(cfg = getMainConfig()) {
   return !(status.studio && status.personal && status.recent && status.director);
 }
 
+function getManagedHomeSectionDebugSnapshot(cfg = getMainConfig()) {
+  const status = getManagedHomeSectionStatus(cfg);
+  return {
+    hash: String(window.location.hash || ""),
+    visiblePageId: (
+      document.querySelector("#indexPage:not(.hide)")?.id ||
+      document.querySelector("#homePage:not(.hide)")?.id ||
+      null
+    ),
+    isHomeRouteActive: isHomeRouteActive(),
+    isHomeVisible: isHomeVisible(),
+    pendingCleanup: !!pendingManagedHomeSectionCleanupPromise,
+    homeSectionMountSeq,
+    managedHomeSectionRecoverySeq,
+    status,
+    needsRecovery: !(status.studio && status.personal && status.recent && status.director),
+    shells: {
+      personal: !!document.getElementById("personal-recommendations"),
+      becauseYouWatchedCount: document.querySelectorAll('[id^="because-you-watched--"], #because-you-watched').length,
+      genre: !!document.getElementById("genre-hubs"),
+      recent: document.querySelectorAll('[id^="recent-rows--"], #recent-rows').length > 0,
+      continueRows: document.querySelectorAll('[id^="continue-rows--"], #continue-rows').length > 0,
+      nextUpRows: document.querySelectorAll('[id^="nextup-rows--"], #nextup-rows').length > 0,
+      top10Series: document.querySelectorAll('[id^="top10-series-rows--"], #top10-series-rows').length > 0,
+      top10Movies: document.querySelectorAll('[id^="top10-movie-rows--"], #top10-movie-rows').length > 0,
+      tmdbTopMovies: document.querySelectorAll('[id^="tmdb-top-movie-rows--"], #tmdb-top-movie-rows').length > 0,
+      director: document.querySelectorAll('[id^="director-rows--"], #director-rows').length > 0,
+      studio: !!document.getElementById("studio-hubs"),
+    }
+  };
+}
+
+try {
+  window.__jmsDumpHomeDebugSnapshot = () => {
+    const snapshot = getManagedHomeSectionDebugSnapshot();
+    console.log("[JMS:HOME] snapshot", snapshot);
+    return snapshot;
+  };
+} catch {}
+
 async function runManagedHomeSectionRecovery({
   eagerStudioHubs = true,
   seq = managedHomeSectionRecoverySeq,
@@ -1385,6 +1622,10 @@ async function runManagedHomeSectionRecovery({
     });
     return false;
   }
+
+  await waitForManagedHomeSectionCleanup({ timeoutMs: 2500 });
+  if (managedHomeSectionRecoverySeq !== seq) return false;
+  if (!isHomeRouteActive() || !isHomeVisible()) return false;
 
   const cfg = getMainConfig();
   const statusBefore = getManagedHomeSectionStatus(cfg);
@@ -1465,6 +1706,7 @@ function bootHomeSections(cfg, { eagerStudioHubs = false, forceManagedSections =
   const seq = homeSectionMountSeq;
   clearHomeSectionMountTimers();
   let delayMs = 0;
+  const effectiveForceManagedSections = getEffectiveManagedHomeSectionForce(forceManagedSections);
   const sections = {
     studio: shouldRenderStudioHubsUi(cfg),
     personal: shouldRenderPersonalRecommendationUi(cfg),
@@ -1474,8 +1716,17 @@ function bootHomeSections(cfg, { eagerStudioHubs = false, forceManagedSections =
   homeSectionLog("bootHomeSections", {
     seq,
     eagerStudioHubs,
-    forceManagedSections,
+    forceManagedSections: effectiveForceManagedSections,
+    requestedForceManagedSections: forceManagedSections === true,
     sections,
+  });
+  homeSectionTrace("bootHomeSections", {
+    seq,
+    eagerStudioHubs,
+    forceManagedSections: effectiveForceManagedSections,
+    requestedForceManagedSections: forceManagedSections === true,
+    sections,
+    stack: new Error().stack?.split("\n").slice(0, 6).join("\n") || "",
   });
 
   if (sections.studio) {
@@ -1487,19 +1738,19 @@ function bootHomeSections(cfg, { eagerStudioHubs = false, forceManagedSections =
 
   if (sections.personal) {
     scheduleHomeSectionMount(seq, () => {
-      void renderPersonalRecommendationsLazy({ force: forceManagedSections });
+      void renderPersonalRecommendationsLazy({ force: effectiveForceManagedSections });
     }, delayMs);
     delayMs += 180;
   }
   if (sections.recent) {
     scheduleHomeSectionMount(seq, () => {
-      void mountRecentRowsLazyModule({ force: forceManagedSections });
+      void mountRecentRowsLazyModule({ force: effectiveForceManagedSections });
     }, delayMs);
     delayMs += 180;
   }
   if (sections.director) {
     scheduleHomeSectionMount(seq, () => {
-      void mountDirectorRowsLazyModule({ force: forceManagedSections });
+      void mountDirectorRowsLazyModule({ force: effectiveForceManagedSections });
     }, delayMs);
     delayMs += 180;
   }
@@ -1513,6 +1764,7 @@ function kickManagedHomeSectionsNow(
     reason = "direct-kick",
   } = {}
 ) {
+  const effectiveForceManagedSections = getEffectiveManagedHomeSectionForce(forceManagedSections);
   const sections = {
     studio: shouldRenderStudioHubsUi(cfg),
     personal: shouldRenderPersonalRecommendationUi(cfg),
@@ -1523,24 +1775,25 @@ function kickManagedHomeSectionsNow(
   homeSectionLog("kickManagedHomeSectionsNow", {
     reason,
     eagerStudioHubs,
-    forceManagedSections,
+    forceManagedSections: effectiveForceManagedSections,
+    requestedForceManagedSections: forceManagedSections === true,
     sections,
   });
 
   if (sections.studio) {
     void ensureStudioHubsMountedLazy({
       eager: eagerStudioHubs,
-      force: forceManagedSections,
+      force: effectiveForceManagedSections,
     });
   }
   if (sections.personal) {
-    void renderPersonalRecommendationsLazy({ force: forceManagedSections });
+    void renderPersonalRecommendationsLazy({ force: effectiveForceManagedSections });
   }
   if (sections.recent) {
-    void mountRecentRowsLazyModule({ force: forceManagedSections });
+    void mountRecentRowsLazyModule({ force: effectiveForceManagedSections });
   }
   if (sections.director) {
-    void mountDirectorRowsLazyModule({ force: forceManagedSections });
+    void mountDirectorRowsLazyModule({ force: effectiveForceManagedSections });
   }
 }
 
@@ -1957,6 +2210,9 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
     const homeSectionsConfig = getHomeSectionsRuntimeConfig(cfg);
     return !!(
       homeSectionsConfig.enableRecentRows ||
+      homeSectionsConfig.enableTop10SeriesRowsSection ||
+      homeSectionsConfig.enableTop10MovieRowsSection ||
+      homeSectionsConfig.enableTmdbTopMoviesRowsSection ||
       homeSectionsConfig.enableContinueMovies ||
       homeSectionsConfig.enableContinueSeries ||
       homeSectionsConfig.enableOtherLibRows
@@ -1977,13 +2233,19 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
       homeSectionsConfig.enableRecentRows ||
       homeSectionsConfig.enableContinueMovies ||
       homeSectionsConfig.enableContinueSeries ||
+      homeSectionsConfig.enableNextUpRowsSection ||
       homeSectionsConfig.enableOtherLibRows
     ) || matchesAny([
       '#personal-recommendations',
       '#genre-hubs',
       '#director-rows',
+      '[id^="director-rows--"]',
       '#recent-rows',
+      '[id^="recent-rows--"]',
       '#continue-rows',
+      '[id^="continue-rows--"]',
+      '#nextup-rows',
+      '[id^="nextup-rows--"]',
       '#because-you-watched',
       '[id^="because-you-watched--"]'
     ]);
@@ -2088,8 +2350,13 @@ function whenFirstSlideReadyOrTimeout(cb, timeoutMs = 7000) {
     '#personal-recommendations',
     '#genre-hubs',
     '#director-rows',
+    '[id^="director-rows--"]',
     '#recent-rows',
+    '[id^="recent-rows--"]',
     '#continue-rows',
+    '[id^="continue-rows--"]',
+    '#nextup-rows',
+    '[id^="nextup-rows--"]',
     '#because-you-watched',
     '[id^="because-you-watched--"]',
     '#studio-hubs',
@@ -2478,7 +2745,7 @@ async function scheduleSliderRebuild(reason = "cycle-complete") {
     try { window.cleanupModalObserver?.(); } catch {}
     try { stopSlideTimer?.(); } catch {}
     try { hardProgressReset?.(); } catch {}
-    try { fullSliderReset(); } catch {}
+    try { fullSliderReset({ reason: `scheduleSliderRebuild:${reason}` }); } catch {}
     document.querySelectorAll(".monwui-dot-navigation-container").forEach(n => n.remove());
     await new Promise(r => setTimeout(r, 30));
     window.__initOnHomeOnce = false;
@@ -2570,8 +2837,12 @@ function shouldRenderRecentRowsUi(cfg = getMainConfig()) {
   const homeSectionsConfig = getHomeSectionsRuntimeConfig(cfg);
   return !!(
     homeSectionsConfig.enableRecentRows ||
+    homeSectionsConfig.enableTop10SeriesRowsSection ||
+    homeSectionsConfig.enableTop10MovieRowsSection ||
+    homeSectionsConfig.enableTmdbTopMoviesRowsSection ||
     homeSectionsConfig.enableContinueMovies ||
     homeSectionsConfig.enableContinueSeries ||
+    homeSectionsConfig.enableNextUpRowsSection ||
     homeSectionsConfig.enableOtherLibRows
   );
 }
@@ -2807,8 +3078,6 @@ function ensureLayerPropertySanitizer() {
   const CLASS_NAME = "jms-layer-sanitized";
   const STYLE_ID = "jms-layer-sanitizer-css";
 
-  // Keep peakslider and the live subtitle transform pipeline out of the
-  // default sanitizer; those flows still rely on targeted compositor hints.
   const nonPeakSliderTargets = [
     "#monwui-slides-container",
     "#monwui-slides-container .monwui-slide",
@@ -2931,6 +3200,11 @@ function ensureLayerPropertySanitizer() {
 
       ${scoped(nativeHomeCardTargets, `html.${CLASS_NAME}`)} {
         ${sanitizeRule}
+      }
+      html.${CLASS_NAME} [dir=ltr] .dir-row-hero .cardBox,
+      html.${CLASS_NAME} [dir=ltr] .personal-recs-card .cardBox {
+        margin-left: 0 !important;
+        margin-right: 1.2em !important;
       }
     `;
     document.head.appendChild(st);
@@ -3062,7 +3336,12 @@ window.__jmsIndexerAutoStartTimer = window.__jmsIndexerAutoStartTimer || null;
 window.__jmsIndexerAutoStartReady = window.__jmsIndexerAutoStartReady || false;
 window.__jmsIndexerAutoStartPending = window.__jmsIndexerAutoStartPending || false;
 
-function fullSliderReset({ preserveHomeSections = true, invalidateBoot = true } = {}) {
+function fullSliderReset({ preserveHomeSections = true, invalidateBoot = true, reason = "fullSliderReset" } = {}) {
+  homeSectionTrace("fullSliderReset:start", {
+    reason,
+    preserveHomeSections,
+    invalidateBoot,
+  });
   try { teardownAnimations(); } catch {}
   forceSkinHeaderPointerEvents();
   forceHomeSectionsTop();
@@ -3088,7 +3367,11 @@ function fullSliderReset({ preserveHomeSections = true, invalidateBoot = true } 
   try { window.__cleanupActiveWatch?.(); } catch {}
   window.__cleanupActiveWatch = null;
   clearQueuedHomeSectionsBoot();
-  cleanupSlider({ preserveHomeSections, invalidateBoot: false });
+  cleanupSlider({
+    preserveHomeSections,
+    invalidateBoot: false,
+    reason: `${reason}:cleanupSlider`,
+  });
   clearCycleArm();
   try { window.__peakBooting = true; } catch {}
   window.__jmsFirstSlideReady = false;
@@ -3749,7 +4032,7 @@ export async function slidesInit() {
     if (window.sliderResetInProgress) return;
     window.sliderResetInProgress = true;
     window.__jmsSliderResetToken = bootToken;
-    fullSliderReset({ invalidateBoot: false });
+    fullSliderReset({ invalidateBoot: false, reason: "slidesInit:boot-reset" });
 
     let userId = null, accessToken = null;
     let fetchItemDetailsCached = window.__jmsFetchItemDetailsCached || null;
@@ -4620,7 +4903,7 @@ function setupNavigationObserver() {
 
       if (isOnHomePage) {
         window.__initOnHomeOnce = false;
-        fullSliderReset();
+        fullSliderReset({ reason: "navigation:home-enter" });
         if (getMainConfig().enableNotifications === false) {
           document.getElementById('jfNotifBtn')?.remove();
           document.querySelector('.jf-notif-panel')?.remove();
@@ -4648,7 +4931,7 @@ function setupNavigationObserver() {
           currentUrl,
         });
         dismissCustomSplashImmediately("route-not-home");
-        cleanupSlider();
+        cleanupSlider({ reason: "navigation:left-home" });
         window.__initOnHomeOnce = false;
       }
       startPauseOverlayOnce();
@@ -4775,6 +5058,15 @@ function queueHomeSectionsBoot({
     forceManagedSections,
     maxRetryCount,
   });
+  homeSectionTrace("queueHomeSectionsBoot:schedule", {
+    seq,
+    delayMs,
+    eagerStudioHubs,
+    requireSliderDisabled,
+    forceManagedSections,
+    maxRetryCount,
+    stack: new Error().stack?.split("\n").slice(0, 6).join("\n") || "",
+  });
 
   const scheduleAttempt = (waitMs, attemptIndex) => {
     if (homeSectionsBootSeq !== seq) return;
@@ -4811,25 +5103,35 @@ function queueHomeSectionsBoot({
         const visibleHomePage = getVisibleHomePageEl();
         const visibleHomeSections = getVisibleHomeSectionsContainerEl(visibleHomePage);
         const homeReady = !!(visibleHomePage && visibleHomeSections && isHomeVisible());
+        const effectiveForceManagedSections = getEffectiveManagedHomeSectionForce(forceManagedSections, {
+          requireSliderDisabled,
+        });
         homeSectionLog("queueHomeSectionsBoot:attempt", {
           seq,
           attemptIndex,
           waitMs,
           eagerStudioHubs,
           requireSliderDisabled,
-          forceManagedSections,
+          forceManagedSections: effectiveForceManagedSections,
+          requestedForceManagedSections: forceManagedSections === true,
           visiblePageId: visibleHomePage?.id || null,
           hasVisibleHomeSections: !!visibleHomeSections,
           homeReady,
         });
 
         if (homeReady) {
+          let bootStarted = false;
           try {
             const cfg = (typeof getConfig === "function" ? getConfig() : {}) || {};
-            bootHomeSections(cfg, { eagerStudioHubs, forceManagedSections });
+            bootHomeSections(cfg, {
+              eagerStudioHubs,
+              forceManagedSections: effectiveForceManagedSections,
+            });
+            bootStarted = true;
           } catch (e) {
             console.warn("queueHomeSectionsBoot hata:", e);
           }
+          if (bootStarted) return;
         } else {
           homeSectionWarn("queueHomeSectionsBoot:not-ready", {
             seq,
@@ -4854,134 +5156,156 @@ function queueHomeSectionsBoot({
 }
 
 function initializeSliderOnHome({ forceManagedSectionsBoot = false } = {}) {
-  try { window.__jmsHomeTabPaused = false; } catch {}
-  homeSectionLog("initializeSliderOnHome:start", {
-    forceManagedSectionsBoot,
-  });
-
-  if (!isSliderEnabled()) {
-    try { cleanupSlider(); } catch {}
-    try { stopSlideTimer?.(); } catch {}
-    try { clearCycleArm(); } catch {}
-    homeSectionWarn("initializeSliderOnHome:slider-disabled", {
+  const start = async () => {
+    try { window.__jmsHomeTabPaused = false; } catch {}
+    homeSectionLog("initializeSliderOnHome:start", {
       forceManagedSectionsBoot,
     });
+    homeSectionTrace("initializeSliderOnHome:start", {
+      forceManagedSectionsBoot,
+      stack: new Error().stack?.split("\n").slice(0, 6).join("\n") || "",
+    });
+
+    await waitForManagedHomeSectionCleanup({ timeoutMs: 2500 });
+
+    if (!isSliderEnabled()) {
+      try {
+        cleanupSlider({
+          preserveHomeSections: true,
+          reason: "initializeSliderOnHome:slider-disabled",
+        });
+      } catch {}
+      try { stopSlideTimer?.(); } catch {}
+      try { clearCycleArm(); } catch {}
+      homeSectionWarn("initializeSliderOnHome:slider-disabled", {
+        forceManagedSectionsBoot,
+      });
+
+      queueHomeSectionsBoot({
+        delayMs: 500,
+        requireSliderDisabled: true,
+        forceManagedSections: false
+      });
+      scheduleManagedHomeSectionRecovery();
+
+      return;
+    }
+
+    const hasContainer = !!document.querySelector('#indexPage:not(.hide) #monwui-slides-container, #homePage:not(.hide) #monwui-slides-container');
+    const willEarlyReturn = (window.__initOnHomeOnce && hasContainer);
+
+    function bootPersonalRecsWires() {
+      if (window.__recsWiresBooted) return;
+      window.__recsWiresBooted = true;
+
+      const indexPage =
+        document.querySelector("#indexPage:not(.hide)") ||
+        document.querySelector("#homePage:not(.hide)");
+      if (!indexPage) return;
+
+      let __recsBooted = false;
+      const onAllReady = () => {
+        if (__recsBooted) return;
+        __recsBooted = true;
+        const cfg = (typeof getConfig === 'function' ? getConfig() : {}) || {};
+
+        try {
+          bootHomeSections(cfg);
+        } catch (e) {
+          console.warn("bootPersonalRecsWires onAllReady hata:", e);
+        }
+      };
+
+      document.addEventListener("jms:all-slides-ready", onAllReady, { once: true });
+      if (window.__totalSlidesPlanned > 0 && window.__slidesCreated >= window.__totalSlidesPlanned) {
+        onAllReady();
+      }
+      setTimeout(() => { if (!__recsBooted) onAllReady(); }, 5000);
+      document.addEventListener("jms:slide-enter", () => { onAllReady(); }, { once: true });
+      if (window.__jmsFirstSlideReady) {
+        idle(() => onAllReady());
+      } else {
+        document.addEventListener("jms:first-slide-ready", () => {
+          idle(() => onAllReady());
+        }, { once: true });
+      }
+    }
+
+    if (willEarlyReturn) {
+      homeSectionLog("initializeSliderOnHome:early-return", {
+        forceManagedSectionsBoot,
+        hasContainer,
+      });
+      bootPersonalRecsWires();
+      queueHomeSectionsBoot({
+        delayMs: 600,
+        forceManagedSections: true
+      });
+      scheduleManagedHomeSectionRecovery();
+      return;
+    }
+    window.__initOnHomeOnce = true;
+    const indexPage = document.querySelector("#indexPage:not(.hide)") || document.querySelector("#homePage:not(.hide)");
+    if (!indexPage) {
+      homeSectionWarn("initializeSliderOnHome:no-visible-index-page", {
+        forceManagedSectionsBoot,
+      });
+      return;
+    }
+
+    fullSliderReset({ reason: "initializeSliderOnHome:slider-enabled" });
+    bootPersonalRecsWires();
+    upsertSlidesContainerAtTop(indexPage);
+    const sc = indexPage.querySelector('#monwui-slides-container');
+    if (config.peakSlider && sc) {
+      sc.scrollLeft = 0;
+      sc.classList.remove('peak-ready');
+      sc.classList.add('peak-init');
+      try { delete sc.dataset.peakPrimed; } catch {}
+    }
+    forceHomeSectionsTop();
+    forceSkinHeaderPointerEvents();
+    try {
+      updateSlidePosition();
+    } catch {}
+    ensureProgressBarExists();
+    const pb = document.querySelector(".monwui-slide-progress-bar");
+    if (pb) {
+      pb.style.opacity = "0";
+      pb.style.width = "0%";
+    }
+    (async () => {
+      try {
+        await waitAuthWarmupFallback(1000);
+      } catch {}
+      slidesInit();
+    })();
 
     queueHomeSectionsBoot({
-      delayMs: 500,
-      requireSliderDisabled: true,
+      delayMs: 1800,
       forceManagedSections: forceManagedSectionsBoot
     });
     scheduleManagedHomeSectionRecovery();
-
-    return;
-  }
-
-  const hasContainer = !!document.querySelector('#indexPage:not(.hide) #monwui-slides-container, #homePage:not(.hide) #monwui-slides-container');
-  const willEarlyReturn = (window.__initOnHomeOnce && hasContainer);
-
-  function bootPersonalRecsWires() {
-    if (window.__recsWiresBooted) return;
-    window.__recsWiresBooted = true;
-
-    const indexPage =
-      document.querySelector("#indexPage:not(.hide)") ||
-      document.querySelector("#homePage:not(.hide)");
-    if (!indexPage) return;
-
-    let __recsBooted = false;
-    const onAllReady = () => {
-      if (__recsBooted) return;
-      __recsBooted = true;
-      const cfg = (typeof getConfig === 'function' ? getConfig() : {}) || {};
-
-      try {
-        bootHomeSections(cfg);
-      } catch (e) {
-        console.warn("bootPersonalRecsWires onAllReady hata:", e);
-      }
-    };
-
-    document.addEventListener("jms:all-slides-ready", onAllReady, { once: true });
-    if (window.__totalSlidesPlanned > 0 && window.__slidesCreated >= window.__totalSlidesPlanned) {
-      onAllReady();
-    }
-    setTimeout(() => { if (!__recsBooted) onAllReady(); }, 5000);
-    document.addEventListener("jms:slide-enter", () => { onAllReady(); }, { once: true });
-    if (window.__jmsFirstSlideReady) {
-      idle(() => onAllReady());
-    } else {
-      document.addEventListener("jms:first-slide-ready", () => {
-        idle(() => onAllReady());
-      }, { once: true });
-    }
-  }
-
-  if (willEarlyReturn) {
-    homeSectionLog("initializeSliderOnHome:early-return", {
+    homeSectionLog("initializeSliderOnHome:booted", {
       forceManagedSectionsBoot,
-      hasContainer,
+      indexPageId: indexPage.id,
     });
-    bootPersonalRecsWires();
-    queueHomeSectionsBoot({
-      delayMs: 600,
-      forceManagedSections: true
-    });
-    scheduleManagedHomeSectionRecovery();
-    return;
-  }
-  window.__initOnHomeOnce = true;
-  const indexPage = document.querySelector("#indexPage:not(.hide)") || document.querySelector("#homePage:not(.hide)");
-  if (!indexPage) {
-    homeSectionWarn("initializeSliderOnHome:no-visible-index-page", {
-      forceManagedSectionsBoot,
-    });
-    return;
-  }
+  };
 
-  fullSliderReset();
-  bootPersonalRecsWires();
-  upsertSlidesContainerAtTop(indexPage);
-  const sc = indexPage.querySelector('#monwui-slides-container');
-  if (config.peakSlider && sc) {
-    sc.scrollLeft = 0;
-    sc.classList.remove('peak-ready');
-    sc.classList.add('peak-init');
-    try { delete sc.dataset.peakPrimed; } catch {}
-  }
-  forceHomeSectionsTop();
-  forceSkinHeaderPointerEvents();
-  try {
-    updateSlidePosition();
-  } catch {}
-  ensureProgressBarExists();
-  const pb = document.querySelector(".monwui-slide-progress-bar");
-  if (pb) {
-    pb.style.opacity = "0";
-    pb.style.width = "0%";
-  }
-  (async () => {
-    try {
-      await waitAuthWarmupFallback(1000);
-    } catch {}
-    slidesInit();
-  })();
-
-  queueHomeSectionsBoot({
-    delayMs: 1800,
-    forceManagedSections: forceManagedSectionsBoot
-  });
-  scheduleManagedHomeSectionRecovery();
-  homeSectionLog("initializeSliderOnHome:booted", {
-    forceManagedSectionsBoot,
-    indexPageId: indexPage.id,
-  });
+  void start();
 }
 
-function cleanupSlider({ preserveHomeSections = false, invalidateBoot = true } = {}) {
+function cleanupSlider({ preserveHomeSections = false, invalidateBoot = true, reason = "cleanupSlider" } = {}) {
   homeSectionLog("cleanupSlider:start", {
     preserveHomeSections,
     invalidateBoot,
+  });
+  homeSectionTrace("cleanupSlider:start", {
+    reason,
+    preserveHomeSections,
+    invalidateBoot,
+    visibleHome: isHomeVisible(),
+    routeHome: isHomeRouteActive(),
   });
   const shouldPreserveManagedHomeSectionBoot =
     preserveHomeSections && isHomeRouteActive();
@@ -4999,12 +5323,17 @@ function cleanupSlider({ preserveHomeSections = false, invalidateBoot = true } =
       preserveHomeSections,
       invalidateBoot,
     });
+    homeSectionTrace("cleanupSlider:preserve", {
+      reason,
+      preserveHomeSections,
+      invalidateBoot,
+    });
   }
   if (!preserveHomeSections) {
-    void cleanupRecentRowsLazy();
-    void cleanupDirectorRowsLazy();
-    void resetPersonalRecommendationsLazy();
-    void cleanupStudioHubsLazy();
+    queueManagedHomeSectionCleanup(reason, {
+      preserveHomeSections,
+      invalidateBoot,
+    });
   }
   if (window.mySlider) {
     if (window.mySlider.autoSlideTimeout) {
@@ -5052,6 +5381,31 @@ function getAuthContextRecoveryKey(profile = {}) {
   return [serverId, serverBase, userId].join("|");
 }
 
+function shouldIgnoreAuthContextRecovery(detail = {}) {
+  const prevUserId = String(detail?.prev?.userId || "").trim();
+  const nextUserId = String(detail?.next?.userId || "").trim();
+  const prevServerId = String(detail?.prev?.serverId || "").trim();
+  const nextServerId = String(detail?.next?.serverId || "").trim();
+  const prevServerBase = String(detail?.prev?.serverBase || "").trim().replace(/\/+$/, "");
+  const nextServerBase = String(detail?.next?.serverBase || "").trim().replace(/\/+$/, "");
+
+  if (detail?.userChanged === true) return false;
+  if (detail?.serverChanged !== true) return false;
+  if (!prevUserId || !nextUserId || prevUserId !== nextUserId) return false;
+
+  const serverIdWarmupOnly =
+    (!!prevServerId && !nextServerId) ||
+    (!prevServerId && !!nextServerId);
+  const serverBaseWarmupOnly =
+    (!!prevServerBase && !nextServerBase) ||
+    (!prevServerBase && !!nextServerBase);
+  const serverIdCompatible = !prevServerId || !nextServerId || prevServerId === nextServerId;
+  const serverBaseCompatible = !prevServerBase || !nextServerBase || prevServerBase === nextServerBase;
+
+  if (!serverIdCompatible || !serverBaseCompatible) return false;
+  return serverIdWarmupOnly || serverBaseWarmupOnly;
+}
+
 function bootHomeAfterAuthContextReset() {
   window.__initOnHomeOnce = false;
   initializeSliderOnHome({ forceManagedSectionsBoot: true });
@@ -5059,6 +5413,11 @@ function bootHomeAfterAuthContextReset() {
 
 function scheduleAuthContextRecovery(detail = {}) {
   if (!detail?.serverChanged && !detail?.userChanged) return;
+  if (shouldIgnoreAuthContextRecovery(detail)) {
+    homeSectionWarn("authRecovery:skip:warmup-server-base-change", detail);
+    homeSectionTrace("authRecovery:skip:warmup-server-base-change", detail);
+    return;
+  }
 
   const nextKey =
     getAuthContextRecoveryKey(detail.next) ||
@@ -5075,8 +5434,14 @@ function scheduleAuthContextRecovery(detail = {}) {
   __authContextRecoveryTimer = window.setTimeout(async () => {
     __authContextRecoveryTimer = 0;
     console.log("[jms] Auth context degisti -> slider yeniden hazirlaniyor", detail);
+    homeSectionTrace("authRecovery:fire", detail);
 
-    try { fullSliderReset({ preserveHomeSections: false }); } catch {}
+    try {
+      fullSliderReset({
+        preserveHomeSections: false,
+        reason: "auth-context-recovery",
+      });
+    } catch {}
     window.__initOnHomeOnce = false;
 
     if (!(isHomeVisible() || isHomeRouteActive())) return;
